@@ -4,6 +4,7 @@
 //! stable [`model_hash`]ing, [`verify`]ication, code generation, and the agent
 //! query/patch surface. An adopter crate supplies a concrete model.
 
+mod codegen;
 mod dsl;
 mod hash;
 mod model;
@@ -11,6 +12,7 @@ mod model;
 #[cfg(test)]
 mod test_support;
 
+pub use codegen::{GeneratedFile, render_cli_module};
 pub use hash::model_hash;
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,

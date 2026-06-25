@@ -1,0 +1,8 @@
+[package]
+name = "theseus-kernel"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal category/functor conformance kernel for Theseus"
+
+[dependencies]
+thiserror = { workspace = true }

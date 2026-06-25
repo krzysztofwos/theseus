@@ -205,23 +205,33 @@ impl Invocation {
         }
     }
 }
-/// The inbound service contract: one method per operation. The authored
-/// impl is the leaf the compiler checks against this contract.
+/// The inbound service contract: one method per operation, each defaulting
+/// to `unimplemented`. The authored impl overrides what it implements.
 pub trait TheseusService {
     /// Print Theseus's model of itself as JSON.
-    fn model(&self) -> anyhow::Result<String>;
+    fn model(&self) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: model")
+    }
     /// Check that the workspace conforms to its self-model.
-    fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport>;
+    fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
+        anyhow::bail!("unimplemented operation: verify")
+    }
     /// Regenerate model-derived code from the self-model.
-    fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>>;
+    fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+        anyhow::bail!("unimplemented operation: generate")
+    }
     /// Return a stable handle and model hash for a model element.
     fn query(
         &self,
-        request: QueryRequest,
-    ) -> anyhow::Result<theseus_modeling::QueryOutcome>;
+        _request: QueryRequest,
+    ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
+        anyhow::bail!("unimplemented operation: query")
+    }
     /// Propose a hash-checked edit to the model.
     fn patch(
         &self,
-        request: PatchRequest,
-    ) -> anyhow::Result<theseus_modeling::PatchOutcome>;
+        _request: PatchRequest,
+    ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
+        anyhow::bail!("unimplemented operation: patch")
+    }
 }

@@ -299,13 +299,14 @@ fn field_parse(field: &Field) -> TokenStream {
     }
 }
 
-/// Render the inbound service trait: one method per operation. The authored impl
-/// is the leaf the compiler checks against this contract, so a missing operation
-/// is a build error rather than a runtime surprise.
+/// Render the inbound service trait: one method per operation, each defaulting to
+/// an `unimplemented` error. The authored impl overrides the operations it
+/// implements. An operation left on its default still compiles, and `verify`'s
+/// coverage check reports it.
 fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
     let trait_name = format_ident!("{}Service", pascal_case(&service.name));
-    let doc_a = doc("The inbound service contract: one method per operation. The authored");
-    let doc_b = doc("impl is the leaf the compiler checks against this contract.");
+    let doc_a = doc("The inbound service contract: one method per operation, each defaulting");
+    let doc_b = doc("to `unimplemented`. The authored impl overrides what it implements.");
     let methods: Vec<TokenStream> = service
         .operations
         .iter()
@@ -315,14 +316,17 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
             let param = match request_type(op, model) {
                 Some(def) => {
                     let request = format_ident!("{}", def.name);
-                    quote! { , request: #request }
+                    quote! { , _request: #request }
                 }
                 None => quote! {},
             };
             let response = response_type(&op.response, model);
+            let unimplemented = format!("unimplemented operation: {}", op.name);
             quote! {
                 #method_doc
-                fn #method_name(&self #param) -> anyhow::Result<#response>;
+                fn #method_name(&self #param) -> anyhow::Result<#response> {
+                    anyhow::bail!(#unimplemented)
+                }
             }
         })
         .collect();

@@ -399,6 +399,21 @@ fn response_type(label: &str, model: &Model) -> TokenStream {
     quote! { #ty }
 }
 
+/// Render an operation's handler signature, for splicing an authored body. The
+/// request is named through `request_path` and the response resolves to an
+/// absolute type, so the spliced method needs no imports.
+pub(crate) fn handler_signature(op: &Operation, model: &Model, request_path: &str) -> String {
+    let param = match request_type(op, model) {
+        Some(def) => format!(", request: {request_path}{}", def.name),
+        None => String::new(),
+    };
+    let response = rust_type(&op.response, model);
+    format!(
+        "fn {}(&self{param}) -> anyhow::Result<{response}>",
+        op.name
+    )
+}
+
 /// The `, request: &T` fragment for a method, or empty for an `Empty` request.
 /// `String` requests borrow as `&str`, the idiomatic borrowed form.
 fn request_param(label: &str, model: &Model) -> TokenStream {

@@ -8,6 +8,7 @@ mod codegen;
 mod coverage;
 mod dsl;
 mod hash;
+mod implement;
 mod model;
 mod patch;
 mod path;
@@ -21,6 +22,7 @@ mod test_support;
 pub use codegen::{GeneratedFile, render_cli_module};
 pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use hash::model_hash;
+pub use implement::{ImplementError, implement};
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
 };

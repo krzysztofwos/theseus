@@ -66,13 +66,16 @@ pub fn coverage(model: &Model, impl_source: &str) -> Result<CoverageReport, Cove
 }
 
 /// The trait name codegen emits for the model's first service.
-fn service_trait_name(model: &Model) -> String {
+pub(crate) fn service_trait_name(model: &Model) -> String {
     let service = model.services.first().map_or("", |s| s.name.as_str());
     format!("{}Service", pascal_case(service))
 }
 
 /// The method names of the `impl <trait_name> for …` block in the source.
-fn implemented_methods(source: &str, trait_name: &str) -> Result<BTreeSet<String>, CoverageError> {
+pub(crate) fn implemented_methods(
+    source: &str,
+    trait_name: &str,
+) -> Result<BTreeSet<String>, CoverageError> {
     let file = syn::parse_file(source).map_err(|error| CoverageError::Parse(error.to_string()))?;
     let mut names = BTreeSet::new();
     for item in &file.items {

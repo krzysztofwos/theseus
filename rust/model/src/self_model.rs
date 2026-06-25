@@ -69,6 +69,19 @@ pub fn theseus_model() -> Model {
         .foreign_type("QueryResult", "theseus_modeling::QueryOutcome")
         .foreign_type("PatchResult", "theseus_modeling::PatchOutcome")
         .foreign_type("CoverageReport", "theseus_modeling::CoverageReport")
+        .foreign_type("ImplementResult", "String")
+        .struct_type(
+            "ImplementRequest",
+            &[
+                ("method", "String", "Name of the operation to implement."),
+                ("body", "String", "The handler body to splice into the impl."),
+                (
+                    "expect_model_hash",
+                    "String",
+                    "The model hash the edit was computed against.",
+                ),
+            ],
+        )
         .service(
             Service::new("Theseus", Transport::Cli)
                 .operation(
@@ -106,6 +119,12 @@ pub fn theseus_model() -> Model {
                     "Report which operations have an authored handler.",
                     "Empty",
                     "CoverageReport",
+                )
+                .operation(
+                    "implement",
+                    "Splice an authored handler for an unimplemented operation.",
+                    "ImplementRequest",
+                    "ImplementResult",
                 )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")

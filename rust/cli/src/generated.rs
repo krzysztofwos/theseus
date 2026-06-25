@@ -109,6 +109,31 @@ pub fn command() -> Command {
             Command::new("coverage")
                 .about("Report which operations have an authored handler."),
         )
+        .subcommand(
+            Command::new("implement")
+                .about("Splice an authored handler for an unimplemented operation.")
+                .arg(
+                    Arg::new("method")
+                        .long("method")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("Name of the operation to implement."),
+                )
+                .arg(
+                    Arg::new("body")
+                        .long("body")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The handler body to splice into the impl."),
+                )
+                .arg(
+                    Arg::new("expect-model-hash")
+                        .long("expect-model-hash")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The model hash the edit was computed against."),
+                ),
+        )
 }
 /// Writes generated files into the workspace.
 pub trait Workspace {
@@ -183,6 +208,27 @@ impl PatchRequest {
         }
     }
 }
+/// The `ImplementRequest` request, parsed from command-line arguments.
+#[derive(Debug, Clone)]
+pub struct ImplementRequest {
+    /// Name of the operation to implement.
+    pub method: String,
+    /// The handler body to splice into the impl.
+    pub body: String,
+    /// The model hash the edit was computed against.
+    pub expect_model_hash: String,
+}
+impl ImplementRequest {
+    /// Build the request from parsed command-line arguments.
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let arg = |name: &str| matches.get_one::<String>(name).cloned();
+        ImplementRequest {
+            method: arg("method").unwrap_or_default(),
+            body: arg("body").unwrap_or_default(),
+            expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
+        }
+    }
+}
 /// A parsed invocation: one variant per operation, carrying its request.
 pub enum Invocation {
     /// Print Theseus's model of itself as JSON.
@@ -197,6 +243,8 @@ pub enum Invocation {
     Patch(PatchRequest),
     /// Report which operations have an authored handler.
     Coverage,
+    /// Splice an authored handler for an unimplemented operation.
+    Implement(ImplementRequest),
 }
 impl Invocation {
     /// Parse the invocation from the matched command line.
@@ -208,6 +256,9 @@ impl Invocation {
             Some(("query", sub)) => Invocation::Query(QueryRequest::from_matches(sub)),
             Some(("patch", sub)) => Invocation::Patch(PatchRequest::from_matches(sub)),
             Some(("coverage", _)) => Invocation::Coverage,
+            Some(("implement", sub)) => {
+                Invocation::Implement(ImplementRequest::from_matches(sub))
+            }
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -244,5 +295,9 @@ pub trait TheseusService {
     /// Report which operations have an authored handler.
     fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         anyhow::bail!("unimplemented operation: coverage")
+    }
+    /// Splice an authored handler for an unimplemented operation.
+    fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: implement")
     }
 }

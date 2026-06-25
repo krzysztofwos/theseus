@@ -3,3 +3,6 @@ resolver = "2"
 members = ["rust/*"]
 
 [workspace.dependencies]
+# Error handling
+anyhow = "1.0.102"
+thiserror = "2.0.18"

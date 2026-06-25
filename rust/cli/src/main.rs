@@ -78,6 +78,10 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
             let outcome = service.query(request)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         }
+        Invocation::Coverage => {
+            let report = service.coverage()?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Invocation::Patch(request) => {
             let applied = request.write.then(|| request.verb.clone());
             let outcome = service.patch(request)?;

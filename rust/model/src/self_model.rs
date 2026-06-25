@@ -68,6 +68,7 @@ pub fn theseus_model() -> Model {
         .foreign_type("GeneratedFiles", "Vec<theseus_modeling::GeneratedFile>")
         .foreign_type("QueryResult", "theseus_modeling::QueryOutcome")
         .foreign_type("PatchResult", "theseus_modeling::PatchOutcome")
+        .foreign_type("CoverageReport", "theseus_modeling::CoverageReport")
         .service(
             Service::new("Theseus", Transport::Cli)
                 .operation(
@@ -99,6 +100,12 @@ pub fn theseus_model() -> Model {
                     "Propose a hash-checked edit to the model.",
                     "PatchRequest",
                     "PatchResult",
+                )
+                .operation(
+                    "coverage",
+                    "Report which operations have an authored handler.",
+                    "Empty",
+                    "CoverageReport",
                 )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")

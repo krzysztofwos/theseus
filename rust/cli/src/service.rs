@@ -10,8 +10,8 @@
 use anyhow::Context;
 use theseus_model::{AUTHORED_IMPL_PATH, generated_files};
 use theseus_modeling::{
-    Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit, describe, query,
-    verify,
+    CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
+    coverage, describe, query, verify,
 };
 
 use crate::generated::{Ctx, PatchRequest, QueryRequest, TheseusService};
@@ -45,6 +45,12 @@ impl TheseusService for Ctx<'_> {
             outcome.handles.retain(|handle| &handle.kind == kind);
         }
         Ok(outcome)
+    }
+
+    fn coverage(&self) -> anyhow::Result<CoverageReport> {
+        let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
+            .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
+        Ok(coverage(self.model, &source)?)
     }
 
     fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {

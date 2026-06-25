@@ -105,6 +105,10 @@ pub fn command() -> Command {
                         .help("Apply the edit by reprojecting the model."),
                 ),
         )
+        .subcommand(
+            Command::new("coverage")
+                .about("Report which operations have an authored handler."),
+        )
 }
 /// Writes generated files into the workspace.
 pub trait Workspace {
@@ -191,6 +195,8 @@ pub enum Invocation {
     Query(QueryRequest),
     /// Propose a hash-checked edit to the model.
     Patch(PatchRequest),
+    /// Report which operations have an authored handler.
+    Coverage,
 }
 impl Invocation {
     /// Parse the invocation from the matched command line.
@@ -201,6 +207,7 @@ impl Invocation {
             Some(("generate", _)) => Invocation::Generate,
             Some(("query", sub)) => Invocation::Query(QueryRequest::from_matches(sub)),
             Some(("patch", sub)) => Invocation::Patch(PatchRequest::from_matches(sub)),
+            Some(("coverage", _)) => Invocation::Coverage,
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -233,5 +240,9 @@ pub trait TheseusService {
         _request: PatchRequest,
     ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
         anyhow::bail!("unimplemented operation: patch")
+    }
+    /// Report which operations have an authored handler.
+    fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
+        anyhow::bail!("unimplemented operation: coverage")
     }
 }

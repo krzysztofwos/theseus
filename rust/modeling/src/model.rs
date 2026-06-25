@@ -148,8 +148,9 @@ pub enum TypeShape {
 
 /// One field of a struct [`TypeDef`].
 ///
-/// The field type drives the CLI projection: a `bool` field becomes a flag, an
-/// `Option<T>` field an optional argument, anything else a required argument.
+/// The field type drives the CLI projection: a `bool` field becomes a flag, a
+/// `Vec<T>` field a repeatable argument, an `Option<T>` field an optional
+/// argument, anything else a required argument.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
     pub name: String,

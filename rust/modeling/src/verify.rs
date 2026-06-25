@@ -171,19 +171,24 @@ fn check_type_references(model: &Model) -> Result<String, String> {
     }
 }
 
-/// Does a type label resolve? A builtin, an `Option<T>` of a resolvable `T`, or a
-/// defined type name.
+/// Does a type label resolve? A builtin, an `Option<T>` or `Vec<T>` of a
+/// resolvable `T`, or a defined type name.
 fn type_label_resolves(label: &str, defined: &BTreeSet<&str>) -> bool {
     if is_builtin_type(label) {
         return true;
     }
-    if let Some(inner) = label
-        .strip_prefix("Option<")
-        .and_then(|rest| rest.strip_suffix('>'))
-    {
+    if let Some(inner) = container_inner(label) {
         return type_label_resolves(inner, defined);
     }
     defined.contains(label)
+}
+
+/// The element type of an `Option<…>` or `Vec<…>` label, when the label is one.
+fn container_inner(label: &str) -> Option<&str> {
+    label
+        .strip_prefix("Option<")
+        .or_else(|| label.strip_prefix("Vec<"))
+        .and_then(|rest| rest.strip_suffix('>'))
 }
 
 /// The type labels a model may use without defining them.

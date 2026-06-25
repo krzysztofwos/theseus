@@ -127,13 +127,15 @@ fn request_fields<'a>(op: &Operation, model: &'a Model) -> &'a [Field] {
 }
 
 /// Render one request field as a command-line argument. The field type decides
-/// the shape: `bool` is a flag, `Option<T>` an optional value, anything else a
-/// required value.
+/// the shape: `bool` is a flag, `Vec<T>` a repeatable value, `Option<T>` an
+/// optional value, anything else a required value.
 fn render_arg(field: &Field) -> TokenStream {
     let flag = field.name.replace('_', "-");
     let help = &field.doc;
     if field.ty == "bool" {
         quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::SetTrue).help(#help)) }
+    } else if field.ty.starts_with("Vec<") {
+        quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Append).help(#help)) }
     } else if field.ty.starts_with("Option<") {
         quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Set).help(#help)) }
     } else {
@@ -243,8 +245,12 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
         })
         .collect();
 
-    // The `arg` closure reads an optional value; only emit it if a field uses it.
-    let arg_closure = if fields.iter().any(|field| field.ty != "bool") {
+    // The `arg` closure reads a single optional value; emit it only when a field
+    // reads one (a flag and a repeatable value read the matches directly).
+    let arg_closure = if fields
+        .iter()
+        .any(|field| field.ty != "bool" && !field.ty.starts_with("Vec<"))
+    {
         quote! { let arg = |name: &str| matches.get_one::<String>(name).cloned(); }
     } else {
         quote! {}
@@ -278,11 +284,14 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
 }
 
 /// The expression that reads one request field from the parsed arguments: a flag
-/// for `bool`, an optional value for `Option<T>`, otherwise a required value.
+/// for `bool`, the collected values for `Vec<T>`, an optional value for
+/// `Option<T>`, otherwise a required value.
 fn field_parse(field: &Field) -> TokenStream {
     let flag = field.name.replace('_', "-");
     if field.ty == "bool" {
         quote! { matches.get_flag(#flag) }
+    } else if field.ty.starts_with("Vec<") {
+        quote! { matches.get_many::<String>(#flag).map(|values| values.cloned().collect()).unwrap_or_default() }
     } else if field.ty.starts_with("Option<") {
         quote! { arg(#flag) }
     } else {

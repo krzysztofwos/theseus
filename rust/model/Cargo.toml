@@ -1,0 +1,8 @@
+[package]
+name = "theseus-model"
+version = "0.1.0"
+edition = "2024"
+description = "Theseus's model of itself"
+
+[dependencies]
+theseus-modeling = { path = "../modeling" }

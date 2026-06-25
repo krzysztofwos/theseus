@@ -5,10 +5,11 @@
 //! [`Invocation`](generated::Invocation), the inbound
 //! [`TheseusService`](generated::TheseusService) contract, the outbound port
 //! traits, and the [`Ctx`](generated::Ctx) that carries the wired ports. Here we
-//! present each result in an exhaustive match on `Invocation` and back the ports
-//! with real filesystem adapters. The operation handlers are the authored leaves
-//! in [`service`]; a new operation forces a presentation arm here, while its
-//! handler defaults to unimplemented until authored.
+//! override presentation for the operations that need bespoke output — an exit
+//! code, per-file lines, a follow-up notice — and delegate the rest to the
+//! generated default presentation, then back the ports with real filesystem
+//! adapters. The operation handlers are the authored leaves in [`service`]. A new
+//! operation surfaces through the default, so adding one needs no change here.
 
 mod generated;
 mod service;
@@ -52,16 +53,15 @@ impl Workspace for FsWorkspace {
 }
 
 // ============================================================================
-// Authored presentation — the CLI inbound adapter's response side. The match is
-// exhaustive over `Invocation`, so a new operation forces a presentation decision
-// here rather than a runtime surprise. Each arm is free to render however it
-// needs: JSON, human lines, an exit code, or a follow-up notice.
+// Authored presentation — the CLI inbound adapter's response side. Each arm
+// overrides the default for an operation that needs bespoke output: an exit code,
+// per-file lines, a follow-up notice. Every other operation falls to the generated
+// `present`, so a new operation surfaces as text or JSON without a change here.
 // ============================================================================
 
 /// Run a parsed invocation against the service and write the result.
 fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<()> {
     match invocation {
-        Invocation::Model => println!("{}", service.model()?),
         Invocation::Verify => {
             let report = service.verify()?;
             println!("{}", report.render());
@@ -74,30 +74,20 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
                 println!("wrote {}", file.path);
             }
         }
-        Invocation::Query(request) => {
-            let outcome = service.query(request)?;
-            println!("{}", serde_json::to_string_pretty(&outcome)?);
-        }
-        Invocation::Coverage => {
-            let report = service.coverage()?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        Invocation::Implement(request) => {
-            println!("{}", service.implement(request)?);
-        }
         Invocation::Patch(request) => {
             let applied = request.write.then(|| request.verb.clone());
             let outcome = service.patch(request)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
             if let Some(verb) = applied.filter(|_| outcome.ok) {
                 println!(
-                    "applied `{verb}` and reprojected; rebuild — the compiler flags anything left to author"
+                    "applied `{verb}` and reprojected. Rebuild, then `coverage` shows any handler left to author"
                 );
             }
             if !outcome.ok {
                 std::process::exit(1);
             }
         }
+        other => generated::present(service, other)?,
     }
     Ok(())
 }

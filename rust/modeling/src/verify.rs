@@ -26,6 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::Serialize;
 use theseus_kernel::{Category, CategoryBuilder, FunctorBuilder};
 
 use crate::{
@@ -34,7 +35,7 @@ use crate::{
 };
 
 /// The outcome of one verification check.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
@@ -42,7 +43,7 @@ pub struct Check {
 }
 
 /// The full self-verification report.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VerifyReport {
     pub checks: Vec<Check>,
     pub conformant: bool,

@@ -75,7 +75,7 @@ impl TheseusService for Ctx<'_> {
             contents: spliced,
         })?;
         Ok(format!(
-            "spliced a handler for `{}` into {AUTHORED_IMPL_PATH}; rebuild — the compiler flags the presentation arm to author",
+            "spliced a handler for `{}` into {AUTHORED_IMPL_PATH}. Rebuild to load it",
             request.method
         ))
     }

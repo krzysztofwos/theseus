@@ -5,6 +5,7 @@
 //! query/patch surface. An adopter crate supplies a concrete model.
 
 mod codegen;
+mod coverage;
 mod dsl;
 mod hash;
 mod model;
@@ -18,6 +19,7 @@ mod verify;
 mod test_support;
 
 pub use codegen::{GeneratedFile, render_cli_module};
+pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use hash::model_hash;
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,

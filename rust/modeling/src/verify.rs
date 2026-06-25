@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Four checks, all derived from the same [`Model`]:
+//! Five checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -12,11 +12,13 @@
 //!   3. **Type references** — every type a service or port names resolves to a
 //!      builtin or a defined type, so no operation points at a phantom type.
 //!   4. **Generated drift** — model-derived files on disk match a fresh render.
+//!   5. **Implementation coverage** — every operation has an authored handler.
+//!      The service trait defaults each method to `unimplemented`, so this check
+//!      holds the gate the compiler once did.
 //!
 //! Checks 1 and 2 read the real manifests, so they degrade gracefully under
 //! refactoring: rename a crate in the model and its manifest together and the
-//! functor still verifies. Operation coverage needs no check here: the generated
-//! service trait makes a missing operation a compile error.
+//! functor still verifies.
 
 use std::{
     collections::BTreeSet,
@@ -92,8 +94,14 @@ impl VerifyReport {
 ///
 /// `workspace_root` is the repository root (the directory holding `rust/`).
 /// `generated` is the set of files the adopter expects on disk, each compared
-/// against a fresh render for the drift gate.
-pub fn verify(model: &Model, workspace_root: &Path, generated: &[GeneratedFile]) -> VerifyReport {
+/// against a fresh render for the drift gate. `impl_path` is the workspace-relative
+/// authored file implementing the service trait, read for the coverage check.
+pub fn verify(
+    model: &Model,
+    workspace_root: &Path,
+    generated: &[GeneratedFile],
+    impl_path: &str,
+) -> VerifyReport {
     let mut report = VerifyReport::new();
 
     match extract_impl_category(model, workspace_root) {
@@ -121,7 +129,40 @@ pub fn verify(model: &Model, workspace_root: &Path, generated: &[GeneratedFile])
         check_generated_in_sync(generated, workspace_root),
     );
 
+    report.record(
+        "operations: every operation has an authored handler",
+        check_implementation_coverage(model, workspace_root, impl_path),
+    );
+
     report
+}
+
+/// Every modeled operation must have an authored handler. An operation left on
+/// the service trait's `unimplemented` default is reported here, moving the gate
+/// on missing behavior from the compiler to verification.
+fn check_implementation_coverage(
+    model: &Model,
+    root: &Path,
+    impl_path: &str,
+) -> Result<String, String> {
+    let source =
+        fs::read_to_string(root.join(impl_path)).map_err(|e| format!("reading {impl_path}: {e}"))?;
+    let report = crate::coverage::coverage(model, &source).map_err(|e| e.to_string())?;
+    if report.unimplemented.is_empty() {
+        Ok(format!("{} operation(s) all implemented", report.total))
+    } else {
+        let names: Vec<&str> = report
+            .unimplemented
+            .iter()
+            .map(|gap| gap.name.as_str())
+            .collect();
+        Err(format!(
+            "{} of {} operation(s) unimplemented: {}",
+            report.unimplemented.len(),
+            report.total,
+            names.join(", ")
+        ))
+    }
 }
 
 /// Every type a service or port names must resolve: a builtin, an `Option` of a

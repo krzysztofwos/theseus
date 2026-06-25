@@ -435,7 +435,7 @@ fn syn_type(text: &str) -> syn::Type {
     syn::parse_str(text).expect("rendered type is valid Rust")
 }
 
-fn pascal_case(name: &str) -> String {
+pub(crate) fn pascal_case(name: &str) -> String {
     name.split(['-', '_'])
         .filter(|part| !part.is_empty())
         .map(|part| {

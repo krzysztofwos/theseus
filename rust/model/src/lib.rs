@@ -15,6 +15,10 @@ pub const SELF_MODEL_PATH: &str = "rust/model/src/self_model.rs";
 /// The generated scaffolding module, relative to the workspace root.
 pub const GENERATED_CLI_PATH: &str = "rust/cli/src/generated.rs";
 
+/// The authored service implementation, relative to the workspace root. `verify`
+/// and the coverage report read it to find which operations have a handler.
+pub const AUTHORED_IMPL_PATH: &str = "rust/cli/src/service.rs";
+
 /// The leading comment block of the projected self-model source.
 const SELF_MODEL_HEADER: &str = concat!(
     "// @generated projection of the model — the fixed point.\n",
@@ -75,7 +79,12 @@ mod tests {
     #[test]
     fn theseus_conforms_to_its_self_model() {
         let model = theseus_model();
-        let report = verify(&model, &workspace_root(), &generated_files(&model));
+        let report = verify(
+            &model,
+            &workspace_root(),
+            &generated_files(&model),
+            AUTHORED_IMPL_PATH,
+        );
         assert!(
             report.conformant,
             "self-verification failed:\n{}",
@@ -90,7 +99,12 @@ mod tests {
         if let Some(kernel) = model.crates.iter_mut().find(|c| c.dir == "kernel") {
             kernel.depends_on.push("theseus-cli".to_string());
         }
-        let report = verify(&model, &workspace_root(), &generated_files(&model));
+        let report = verify(
+            &model,
+            &workspace_root(),
+            &generated_files(&model),
+            AUTHORED_IMPL_PATH,
+        );
         assert!(!report.conformant);
     }
 

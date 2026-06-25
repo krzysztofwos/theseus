@@ -8,7 +8,7 @@
 //! [`main`](crate) stay hand-written.
 
 use anyhow::Context;
-use theseus_model::generated_files;
+use theseus_model::{AUTHORED_IMPL_PATH, generated_files};
 use theseus_modeling::{
     Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit, describe, query,
     verify,
@@ -27,6 +27,7 @@ impl TheseusService for Ctx<'_> {
             self.model,
             &workspace_root(),
             &generated_files(self.model),
+            AUTHORED_IMPL_PATH,
         ))
     }
 

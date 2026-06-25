@@ -8,6 +8,10 @@ mod codegen;
 mod dsl;
 mod hash;
 mod model;
+mod patch;
+mod path;
+mod query;
+mod source;
 mod verify;
 
 #[cfg(test)]
@@ -18,6 +22,9 @@ pub use hash::model_hash;
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
 };
+pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit};
+pub use query::{Handle, QueryError, QueryOutcome, query};
+pub use source::render_model_source;
 pub use verify::{Check, VerifyReport, verify};
 
 /// Render a model as a self-describing JSON document: the model plus its hash.

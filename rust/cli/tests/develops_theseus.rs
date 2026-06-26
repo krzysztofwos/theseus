@@ -62,6 +62,13 @@ fn query_find_searches_handles() {
 }
 
 #[test]
+fn show_returns_a_handler_source() {
+    let (out, ok) = theseus(&["show", "--method", "coverage"]);
+    assert!(ok);
+    assert!(out.contains("fn coverage"));
+}
+
+#[test]
 fn query_kind_keeps_one_element_kind() {
     let (out, ok) = theseus(&["query", "--kind", "port"]);
     assert!(ok);

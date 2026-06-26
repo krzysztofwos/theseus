@@ -134,6 +134,17 @@ pub fn command() -> Command {
                         .help("The model hash the edit was computed against."),
                 ),
         )
+        .subcommand(
+            Command::new("show")
+                .about("Show an operation's current handler source.")
+                .arg(
+                    Arg::new("method")
+                        .long("method")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("Name of the operation whose handler to show."),
+                ),
+        )
 }
 /// Writes generated files into the workspace.
 pub trait Workspace {
@@ -229,6 +240,21 @@ impl ImplementRequest {
         }
     }
 }
+/// The `ShowRequest` request, parsed from command-line arguments.
+#[derive(Debug, Clone)]
+pub struct ShowRequest {
+    /// Name of the operation whose handler to show.
+    pub method: String,
+}
+impl ShowRequest {
+    /// Build the request from parsed command-line arguments.
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let arg = |name: &str| matches.get_one::<String>(name).cloned();
+        ShowRequest {
+            method: arg("method").unwrap_or_default(),
+        }
+    }
+}
 /// A parsed invocation: one variant per operation, carrying its request.
 pub enum Invocation {
     /// Print Theseus's model of itself as JSON.
@@ -245,6 +271,8 @@ pub enum Invocation {
     Coverage,
     /// Splice an authored handler for an unimplemented operation.
     Implement(ImplementRequest),
+    /// Show an operation's current handler source.
+    Show(ShowRequest),
 }
 impl Invocation {
     /// Parse the invocation from the matched command line.
@@ -259,6 +287,7 @@ impl Invocation {
             Some(("implement", sub)) => {
                 Invocation::Implement(ImplementRequest::from_matches(sub))
             }
+            Some(("show", sub)) => Invocation::Show(ShowRequest::from_matches(sub)),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -300,6 +329,10 @@ pub trait TheseusService {
     fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: implement")
     }
+    /// Show an operation's current handler source.
+    fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: show")
+    }
 }
 /// Render an operation with the default presentation: text for a string,
 /// otherwise pretty JSON. The authored presenter delegates here.
@@ -325,6 +358,7 @@ pub fn present(
             println!("{}", serde_json::to_string_pretty(& service.coverage() ?) ?)
         }
         Invocation::Implement(request) => println!("{}", service.implement(request) ?),
+        Invocation::Show(request) => println!("{}", service.show(request) ?),
     }
     Ok(())
 }

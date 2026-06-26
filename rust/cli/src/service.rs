@@ -11,10 +11,12 @@ use anyhow::Context;
 use theseus_model::{AUTHORED_IMPL_PATH, generated_files};
 use theseus_modeling::{
     CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
-    coverage, describe, model_hash, query, verify,
+    coverage, describe, handler_source, model_hash, query, verify,
 };
 
-use crate::generated::{Ctx, ImplementRequest, PatchRequest, QueryRequest, TheseusService};
+use crate::generated::{
+    Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+};
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
@@ -53,6 +55,12 @@ impl TheseusService for Ctx<'_> {
         Ok(coverage(self.model, &source)?)
     }
 
+    fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
+        let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
+            .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
+        Ok(handler_source(self.model, &source, &request.method)?)
+    }
+
     fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
         let base = model_hash(self.model);
         if base != request.expect_model_hash {
@@ -75,7 +83,7 @@ impl TheseusService for Ctx<'_> {
             contents: spliced,
         })?;
         Ok(format!(
-            "spliced a handler for `{}` into {AUTHORED_IMPL_PATH}. Rebuild to load it",
+            "wrote the handler for `{}` into {AUTHORED_IMPL_PATH}. Rebuild to load it",
             request.method
         ))
     }

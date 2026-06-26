@@ -82,6 +82,11 @@ pub fn theseus_model() -> Model {
                 ),
             ],
         )
+        .foreign_type("HandlerSource", "String")
+        .struct_type(
+            "ShowRequest",
+            &[("method", "String", "Name of the operation whose handler to show.")],
+        )
         .service(
             Service::new("Theseus", Transport::Cli)
                 .operation(
@@ -125,6 +130,12 @@ pub fn theseus_model() -> Model {
                     "Splice an authored handler for an unimplemented operation.",
                     "ImplementRequest",
                     "ImplementResult",
+                )
+                .operation(
+                    "show",
+                    "Show an operation's current handler source.",
+                    "ShowRequest",
+                    "HandlerSource",
                 )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")

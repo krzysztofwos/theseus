@@ -34,11 +34,18 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        let files = generated_files(self.model);
-        for file in &files {
-            self.workspace.write_file(file)?;
+        // A crate's generated code is deferred until the crate is scaffolded, so
+        // adding a crate to the model does not write into a manifest-less
+        // directory and break the workspace before `scaffold` runs.
+        let root = workspace_root();
+        let mut written = Vec::new();
+        for file in generated_files(self.model) {
+            if crate_is_scaffolded(&root, &file) {
+                self.workspace.write_file(&file)?;
+                written.push(file);
+            }
         }
-        Ok(files)
+        Ok(written)
     }
 
     fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -141,9 +148,13 @@ impl TheseusService for Ctx<'_> {
             // Reproject every file from the proposed model — the self-model source
             // and the generated scaffolding update together. A new operation's
             // handler defaults to unimplemented until authored here, and `coverage`
-            // reports what is left to write.
+            // reports what is left to write. A crate's generated code is deferred
+            // until the crate is scaffolded.
+            let root = workspace_root();
             for file in generated_files(&proposed) {
-                self.workspace.write_file(&file)?;
+                if crate_is_scaffolded(&root, &file) {
+                    self.workspace.write_file(&file)?;
+                }
             }
         }
         Ok(outcome)
@@ -159,6 +170,21 @@ impl Ctx<'_> {
             .service_of_operation(method)
             .with_context(|| format!("no operation named `{method}`"))?;
         Ok(authored_impl_path(self.model, service))
+    }
+}
+
+/// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
+/// A crate added to the model is registered before its skeleton is written, so
+/// its generated code waits for `scaffold` rather than landing in a directory
+/// the workspace cannot yet build.
+fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
+    match file
+        .path
+        .strip_prefix("rust/")
+        .and_then(|rest| rest.split_once('/'))
+    {
+        Some((dir, _)) => root.join("rust").join(dir).join("Cargo.toml").exists(),
+        None => true,
     }
 }
 

@@ -71,6 +71,23 @@ fn field_summary(field: &Field) -> String {
 fn all_handles(model: &Model) -> Vec<Handle> {
     let mut handles = Vec::new();
 
+    for node in &model.crates {
+        let target = Target::Crate(node.name.clone());
+        handles.push(handle(
+            model,
+            target,
+            node.name.clone(),
+            format!("crate in {} at layer {}", node.dir, node.layer),
+        ));
+        for dep in &node.depends_on {
+            let target = Target::Dep {
+                crate_name: node.name.clone(),
+                dep: dep.clone(),
+            };
+            handles.push(handle(model, target, dep.clone(), String::new()));
+        }
+    }
+
     for service in &model.services {
         let target = Target::Service(service.name.clone());
         handles.push(handle(
@@ -222,7 +239,13 @@ mod tests {
         assert!(kinds.contains(&"type"));
         assert!(kinds.contains(&"port"));
 
-        let expected = model.services.len()
+        let expected = model.crates.len()
+            + model
+                .crates
+                .iter()
+                .map(|c| c.depends_on.len())
+                .sum::<usize>()
+            + model.services.len()
             + model.operations().len()
             + model.types.len()
             + model

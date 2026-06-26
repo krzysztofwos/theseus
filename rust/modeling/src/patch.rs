@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::{
     hash::model_hash,
-    model::{Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape},
+    model::{CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape},
     path::{NodeKind, Target},
 };
 
@@ -152,9 +152,11 @@ enum Plan {
 
 /// Resolve and check an edit, yielding a [`Plan`] or the reasons it was refused.
 fn plan(model: &Model, edit: &Edit) -> Result<Plan, Vec<Diagnostic>> {
-    // Every edit but adding a service needs a service to act on or within.
-    let adding_service = matches!(edit, Edit::Add { kind, .. } if kind == "service");
-    if model.services.is_empty() && !adding_service {
+    // Crate, dependency, and service additions operate on the crate graph or
+    // create a service. Every other edit needs a service to act on or within.
+    let crate_graph_edit =
+        matches!(edit, Edit::Add { kind, .. } if matches!(kind.as_str(), "crate" | "dep" | "service"));
+    if model.services.is_empty() && !crate_graph_edit {
         return Err(vec![diagnostic(
             "PATCH004",
             "model has no service to edit",
@@ -198,6 +200,22 @@ fn plan_add(
     }
 
     match kind {
+        NodeKind::Crate => {
+            under_root(&parent, kind)?;
+            free(model.crate_named(name).is_some(), "crate", name)?;
+            allow_keys(attrs, &["dir", "layer"])?;
+            required(attrs, "dir")?;
+            parse_layer(required(attrs, "layer")?).map_err(layer_refused)?;
+        }
+        NodeKind::Dep => {
+            let crate_name = parent_crate(model, &parent)?;
+            free(
+                dep_exists(model, crate_name, name),
+                "dependency",
+                &format!("{crate_name}.{name}"),
+            )?;
+            allow_keys(attrs, &[])?;
+        }
         NodeKind::Service => {
             under_root(&parent, kind)?;
             free(service_exists(model, name), "service", name)?;
@@ -341,6 +359,20 @@ fn apply_add(
     attrs: &[(String, String)],
 ) {
     match kind {
+        NodeKind::Crate => model.crates.push(CrateNode {
+            name: name.to_string(),
+            dir: attr(attrs, "dir").unwrap_or_default().to_string(),
+            layer: parse_layer(attr(attrs, "layer").unwrap_or("0"))
+                .expect("layer validated during planning"),
+            depends_on: Vec::new(),
+        }),
+        NodeKind::Dep => {
+            if let Target::Crate(crate_name) = parent
+                && let Some(node) = crate_node_mut(model, crate_name)
+            {
+                node.depends_on.push(name.to_string());
+            }
+        }
         NodeKind::Service => model.services.push(Service {
             name: name.to_string(),
             crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
@@ -409,6 +441,12 @@ fn apply_add(
 
 fn apply_remove(model: &mut Model, target: &Target) {
     match target {
+        Target::Crate(name) => model.crates.retain(|node| &node.name != name),
+        Target::Dep { crate_name, dep } => {
+            if let Some(node) = crate_node_mut(model, crate_name) {
+                node.depends_on.retain(|d| d != dep);
+            }
+        }
         Target::Service(name) => model.services.retain(|service| &service.name != name),
         Target::Operation(name) => {
             for service in &mut model.services {
@@ -442,6 +480,34 @@ fn apply_remove(model: &mut Model, target: &Target) {
 
 fn apply_rename(model: &mut Model, target: &Target, to: &str) {
     match target {
+        Target::Crate(name) => {
+            for node in &mut model.crates {
+                if &node.name == name {
+                    node.name = to.to_string();
+                }
+                // A dependency on the renamed crate follows it.
+                for dep in &mut node.depends_on {
+                    if dep == name {
+                        *dep = to.to_string();
+                    }
+                }
+            }
+            // A service placed in the renamed crate follows it.
+            for service in &mut model.services {
+                if service.crate_name == *name {
+                    service.crate_name = to.to_string();
+                }
+            }
+        }
+        Target::Dep { crate_name, dep } => {
+            if let Some(node) = crate_node_mut(model, crate_name) {
+                for d in &mut node.depends_on {
+                    if d == dep {
+                        *d = to.to_string();
+                    }
+                }
+            }
+        }
         Target::Service(name) => {
             for service in &mut model.services {
                 if &service.name == name {
@@ -510,6 +576,14 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
 
 fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
     match target {
+        Target::Crate(name) => {
+            if let Some(node) = crate_node_mut(model, name) {
+                set_if(attrs, "dir", &mut node.dir);
+                if let Some(layer) = attr(attrs, "layer").and_then(|v| parse_layer(v).ok()) {
+                    node.layer = layer;
+                }
+            }
+        }
         Target::Operation(name) => {
             if let Some(op) = operations_mut(model)
                 .into_iter()
@@ -542,7 +616,11 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
                 set_if(attrs, "doc", &mut field.doc);
             }
         }
-        Target::Service(_) | Target::Type(_) | Target::Variant { .. } | Target::Model => {}
+        Target::Dep { .. }
+        | Target::Service(_)
+        | Target::Type(_)
+        | Target::Variant { .. }
+        | Target::Model => {}
     }
 }
 
@@ -568,9 +646,16 @@ fn describe(plan: &Plan) -> Vec<String> {
                     attr(attrs, "inbound").unwrap_or(""),
                     attr(attrs, "crate").unwrap_or(""),
                 ),
+                NodeKind::Crate => format!(
+                    "+ crate {at} ({} at layer {})",
+                    attr(attrs, "dir").unwrap_or(""),
+                    attr(attrs, "layer").unwrap_or(""),
+                ),
                 NodeKind::Type => format!("+ type {at} ({})", attr(attrs, "shape").unwrap_or("")),
                 NodeKind::Field => format!("+ field {at}: {}", attr(attrs, "ty").unwrap_or("")),
-                NodeKind::Port | NodeKind::Variant => format!("+ {} {at}", kind.word()),
+                NodeKind::Dep | NodeKind::Port | NodeKind::Variant => {
+                    format!("+ {} {at}", kind.word())
+                }
             }
         }
         Plan::Remove { target } => format!("- {} {}", target.kind_word(), address(target)),
@@ -591,10 +676,12 @@ fn describe(plan: &Plan) -> Vec<String> {
 fn address(target: &Target) -> String {
     match target {
         Target::Model => "model".to_string(),
-        Target::Service(name)
+        Target::Crate(name)
+        | Target::Service(name)
         | Target::Operation(name)
         | Target::Type(name)
         | Target::Port(name) => name.clone(),
+        Target::Dep { crate_name, dep } => format!("{crate_name}.{dep}"),
         Target::Method { port, name } => format!("{port}.{name}"),
         Target::Field { ty, name } | Target::Variant { ty, name } => format!("{ty}.{name}"),
     }
@@ -603,6 +690,7 @@ fn address(target: &Target) -> String {
 /// The address an addition reads as, from its parent and the new name.
 fn add_address(parent: &Target, kind: NodeKind, name: &str) -> String {
     match (parent, kind) {
+        (Target::Crate(crate_name), NodeKind::Dep) => format!("{crate_name}.{name}"),
         (Target::Port(port), NodeKind::Method) => format!("{port}.{name}"),
         (Target::Type(ty), NodeKind::Field | NodeKind::Variant) => format!("{ty}.{name}"),
         _ => name.to_string(),
@@ -753,16 +841,23 @@ fn required<'a>(attrs: &'a [(String, String)], key: &str) -> Result<&'a str, Vec
 /// The settable scalar attributes of a node kind.
 fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
+        Target::Crate(_) => &["dir", "layer"],
         Target::Operation(_) | Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
-        Target::Service(_) | Target::Type(_) | Target::Variant { .. } | Target::Model => &[],
+        Target::Dep { .. }
+        | Target::Service(_)
+        | Target::Type(_)
+        | Target::Variant { .. }
+        | Target::Model => &[],
     }
 }
 
 /// Whether the name `to` is already taken among a node's siblings.
 fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
     match target {
+        Target::Crate(_) => model.crate_named(to).is_some(),
+        Target::Dep { crate_name, .. } => dep_exists(model, crate_name, to),
         Target::Service(_) => service_exists(model, to),
         Target::Operation(_) => model.operation(to).is_some(),
         Target::Type(_) => model.type_def(to).is_some(),
@@ -777,6 +872,8 @@ fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
 fn node_exists(model: &Model, target: &Target) -> bool {
     match target {
         Target::Model => true,
+        Target::Crate(name) => model.crate_named(name).is_some(),
+        Target::Dep { crate_name, dep } => dep_exists(model, crate_name, dep),
         Target::Service(name) => service_exists(model, name),
         Target::Operation(name) => model.operation(name).is_some(),
         Target::Type(name) => model.type_def(name).is_some(),
@@ -813,6 +910,29 @@ fn port_exists(model: &Model, name: &str) -> bool {
 
 fn service_exists(model: &Model, name: &str) -> bool {
     model.services.iter().any(|service| service.name == name)
+}
+
+/// Whether `crate_name` already declares a dependency on `dep`.
+fn dep_exists(model: &Model, crate_name: &str, dep: &str) -> bool {
+    model
+        .crate_named(crate_name)
+        .is_some_and(|node| node.depends_on.iter().any(|d| d == dep))
+}
+
+fn crate_node_mut<'a>(model: &'a mut Model, name: &str) -> Option<&'a mut CrateNode> {
+    model.crates.iter_mut().find(|node| node.name == name)
+}
+
+/// The parent of a dependency, resolved to the name of an existing crate.
+fn parent_crate<'a>(model: &Model, parent: &'a Target) -> Result<&'a str, Vec<Diagnostic>> {
+    match parent {
+        Target::Crate(name) if model.crate_named(name).is_some() => Ok(name),
+        _ => Err(vec![diagnostic(
+            "PATCH006",
+            "a dependency attaches to an existing crate",
+            "pass --parent crate:<model>:<name>",
+        )]),
+    }
 }
 
 /// An operation or port attaches to the model root or to an existing service.
@@ -1059,6 +1179,16 @@ fn transport_refused(message: String) -> Vec<Diagnostic> {
     )]
 }
 
+/// Parse a crate's architectural layer, a non-negative integer.
+fn parse_layer(text: &str) -> Result<u32, String> {
+    text.parse()
+        .map_err(|_| format!("layer must be a non-negative integer, not `{text}`"))
+}
+
+fn layer_refused(message: String) -> Vec<Diagnostic> {
+    vec![diagnostic("PATCH014", message, "pass --set layer=<integer>")]
+}
+
 fn diagnostic(code: &str, message: impl Into<String>, repair: impl Into<String>) -> Diagnostic {
     Diagnostic {
         code: code.to_string(),
@@ -1099,6 +1229,55 @@ mod tests {
 
     fn code(outcome: &PatchOutcome) -> &str {
         &outcome.diagnostics[0].code
+    }
+
+    #[test]
+    fn add_a_crate_and_a_dependency_on_it() {
+        let model = sample_model();
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "crate",
+                "sample-extra",
+                &[("dir", "extra"), ("layer", "1")],
+            ),
+        );
+        let node = model
+            .crate_named("sample-extra")
+            .expect("the crate was added");
+        assert_eq!(node.dir, "extra");
+        assert_eq!(node.layer, 1);
+
+        // A dependency addressed to an existing crate appends to its depends_on.
+        let model = accept(
+            &model,
+            add("crate:sample:sample", "dep", "sample-extra", &[]),
+        );
+        let base = model.crate_named("sample").unwrap();
+        assert!(base.depends_on.iter().any(|d| d == "sample-extra"));
+    }
+
+    #[test]
+    fn add_crate_rejects_a_non_integer_layer() {
+        let model = sample_model();
+        let (outcome, _) = edit(
+            &model,
+            add(
+                "model:sample",
+                "crate",
+                "sample-extra",
+                &[("dir", "extra"), ("layer", "ground")],
+            ),
+        );
+        assert_eq!(code(&outcome), "PATCH014");
+    }
+
+    #[test]
+    fn a_dependency_needs_a_crate_parent() {
+        let model = sample_model();
+        let (outcome, _) = edit(&model, add("model:sample", "dep", "x", &[]));
+        assert_eq!(code(&outcome), "PATCH006");
     }
 
     #[test]

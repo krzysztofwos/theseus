@@ -14,6 +14,10 @@ use crate::model::Model;
 pub enum Target {
     /// The model itself — the parent of a top-level addition.
     Model,
+    /// A crate, by name — the parent a dependency attaches to.
+    Crate(String),
+    /// A dependency edge of a crate, naming the depended-on crate.
+    Dep { crate_name: String, dep: String },
     /// A service, by name — the parent an operation or port may attach to.
     Service(String),
     /// An operation, by name.
@@ -33,6 +37,8 @@ pub enum Target {
 /// The kind of node an addition creates, naming where it attaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    Crate,
+    Dep,
     Service,
     Operation,
     Type,
@@ -80,6 +86,8 @@ impl Target {
         let m = model.name.to_lowercase();
         match self {
             Target::Model => format!("model:{m}"),
+            Target::Crate(name) => format!("crate:{m}:{name}"),
+            Target::Dep { crate_name, dep } => format!("dep:{m}:{crate_name}.{dep}"),
             Target::Service(name) => format!("service:{m}:{name}"),
             Target::Operation(name) => format!("op:{m}:{name}"),
             Target::Type(name) => format!("type:{m}:{name}"),
@@ -94,6 +102,8 @@ impl Target {
     pub fn kind_word(&self) -> &'static str {
         match self {
             Target::Model => "model",
+            Target::Crate(_) => "crate",
+            Target::Dep { .. } => "dependency",
             Target::Service(_) => "service",
             Target::Operation(_) => "operation",
             Target::Type(_) => "type",
@@ -109,6 +119,8 @@ impl NodeKind {
     /// Parse the node-kind word an `add` names.
     pub fn parse(text: &str) -> Option<NodeKind> {
         Some(match text {
+            "crate" => NodeKind::Crate,
+            "dep" => NodeKind::Dep,
             "service" => NodeKind::Service,
             "operation" => NodeKind::Operation,
             "type" => NodeKind::Type,
@@ -123,6 +135,8 @@ impl NodeKind {
     /// The word naming this kind, for display.
     pub fn word(self) -> &'static str {
         match self {
+            NodeKind::Crate => "crate",
+            NodeKind::Dep => "dependency",
             NodeKind::Service => "service",
             NodeKind::Operation => "operation",
             NodeKind::Type => "type",
@@ -153,6 +167,11 @@ fn parse_kind(handle: &str, kind: &str, rest: &str) -> Result<Target, HandleErro
             .ok_or_else(|| HandleError::Malformed(handle.to_string()))
     };
     match kind {
+        "crate" => Ok(Target::Crate(rest.to_string())),
+        "dep" => {
+            let (crate_name, dep) = nested()?;
+            Ok(Target::Dep { crate_name, dep })
+        }
         "service" => Ok(Target::Service(rest.to_string())),
         "op" => Ok(Target::Operation(rest.to_string())),
         "type" => Ok(Target::Type(rest.to_string())),

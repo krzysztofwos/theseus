@@ -230,6 +230,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-calculator-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "theseus-calculator",
+]
+
+[[package]]
 name = "theseus-cli"
 version = "0.1.0"
 dependencies = [

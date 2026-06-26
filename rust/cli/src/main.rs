@@ -16,7 +16,7 @@ mod service;
 
 use std::path::{Path, PathBuf};
 
-use generated::{Ctx, Invocation, TheseusService, Workspace};
+use generated::{Ctx, Invocation, Llm, TheseusService, Workspace};
 use theseus_model::theseus_model;
 use theseus_modeling::GeneratedFile;
 
@@ -26,10 +26,12 @@ fn main() -> anyhow::Result<()> {
         root: workspace_root(),
     };
     let calculator = theseus_calculator::Calculator;
+    let llm = OfflineLlm;
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
         calculator: &calculator,
+        llm: &llm,
     };
 
     // `arg_required_else_help(true)` in the generated surface means a bare
@@ -56,6 +58,17 @@ impl Workspace for FsWorkspace {
         }
         std::fs::write(&path, &request.contents)?;
         Ok(())
+    }
+}
+
+/// The offline model adapter: a scripted stand-in for a real model, so the agent
+/// loop runs with no network. Phase 1 wires the port. The scripted replies that
+/// drive the loop arrive with the `chat` handler.
+struct OfflineLlm;
+
+impl Llm for OfflineLlm {
+    fn complete(&self, _transcript: &str) -> anyhow::Result<String> {
+        Ok("offline model: the loop reached me, with no real model behind it yet.".to_string())
     }
 }
 

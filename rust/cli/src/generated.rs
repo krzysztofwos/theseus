@@ -12,11 +12,18 @@ pub trait Workspace {
     ) -> anyhow::Result<()>;
 }
 
+/// Completes a conversation turn, optionally requesting a tool call.
+pub trait Llm {
+    /// Complete one turn, returning the model's next action as text.
+    fn complete(&self, request: &str) -> anyhow::Result<String>;
+}
+
 /// Composition root: the model plus the wired outbound ports.
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,
     pub workspace: &'a dyn Workspace,
     pub calculator: &'a dyn theseus_calculator::CalculatorService,
+    pub llm: &'a dyn Llm,
 }
 
 /// The `QueryRequest` request.
@@ -84,6 +91,13 @@ pub struct CalcRequest {
     pub b: f64,
 }
 
+/// The `ChatRequest` request.
+#[derive(Debug, Clone)]
+pub struct ChatRequest {
+    /// The user's message that opens or continues the conversation.
+    pub message: String,
+}
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait TheseusService {
@@ -141,6 +155,11 @@ pub trait TheseusService {
     /// Write the skeleton of each library service crate that is missing it.
     fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         anyhow::bail!("unimplemented operation: scaffold")
+    }
+
+    /// Run the agent loop, the model driving Theseus's own operations as tools.
+    fn chat(&self, _request: ChatRequest) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: chat")
     }
 }
 
@@ -337,6 +356,21 @@ pub fn command() -> Command {
                     "Write the skeleton of each library service crate that is missing it.",
                 ),
         )
+        .subcommand(
+            Command::new("chat")
+                .about(
+                    "Run the agent loop, the model driving Theseus's own operations as tools.",
+                )
+                .arg(
+                    Arg::new("message")
+                        .long("message")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help(
+                            "The user's message that opens or continues the conversation.",
+                        ),
+                ),
+        )
 }
 
 fn parse_queryrequest(matches: &ArgMatches) -> QueryRequest {
@@ -395,6 +429,13 @@ fn parse_calcrequest(matches: &ArgMatches) -> CalcRequest {
     }
 }
 
+fn parse_chatrequest(matches: &ArgMatches) -> ChatRequest {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    ChatRequest {
+        message: arg("message").unwrap_or_default(),
+    }
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -406,6 +447,7 @@ pub enum Invocation {
     Show(ShowRequest),
     Calc(CalcRequest),
     Scaffold,
+    Chat(ChatRequest),
 }
 
 impl Invocation {
@@ -424,6 +466,7 @@ impl Invocation {
             Some(("show", sub)) => Invocation::Show(parse_showrequest(sub)),
             Some(("calc", sub)) => Invocation::Calc(parse_calcrequest(sub)),
             Some(("scaffold", _)) => Invocation::Scaffold,
+            Some(("chat", sub)) => Invocation::Chat(parse_chatrequest(sub)),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -459,6 +502,7 @@ pub fn dispatch(
         Invocation::Scaffold => {
             println!("{}", serde_json::to_string_pretty(& service.scaffold() ?) ?)
         }
+        Invocation::Chat(request) => println!("{}", service.chat(request) ?),
     }
     Ok(())
 }

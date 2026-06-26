@@ -127,6 +127,17 @@ pub fn theseus_model() -> Model {
                 ("b", "f64", "Right operand."),
             ],
         )
+        .struct_type(
+            "ChatRequest",
+            &[
+                (
+                    "message",
+                    "String",
+                    "The user's message that opens or continues the conversation.",
+                ),
+            ],
+        )
+        .foreign_type("ChatReply", "String")
         .service(
             Service::new("Theseus")
                 .crate_name("theseus-cli")
@@ -190,6 +201,12 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
+                .operation(
+                    "chat",
+                    "Run the agent loop, the model driving Theseus's own operations as tools.",
+                    "ChatRequest",
+                    "ChatReply",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
@@ -205,6 +222,18 @@ pub fn theseus_model() -> Model {
                             "Evaluates arithmetic through the calculator service.",
                         )
                         .targeting("Calculator"),
+                )
+                .port(
+                    Port::new(
+                            "llm",
+                            "Completes a conversation turn, optionally requesting a tool call.",
+                        )
+                        .method(
+                            "complete",
+                            "Complete one turn, returning the model's next action as text.",
+                            "String",
+                            "String",
+                        ),
                 ),
         )
         .service(

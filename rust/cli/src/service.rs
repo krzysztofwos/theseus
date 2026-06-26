@@ -20,6 +20,13 @@ use crate::generated::{
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
+    fn chat(&self, request: crate::generated::ChatRequest) -> anyhow::Result<String> {
+        // Open the transcript with the user's message and let the model reply. Tool
+        // dispatch — the model calling Theseus's own operations — joins the loop next.
+        let transcript = format!("User: {}\nAssistant: ", request.message);
+        self.llm.complete(&transcript)
+    }
+
     fn model(&self) -> anyhow::Result<String> {
         Ok(describe(self.model))
     }

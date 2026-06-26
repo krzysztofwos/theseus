@@ -71,10 +71,10 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .map(|service| render_service_trait(service, model))
         .collect();
     let requests = render_request_structs(&services, model);
-    let (command, invocation, present) = match services
+    let cli_service = services
         .iter()
-        .find(|service| service.inbound == Transport::Cli)
-    {
+        .find(|service| service.inbound == Transport::Cli);
+    let (command, invocation, present) = match cli_service {
         Some(service) => (
             render_command(service, model),
             render_invocation(service, model),
@@ -82,9 +82,16 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         ),
         None => (quote! {}, quote! {}, quote! {}),
     };
+    // The command surface and its parsers carry the only command-line dependency.
+    // a crate without a CLI service imports none of it.
+    let command_import = if cli_service.is_some() {
+        quote! { use clap::{Arg, ArgAction, ArgMatches, Command}; }
+    } else {
+        quote! {}
+    };
 
     let tokens = quote! {
-        use clap::{Arg, ArgAction, ArgMatches, Command};
+        #command_import
 
         #command
         #(#port_traits)*
@@ -251,8 +258,17 @@ fn port_trait_path(port: &Port, model: &Model, current_crate: &str) -> TokenStre
     }
 }
 
-/// Render each distinct request struct the given services' operations use.
+/// Render each distinct request struct the given services' operations use. A
+/// request a CLI service takes carries a command-line parser; a request only an
+/// in-process service takes is a plain struct its caller builds.
 fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
+    let parsed: Vec<&str> = services
+        .iter()
+        .filter(|service| service.inbound == Transport::Cli)
+        .flat_map(|service| service.operations.iter())
+        .filter_map(|op| request_type(op, model))
+        .map(|def| def.name.as_str())
+        .collect();
     let mut seen: Vec<&str> = Vec::new();
     let structs: Vec<TokenStream> = services
         .iter()
@@ -265,7 +281,7 @@ fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
             }
             fresh
         })
-        .map(render_request_struct)
+        .map(|def| render_request_struct(def, parsed.contains(&def.name.as_str())))
         .collect();
     quote! { #(#structs)* }
 }
@@ -281,18 +297,23 @@ fn request_type<'a>(op: &Operation, model: &'a Model) -> Option<&'a TypeDef> {
         .filter(|def| matches!(def.shape, TypeShape::Struct(_)))
 }
 
-/// Render a request struct plus the parser that builds it from command-line
-/// arguments. This is the inbound adapter's wire-to-domain conversion, kept out of
-/// the service so the service stays transport-neutral.
-fn render_request_struct(def: &TypeDef) -> TokenStream {
+/// Render a request struct. When `with_parser`, it also carries the parser that
+/// builds it from command-line arguments — the inbound adapter's wire-to-domain
+/// conversion, kept out of the service so the service stays transport-neutral.
+/// Without it, the struct is plain and its caller builds it in process.
+fn render_request_struct(def: &TypeDef, with_parser: bool) -> TokenStream {
     let TypeShape::Struct(fields) = &def.shape else {
         return quote! {};
     };
     let name = format_ident!("{}", def.name);
-    let struct_doc = doc(&format!(
-        "The `{}` request, parsed from command-line arguments.",
-        def.name
-    ));
+    let struct_doc = if with_parser {
+        doc(&format!(
+            "The `{}` request, parsed from command-line arguments.",
+            def.name
+        ))
+    } else {
+        doc(&format!("The `{}` request.", def.name))
+    };
 
     let field_defs: Vec<TokenStream> = fields
         .iter()
@@ -307,25 +328,40 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
         })
         .collect();
 
-    // The `arg` closure reads a single optional string; emit it only when a field
-    // reads one (flags, repeatable values, and typed values read the matches with
-    // their own type).
-    let arg_closure = if fields
-        .iter()
-        .any(|field| field.ty == "String" || field.ty == "Option<String>")
-    {
-        quote! { let arg = |name: &str| matches.get_one::<String>(name).cloned(); }
+    let parser = if with_parser {
+        // The `arg` closure reads a single optional string; emit it only when a
+        // field reads one (flags, repeatable values, and typed values read the
+        // matches with their own type).
+        let arg_closure = if fields
+            .iter()
+            .any(|field| field.ty == "String" || field.ty == "Option<String>")
+        {
+            quote! { let arg = |name: &str| matches.get_one::<String>(name).cloned(); }
+        } else {
+            quote! {}
+        };
+        let field_inits: Vec<TokenStream> = fields
+            .iter()
+            .map(|field| {
+                let field_name = format_ident!("{}", field.name);
+                let parse = field_parse(field);
+                quote! { #field_name: #parse, }
+            })
+            .collect();
+        quote! {
+            impl #name {
+                /// Build the request from parsed command-line arguments.
+                fn from_matches(matches: &ArgMatches) -> Self {
+                    #arg_closure
+                    #name {
+                        #(#field_inits)*
+                    }
+                }
+            }
+        }
     } else {
         quote! {}
     };
-    let field_inits: Vec<TokenStream> = fields
-        .iter()
-        .map(|field| {
-            let field_name = format_ident!("{}", field.name);
-            let parse = field_parse(field);
-            quote! { #field_name: #parse, }
-        })
-        .collect();
 
     quote! {
         #struct_doc
@@ -333,16 +369,7 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
         pub struct #name {
             #(#field_defs)*
         }
-
-        impl #name {
-            /// Build the request from parsed command-line arguments.
-            fn from_matches(matches: &ArgMatches) -> Self {
-                #arg_closure
-                #name {
-                    #(#field_inits)*
-                }
-            }
-        }
+        #parser
     }
 }
 
@@ -623,6 +650,24 @@ mod tests {
         // The service trait is present; nothing builds a command surface for it.
         assert!(rendered.contains("trait CalculatorService"));
         assert!(!rendered.contains("Command::new"));
+    }
+
+    #[test]
+    fn an_in_process_request_struct_is_plain_with_no_command_dependency() {
+        let model = Model::new("Calc")
+            .struct_type("Operands", &[("a", "f64", "Left operand.")])
+            .service(
+                Service::new("Calculator", Transport::InProcess)
+                    .crate_name("calc")
+                    .operation("add", "Add.", "Operands", "Empty"),
+            );
+        let rendered = render_module_for_crate(&model, "calc");
+        // The request is a plain struct: no command-line parser and no import of
+        // the command surface.
+        assert!(rendered.contains("pub struct Operands"));
+        assert!(rendered.contains("pub a: f64"));
+        assert!(!rendered.contains("from_matches"));
+        assert!(!rendered.contains("use clap"));
     }
 
     #[test]

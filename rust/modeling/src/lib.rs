@@ -13,6 +13,7 @@ mod model;
 mod patch;
 mod path;
 mod query;
+mod scaffold;
 mod source;
 mod verify;
 
@@ -28,6 +29,7 @@ pub use model::{
 };
 pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};
 pub use query::{Handle, QueryError, QueryOutcome, query};
+pub use scaffold::scaffold_files;
 pub use source::render_model_source;
 pub use verify::{Check, VerifyReport, verify};
 

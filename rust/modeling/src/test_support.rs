@@ -24,6 +24,7 @@ pub(crate) fn sample_model() -> Model {
             outbound: vec![Port {
                 name: "store".to_string(),
                 summary: "A store.".to_string(),
+                target: None,
                 methods: vec![],
             }],
         }],

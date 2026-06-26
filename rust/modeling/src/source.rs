@@ -124,8 +124,12 @@ fn render_operation(op: &Operation) -> TokenStream {
 fn render_port(port: &Port) -> TokenStream {
     let name = &port.name;
     let summary = &port.summary;
+    let targeting = match &port.target {
+        Some(service) => quote! { .targeting(#service) },
+        None => quote! {},
+    };
     let methods = port.methods.iter().map(render_method);
-    quote! { .port(Port::new(#name, #summary) #(#methods)*) }
+    quote! { .port(Port::new(#name, #summary) #targeting #(#methods)*) }
 }
 
 fn render_method(method: &Method) -> TokenStream {

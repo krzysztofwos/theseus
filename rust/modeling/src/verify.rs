@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Five checks, all derived from the same [`Model`]:
+//! Six checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -11,8 +11,10 @@
 //!      functor into a layer preorder. A violation has no monotone image.
 //!   3. **Type references** — every type a service or port names resolves to a
 //!      builtin or a defined type, so no operation points at a phantom type.
-//!   4. **Generated drift** — model-derived files on disk match a fresh render.
-//!   5. **Implementation coverage** — every operation has an authored handler.
+//!   4. **Port targets** — every service-targeting port names a service the
+//!      model defines, so no port is bound to a phantom service.
+//!   5. **Generated drift** — model-derived files on disk match a fresh render.
+//!   6. **Implementation coverage** — every operation has an authored handler.
 //!      The service trait defaults each method to `unimplemented`, so this check
 //!      holds the gate the compiler once did.
 //!
@@ -127,6 +129,11 @@ pub fn verify(
     );
 
     report.record(
+        "ports: every service-targeting port resolves to a service",
+        check_port_targets(model),
+    );
+
+    report.record(
         "generated code: in sync with model (drift gate)",
         check_generated_in_sync(generated, workspace_root),
     );
@@ -172,6 +179,28 @@ fn check_implementation_coverage(
             names.join(", ")
         ))
     }
+}
+
+/// Every service-targeting port must name a service the model defines, so a port
+/// bound to a phantom service is caught before code generation reaches for its
+/// trait.
+fn check_port_targets(model: &Model) -> Result<String, String> {
+    let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
+    let mut bound = 0;
+    for service in &model.services {
+        for port in &service.outbound {
+            if let Some(target) = &port.target {
+                bound += 1;
+                if !services.contains(target.as_str()) {
+                    return Err(format!(
+                        "port `{}` targets service `{target}`, which the model does not define",
+                        port.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(format!("{bound} service-targeting port(s) all resolve"))
 }
 
 /// Every type a service or port names must resolve: a builtin, an `Option` of a

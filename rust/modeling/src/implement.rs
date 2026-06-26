@@ -111,7 +111,9 @@ fn method_range(
 ) -> Result<Option<Range<usize>>, ImplementError> {
     let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
     for item in &file.items {
-        let syn::Item::Impl(block) = item else { continue };
+        let syn::Item::Impl(block) = item else {
+            continue;
+        };
         let names_the_trait = block
             .trait_
             .as_ref()
@@ -159,8 +161,7 @@ mod tests {
     use super::*;
     use crate::test_support::sample_model;
 
-    const IMPL: &str =
-        "impl SampleService for Ctx<'_> {\n    fn greet(&self) -> anyhow::Result<()> {\n        Ok(())\n    }\n}\n";
+    const IMPL: &str = "impl SampleService for Ctx<'_> {\n    fn greet(&self) -> anyhow::Result<()> {\n        Ok(())\n    }\n}\n";
 
     /// The rendered source must remain valid Rust.
     fn parses(source: &str) -> bool {
@@ -169,7 +170,14 @@ mod tests {
 
     #[test]
     fn inserts_a_handler_for_an_unimplemented_operation() {
-        let out = implement(&sample_model(), IMPL, "status", "Ok(())", "crate::generated::").unwrap();
+        let out = implement(
+            &sample_model(),
+            IMPL,
+            "status",
+            "Ok(())",
+            "crate::generated::",
+        )
+        .unwrap();
         assert!(parses(&out));
         assert!(out.contains("fn status(&self) -> anyhow::Result<()>"));
         // The existing handler is preserved, the new one lands inside the block.
@@ -215,7 +223,8 @@ mod tests {
 
     #[test]
     fn a_missing_impl_block_is_reported() {
-        let error = implement(&sample_model(), "// no impl here\n", "status", "Ok(())", "").unwrap_err();
+        let error =
+            implement(&sample_model(), "// no impl here\n", "status", "Ok(())", "").unwrap_err();
         assert!(matches!(error, ImplementError::NoImplBlock(_)));
     }
 }

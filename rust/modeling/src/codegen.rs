@@ -53,14 +53,17 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .iter()
         .flat_map(|service| service.outbound.iter())
         .collect();
+    // A service-targeting port reuses its target service's trait, so only a
+    // method-bearing port contributes a trait of its own.
     let port_traits: Vec<TokenStream> = ports
         .iter()
+        .filter(|port| port.target.is_none())
         .map(|port| render_port_trait(port, model))
         .collect();
     let composition_root = if ports.is_empty() {
         quote! {}
     } else {
-        render_composition_root(&ports)
+        render_composition_root(&ports, model, crate_name)
     };
 
     let service_traits: Vec<TokenStream> = services
@@ -211,13 +214,13 @@ fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
 }
 
 /// Render the composition root: the model plus one field per wired port.
-fn render_composition_root(ports: &[&Port]) -> TokenStream {
+fn render_composition_root(ports: &[&Port], model: &Model, current_crate: &str) -> TokenStream {
     let fields: Vec<TokenStream> = ports
         .iter()
         .map(|port| {
             let field = format_ident!("{}", snake_case(&port.name));
-            let trait_name = format_ident!("{}", pascal_case(&port.name));
-            quote! { pub #field: &'a dyn #trait_name, }
+            let trait_path = port_trait_path(port, model, current_crate);
+            quote! { pub #field: &'a dyn #trait_path, }
         })
         .collect();
     let doc = doc("Composition root: the model plus the wired outbound ports.");
@@ -227,6 +230,24 @@ fn render_composition_root(ports: &[&Port]) -> TokenStream {
             pub model: &'a theseus_modeling::Model,
             #(#fields)*
         }
+    }
+}
+
+/// The trait a port's composition-root field is typed against. A method-bearing
+/// port uses its own trait. A service-targeting port uses the target service's
+/// trait, qualified by the target's crate path when it lives in another crate.
+fn port_trait_path(port: &Port, model: &Model, current_crate: &str) -> TokenStream {
+    let Some(service_name) = &port.target else {
+        let own = format_ident!("{}", pascal_case(&port.name));
+        return quote! { #own };
+    };
+    let trait_name = format_ident!("{}Service", pascal_case(service_name));
+    match model.services.iter().find(|s| &s.name == service_name) {
+        Some(service) if service.crate_name != current_crate && !service.crate_name.is_empty() => {
+            let pkg = format_ident!("{}", service.crate_name.replace('-', "_"));
+            quote! { #pkg::#trait_name }
+        }
+        _ => quote! { #trait_name },
     }
 }
 
@@ -562,12 +583,34 @@ fn snake_case(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Model, Service, Transport};
+    use crate::model::{Model, Port, Service, Transport};
 
     #[test]
     fn case_helpers() {
         assert_eq!(pascal_case("source-store"), "SourceStore");
         assert_eq!(snake_case("source-store"), "source_store");
+    }
+
+    #[test]
+    fn a_service_targeting_port_reuses_the_target_service_trait() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 1, &["calc"])
+            .crate_node("calc", "calc", 0, &[])
+            .service(
+                Service::new("Calc", Transport::InProcess)
+                    .crate_name("calc")
+                    .operation("add", "Add.", "Empty", "Empty"),
+            )
+            .service(
+                Service::new("App", Transport::Cli)
+                    .crate_name("app")
+                    .port(Port::new("calculator", "Calls the calculator.").targeting("Calc")),
+            );
+        let rendered = render_module_for_crate(&model, "app");
+        // The binding emits no port trait of its own. The composition-root field is
+        // typed against the target service's trait at its crate path.
+        assert!(!rendered.contains("trait Calculator"));
+        assert!(rendered.contains("dyn calc::CalcService"));
     }
 
     #[test]

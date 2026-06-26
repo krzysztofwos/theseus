@@ -126,8 +126,16 @@ impl Port {
         Port {
             name: name.to_string(),
             summary: summary.to_string(),
+            target: None,
             methods: Vec::new(),
         }
+    }
+
+    /// Bind the port to the named service: its contract becomes that service's
+    /// operations, so it adds no methods of its own.
+    pub fn targeting(mut self, service: &str) -> Self {
+        self.target = Some(service.to_string());
+        self
     }
 
     /// Add a method.

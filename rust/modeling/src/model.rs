@@ -113,14 +113,19 @@ pub struct Operation {
 }
 
 /// An outbound dependency of a service: a named set of methods the service
-/// calls and an adapter must implement.
+/// calls and an adapter must implement. A port may instead be bound to another
+/// service, in which case its contract is that service's operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Port {
     /// Port name, e.g. `workspace`.
     pub name: String,
     /// One-line description.
     pub summary: String,
-    /// The methods the port exposes.
+    /// When set, the port is bound to the named service: its contract is that
+    /// service's operations, and code generation wires it to that service's
+    /// trait rather than emitting one of its own.
+    pub target: Option<String>,
+    /// The methods the port exposes. Empty for a service-targeting port.
     pub methods: Vec<Method>,
 }
 

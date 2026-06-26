@@ -211,7 +211,7 @@ fn plan_add(
         NodeKind::Port => {
             under_root(&parent, kind)?;
             free(port_exists(model, name), "port", name)?;
-            allow_keys(attrs, &["summary"])?;
+            allow_keys(attrs, &["summary", "target"])?;
         }
         NodeKind::Method => {
             let port = parent_port(model, &parent)?;
@@ -346,6 +346,7 @@ fn apply_add(
         NodeKind::Port => model.services[0].outbound.push(Port {
             name: name.to_string(),
             summary: attr(attrs, "summary").unwrap_or_default().to_string(),
+            target: attr(attrs, "target").map(str::to_string),
             methods: Vec::new(),
         }),
         NodeKind::Method => {
@@ -1017,7 +1018,12 @@ mod tests {
         let model = sample_model();
         let hash = model_hash(&model);
         let edits = vec![
-            add("model:sample", "type", "Token", &[("shape", "newtype:String")]),
+            add(
+                "model:sample",
+                "type",
+                "Token",
+                &[("shape", "newtype:String")],
+            ),
             add("model:sample", "operation", "ping", &[]),
             Edit::Rename {
                 target: "op:sample:ping".to_string(),
@@ -1039,7 +1045,12 @@ mod tests {
         let model = sample_model();
         let hash = model_hash(&model);
         let edits = vec![
-            add("model:sample", "type", "Token", &[("shape", "newtype:String")]),
+            add(
+                "model:sample",
+                "type",
+                "Token",
+                &[("shape", "newtype:String")],
+            ),
             Edit::Remove {
                 target: "op:sample:nope".to_string(),
             },
@@ -1177,7 +1188,10 @@ mod tests {
                 "model:sample",
                 "type",
                 "Operands",
-                &[("shape", "struct:a=String:Left operand.,b=String:Right operand.")],
+                &[(
+                    "shape",
+                    "struct:a=String:Left operand.,b=String:Right operand.",
+                )],
             ),
         );
         let fields = match &next.type_def("Operands").unwrap().shape {

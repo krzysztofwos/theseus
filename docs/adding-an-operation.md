@@ -9,7 +9,7 @@ All other elements are generated. The command surface, the request parser, the s
 
 The two steps are identical whether performed by a person through an editor or by an agent through the protocol. The protocol exists so that an agent, which lacks a general-purpose file editor, can perform the same edits as typed, hash-checked operations.
 
-A complete multi-operation example — a calculator with a shared request type and four operations, built end to end through the CLI — is given in [building a calculator](building-a-calculator.md).
+A larger example — a calculator built as a separate service in its own crate, with a shared request type and four operations, exposed through the CLI as a single `calc` operation — is given in [building a calculator](building-a-calculator.md).
 
 ## Setup
 

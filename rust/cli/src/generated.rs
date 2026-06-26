@@ -160,6 +160,35 @@ pub fn command() -> Command {
                         .help("Name of the operation whose handler to show."),
                 ),
         )
+        .subcommand(
+            Command::new("calc")
+                .about(
+                    "Evaluate an arithmetic expression through the calculator service.",
+                )
+                .arg(
+                    Arg::new("op")
+                        .long("op")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The operator: add, subtract, multiply, or divide."),
+                )
+                .arg(
+                    Arg::new("a")
+                        .long("a")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .value_parser(clap::value_parser!(f64))
+                        .help("Left operand."),
+                )
+                .arg(
+                    Arg::new("b")
+                        .long("b")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .value_parser(clap::value_parser!(f64))
+                        .help("Right operand."),
+                ),
+        )
 }
 /// Writes generated files into the workspace.
 pub trait Workspace {
@@ -173,6 +202,7 @@ pub trait Workspace {
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,
     pub workspace: &'a dyn Workspace,
+    pub calculator: &'a dyn theseus_calculator::CalculatorService,
 }
 /// The `QueryRequest` request, parsed from command-line arguments.
 #[derive(Debug, Clone)]
@@ -279,6 +309,27 @@ impl ShowRequest {
         }
     }
 }
+/// The `CalcRequest` request, parsed from command-line arguments.
+#[derive(Debug, Clone)]
+pub struct CalcRequest {
+    /// The operator: add, subtract, multiply, or divide.
+    pub op: String,
+    /// Left operand.
+    pub a: f64,
+    /// Right operand.
+    pub b: f64,
+}
+impl CalcRequest {
+    /// Build the request from parsed command-line arguments.
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let arg = |name: &str| matches.get_one::<String>(name).cloned();
+        CalcRequest {
+            op: arg("op").unwrap_or_default(),
+            a: matches.get_one::<f64>("a").cloned().unwrap_or_default(),
+            b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
+        }
+    }
+}
 /// A parsed invocation: one variant per operation, carrying its request.
 pub enum Invocation {
     /// Print Theseus's model of itself as JSON.
@@ -297,6 +348,8 @@ pub enum Invocation {
     Implement(ImplementRequest),
     /// Show an operation's current handler source.
     Show(ShowRequest),
+    /// Evaluate an arithmetic expression through the calculator service.
+    Calc(CalcRequest),
 }
 impl Invocation {
     /// Parse the invocation from the matched command line.
@@ -312,6 +365,7 @@ impl Invocation {
                 Invocation::Implement(ImplementRequest::from_matches(sub))
             }
             Some(("show", sub)) => Invocation::Show(ShowRequest::from_matches(sub)),
+            Some(("calc", sub)) => Invocation::Calc(CalcRequest::from_matches(sub)),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -357,6 +411,10 @@ pub trait TheseusService {
     fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: show")
     }
+    /// Evaluate an arithmetic expression through the calculator service.
+    fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: calc")
+    }
 }
 /// Render an operation with the default presentation: text for a string,
 /// otherwise pretty JSON. The authored presenter delegates here.
@@ -383,6 +441,7 @@ pub fn present(
         }
         Invocation::Implement(request) => println!("{}", service.implement(request) ?),
         Invocation::Show(request) => println!("{}", service.show(request) ?),
+        Invocation::Calc(request) => println!("{}", service.calc(request) ?),
     }
     Ok(())
 }

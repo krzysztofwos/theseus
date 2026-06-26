@@ -14,10 +14,10 @@ use theseus_modeling::{
     apply_edits, coverage, describe, handler_source, model_hash, query, verify,
 };
 
-use crate::{
-    generated::{Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService},
-    workspace_root,
+use crate::generated::{
+    CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
 };
+use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
     fn model(&self) -> anyhow::Result<String> {
@@ -62,6 +62,22 @@ impl TheseusService for Ctx<'_> {
         let source = std::fs::read_to_string(workspace_root().join(&path))
             .with_context(|| format!("reading {path}"))?;
         Ok(handler_source(self.model, &source, &request.method)?)
+    }
+
+    fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
+        let operands = theseus_calculator::Operands {
+            a: request.a,
+            b: request.b,
+        };
+        match request.op.as_str() {
+            "add" => self.calculator.add(operands),
+            "subtract" => self.calculator.subtract(operands),
+            "multiply" => self.calculator.multiply(operands),
+            "divide" => self.calculator.divide(operands),
+            other => anyhow::bail!(
+                "unknown operator `{other}`, expected add, subtract, multiply, or divide"
+            ),
+        }
     }
 
     fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {

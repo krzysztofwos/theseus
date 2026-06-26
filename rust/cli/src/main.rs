@@ -25,9 +25,11 @@ fn main() -> anyhow::Result<()> {
     let workspace = FsWorkspace {
         root: workspace_root(),
     };
+    let calculator = theseus_calculator::Calc;
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
+        calculator: &calculator,
     };
 
     // `arg_required_else_help(true)` in the generated surface means a bare

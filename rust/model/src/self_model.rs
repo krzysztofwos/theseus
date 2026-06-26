@@ -10,7 +10,13 @@ pub fn theseus_model() -> Model {
         .crate_node("theseus-kernel", "kernel", 0, &[])
         .crate_node("theseus-modeling", "modeling", 1, &["theseus-kernel"])
         .crate_node("theseus-model", "model", 2, &["theseus-modeling"])
-        .crate_node("theseus-cli", "cli", 3, &["theseus-model", "theseus-modeling"])
+        .crate_node("theseus-calculator", "calculator", 1, &[])
+        .crate_node(
+            "theseus-cli",
+            "cli",
+            3,
+            &["theseus-model", "theseus-modeling", "theseus-calculator"],
+        )
         .struct_type(
             "GeneratedFile",
             &[
@@ -101,6 +107,19 @@ pub fn theseus_model() -> Model {
             "ShowRequest",
             &[("method", "String", "Name of the operation whose handler to show.")],
         )
+        .struct_type(
+            "Operands",
+            &[("a", "f64", "Left operand."), ("b", "f64", "Right operand.")],
+        )
+        .foreign_type("CalcResult", "String")
+        .struct_type(
+            "CalcRequest",
+            &[
+                ("op", "String", "The operator: add, subtract, multiply, or divide."),
+                ("a", "f64", "Left operand."),
+                ("b", "f64", "Right operand."),
+            ],
+        )
         .service(
             Service::new("Theseus", Transport::Cli)
                 .crate_name("theseus-cli")
@@ -152,6 +171,12 @@ pub fn theseus_model() -> Model {
                     "ShowRequest",
                     "HandlerSource",
                 )
+                .operation(
+                    "calc",
+                    "Evaluate an arithmetic expression through the calculator service.",
+                    "CalcRequest",
+                    "CalcResult",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
@@ -160,6 +185,31 @@ pub fn theseus_model() -> Model {
                             "GeneratedFile",
                             "Empty",
                         ),
+                )
+                .port(
+                    Port::new(
+                            "calculator",
+                            "Evaluates arithmetic through the calculator service.",
+                        )
+                        .targeting("Calculator"),
                 ),
+        )
+        .service(
+            Service::new("Calculator", Transport::InProcess)
+                .crate_name("theseus-calculator")
+                .operation("add", "Add the operands.", "Operands", "CalcResult")
+                .operation(
+                    "subtract",
+                    "Subtract the operands.",
+                    "Operands",
+                    "CalcResult",
+                )
+                .operation(
+                    "multiply",
+                    "Multiply the operands.",
+                    "Operands",
+                    "CalcResult",
+                )
+                .operation("divide", "Divide the operands.", "Operands", "CalcResult"),
         )
 }

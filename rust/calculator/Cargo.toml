@@ -1,0 +1,8 @@
+[package]
+name = "theseus-calculator"
+version = "0.1.0"
+edition = "2024"
+description = "A calculator service Theseus exposes through its CLI"
+
+[dependencies]
+anyhow = { workspace = true }

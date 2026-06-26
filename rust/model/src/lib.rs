@@ -142,10 +142,16 @@ mod tests {
     }
 
     #[test]
-    fn rendered_surface_covers_every_operation() {
+    fn rendered_surface_covers_every_cli_operation() {
+        use theseus_modeling::Transport;
         let model = theseus_model();
         let rendered = render_cli_module(&model);
-        for op in model.operations() {
+        let cli = model
+            .services
+            .iter()
+            .find(|service| service.inbound == Transport::Cli)
+            .expect("the model has an inbound CLI service");
+        for op in &cli.operations {
             assert!(
                 rendered.contains(&format!("Command::new({:?})", op.name)),
                 "operation `{}` missing from generated surface",

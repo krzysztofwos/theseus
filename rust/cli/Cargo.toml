@@ -13,5 +13,6 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 
+theseus-calculator = { path = "../calculator" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }

@@ -18,7 +18,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use serde::Serialize;
 
-use crate::model::{Field, Model, Operation, Port, Service, TypeDef, TypeShape};
+use crate::model::{Field, Model, Operation, Port, Service, Transport, TypeDef, TypeShape};
 
 /// A file rendered from the model, addressed relative to the workspace root. An
 /// adopter sets the path.
@@ -41,15 +41,26 @@ pub fn render_cli_module(model: &Model) -> String {
         render_composition_root(&ports)
     };
 
-    let command = render_command(model);
-    let (requests, invocation, service_trait, present) = match model.services.first() {
+    // Every service contributes a trait, and the request types are rendered once
+    // across all of them. The command surface, the invocation, and the default
+    // presentation come from the inbound CLI service.
+    let service_traits: Vec<TokenStream> = model
+        .services
+        .iter()
+        .map(|service| render_service_trait(service, model))
+        .collect();
+    let requests = render_request_structs(model);
+    let (command, invocation, present) = match model
+        .services
+        .iter()
+        .find(|service| service.inbound == Transport::Cli)
+    {
         Some(service) => (
-            render_request_structs(service, model),
+            render_command(service, model),
             render_invocation(service, model),
-            render_service_trait(service, model),
             render_present(service, model),
         ),
-        None => (quote! {}, quote! {}, quote! {}, quote! {}),
+        None => (quote! {}, quote! {}, quote! {}),
     };
 
     let tokens = quote! {
@@ -60,7 +71,7 @@ pub fn render_cli_module(model: &Model) -> String {
         #composition_root
         #requests
         #invocation
-        #service_trait
+        #(#service_traits)*
         #present
     };
 
@@ -90,12 +101,12 @@ fn outbound_ports(model: &Model) -> Vec<&Port> {
         .collect()
 }
 
-/// Render the command surface: one subcommand per operation.
-fn render_command(model: &Model) -> TokenStream {
+/// Render the command surface: one subcommand per operation of the CLI service.
+fn render_command(service: &Service, model: &Model) -> TokenStream {
     let bin = model.name.to_lowercase();
-    let subcommands: Vec<TokenStream> = model
-        .operations()
-        .into_iter()
+    let subcommands: Vec<TokenStream> = service
+        .operations
+        .iter()
         .map(|op| render_subcommand(op, model))
         .collect();
     let doc = doc("Build the command surface from the model.");
@@ -211,12 +222,12 @@ fn render_composition_root(ports: &[&Port]) -> TokenStream {
     }
 }
 
-/// Render each distinct request struct used by the service's operations.
-fn render_request_structs(service: &Service, model: &Model) -> TokenStream {
+/// Render each distinct request struct used by any service's operations.
+fn render_request_structs(model: &Model) -> TokenStream {
     let mut seen: Vec<&str> = Vec::new();
-    let structs: Vec<TokenStream> = service
-        .operations
-        .iter()
+    let structs: Vec<TokenStream> = model
+        .operations()
+        .into_iter()
         .filter_map(|op| request_type(op, model))
         .filter(|def| {
             let fresh = !seen.contains(&def.name.as_str());

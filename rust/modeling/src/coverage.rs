@@ -10,7 +10,10 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use syn::{ImplItem, Item};
 
-use crate::{codegen::pascal_case, model::Model};
+use crate::{
+    codegen::pascal_case,
+    model::{Model, Service},
+};
 
 /// The implementation status of a model's operations.
 #[derive(Debug, Clone, Serialize)]
@@ -43,32 +46,33 @@ pub enum CoverageError {
 /// Report which of the model's operations have an authored handler in
 /// `impl_source` — the source of the file implementing the service trait.
 pub fn coverage(model: &Model, impl_source: &str) -> Result<CoverageReport, CoverageError> {
-    let trait_name = service_trait_name(model);
-    let implemented = implemented_methods(impl_source, &trait_name)?;
-
-    let operations = model.operations();
-    let unimplemented: Vec<OperationGap> = operations
-        .iter()
-        .filter(|op| !implemented.contains(&op.name))
-        .map(|op| OperationGap {
-            name: op.name.clone(),
-            summary: op.summary.clone(),
-            request: op.request.clone(),
-            response: op.response.clone(),
-        })
-        .collect();
+    let mut total = 0;
+    let mut unimplemented = Vec::new();
+    for service in &model.services {
+        let implemented = implemented_methods(impl_source, &service_trait_name(service))?;
+        for op in &service.operations {
+            total += 1;
+            if !implemented.contains(&op.name) {
+                unimplemented.push(OperationGap {
+                    name: op.name.clone(),
+                    summary: op.summary.clone(),
+                    request: op.request.clone(),
+                    response: op.response.clone(),
+                });
+            }
+        }
+    }
 
     Ok(CoverageReport {
-        total: operations.len(),
-        implemented: operations.len() - unimplemented.len(),
+        total,
+        implemented: total - unimplemented.len(),
         unimplemented,
     })
 }
 
-/// The trait name codegen emits for the model's first service.
-pub(crate) fn service_trait_name(model: &Model) -> String {
-    let service = model.services.first().map_or("", |s| s.name.as_str());
-    format!("{}Service", pascal_case(service))
+/// The trait name codegen emits for a service.
+pub(crate) fn service_trait_name(service: &Service) -> String {
+    format!("{}Service", pascal_case(&service.name))
 }
 
 /// The method names of the `impl <trait_name> for …` block in the source.

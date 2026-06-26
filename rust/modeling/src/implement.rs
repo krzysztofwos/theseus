@@ -15,7 +15,7 @@ use syn::spanned::Spanned;
 use crate::{
     codegen::handler_signature,
     coverage::service_trait_name,
-    model::Model,
+    model::{Model, Operation, Service},
 };
 
 /// Why a handler could not be read or written.
@@ -39,10 +39,8 @@ pub fn handler_source(
     impl_source: &str,
     op_name: &str,
 ) -> Result<String, ImplementError> {
-    let operation = model
-        .operation(op_name)
-        .ok_or_else(|| ImplementError::UnknownOperation(op_name.to_string()))?;
-    let trait_name = service_trait_name(model);
+    let (service, operation) = locate(model, op_name)?;
+    let trait_name = service_trait_name(service);
     match method_range(impl_source, &trait_name, op_name)? {
         Some(range) => Ok(impl_source[range].to_string()),
         None => {
@@ -66,10 +64,8 @@ pub fn implement(
     body: &str,
     request_path: &str,
 ) -> Result<String, ImplementError> {
-    let operation = model
-        .operation(op_name)
-        .ok_or_else(|| ImplementError::UnknownOperation(op_name.to_string()))?;
-    let trait_name = service_trait_name(model);
+    let (service, operation) = locate(model, op_name)?;
+    let trait_name = service_trait_name(service);
     let signature = handler_signature(operation, model, request_path);
 
     match method_range(impl_source, &trait_name, op_name)? {
@@ -86,6 +82,24 @@ pub fn implement(
             splice_after_header(impl_source, &trait_name, &method)
         }
     }
+}
+
+/// The service and operation an operation name resolves to.
+fn locate<'a>(
+    model: &'a Model,
+    op_name: &str,
+) -> Result<(&'a Service, &'a Operation), ImplementError> {
+    model
+        .services
+        .iter()
+        .find_map(|service| {
+            service
+                .operations
+                .iter()
+                .find(|op| op.name == op_name)
+                .map(|op| (service, op))
+        })
+        .ok_or_else(|| ImplementError::UnknownOperation(op_name.to_string()))
 }
 
 /// The byte range of the `op_name` method in the `impl <trait_name> for …` block,

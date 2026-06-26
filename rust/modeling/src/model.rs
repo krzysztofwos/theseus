@@ -82,6 +82,9 @@ pub enum Transport {
     Cli,
     Http,
     Grpc,
+    /// An in-process call from another service. The service contributes a trait
+    /// its callers depend on, without a command surface of its own.
+    InProcess,
 }
 
 /// One operation in a service's inbound surface.

@@ -495,10 +495,7 @@ pub(crate) fn handler_signature(op: &Operation, model: &Model, request_path: &st
         None => String::new(),
     };
     let response = rust_type(&op.response, model);
-    format!(
-        "fn {}(&self{param}) -> anyhow::Result<{response}>",
-        op.name
-    )
+    format!("fn {}(&self{param}) -> anyhow::Result<{response}>", op.name)
 }
 
 /// The `, request: &T` fragment for a method, or empty for an `Empty` request.
@@ -566,15 +563,24 @@ mod tests {
     }
 
     #[test]
+    fn an_in_process_service_contributes_a_trait_without_a_command() {
+        let model = Model::new("Calc").service(
+            Service::new("Calculator", Transport::InProcess)
+                .operation("add", "Add.", "Empty", "Empty"),
+        );
+        let rendered = render_cli_module(&model);
+        // The service trait is present; nothing builds a command surface for it.
+        assert!(rendered.contains("trait CalculatorService"));
+        assert!(!rendered.contains("Command::new"));
+    }
+
+    #[test]
     fn a_typed_request_field_parses_as_its_type() {
         let model = Model::new("Calc")
             .struct_type("Operands", &[("a", "f64", "Left operand.")])
-            .service(Service::new("Calc", Transport::Cli).operation(
-                "add",
-                "Add.",
-                "Operands",
-                "Empty",
-            ));
+            .service(
+                Service::new("Calc", Transport::Cli).operation("add", "Add.", "Operands", "Empty"),
+            );
         let rendered = render_cli_module(&model);
         // The argument validates as the field type, and the field reads it back.
         assert!(rendered.contains("value_parser"));

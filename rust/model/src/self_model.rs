@@ -37,11 +37,15 @@ pub fn theseus_model() -> Model {
         .struct_type(
             "PatchRequest",
             &[
-                ("verb", "String", "The verb: add, remove, rename, or set."),
+                (
+                    "verb",
+                    "Option<String>",
+                    "The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.",
+                ),
                 (
                     "target",
-                    "String",
-                    "Handle of the parent, for add; of the node, for remove, rename, and set.",
+                    "Option<String>",
+                    "Handle of the parent or node for a single edit. Omit when using `edit`.",
                 ),
                 (
                     "kind",
@@ -61,6 +65,11 @@ pub fn theseus_model() -> Model {
                     "The model hash the edit was computed against.",
                 ),
                 ("write", "bool", "Apply the edit by reprojecting the model."),
+                (
+                    "edit",
+                    "Vec<String>",
+                    "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.",
+                ),
             ],
         )
         .foreign_type("ModelDocument", "String")

@@ -26,7 +26,7 @@ pub use implement::{ImplementError, handler_source, implement};
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
 };
-pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit};
+pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};
 pub use query::{Handle, QueryError, QueryOutcome, query};
 pub use source::render_model_source;
 pub use verify::{Check, VerifyReport, verify};

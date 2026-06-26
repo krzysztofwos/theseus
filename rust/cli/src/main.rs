@@ -75,12 +75,12 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
             }
         }
         Invocation::Patch(request) => {
-            let applied = request.write.then(|| request.verb.clone());
+            let writing = request.write;
             let outcome = service.patch(request)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
-            if let Some(verb) = applied.filter(|_| outcome.ok) {
+            if writing && outcome.ok {
                 println!(
-                    "applied `{verb}` and reprojected. Rebuild, then `coverage` shows any handler left to author"
+                    "applied and reprojected. Rebuild, then `coverage` shows any handler left to author"
                 );
             }
             if !outcome.ok {

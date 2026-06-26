@@ -51,16 +51,16 @@ pub fn command() -> Command {
                     Arg::new("verb")
                         .long("verb")
                         .action(ArgAction::Set)
-                        .required(true)
-                        .help("The verb: add, remove, rename, or set."),
+                        .help(
+                            "The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.",
+                        ),
                 )
                 .arg(
                     Arg::new("target")
                         .long("target")
                         .action(ArgAction::Set)
-                        .required(true)
                         .help(
-                            "Handle of the parent, for add; of the node, for remove, rename, and set.",
+                            "Handle of the parent or node for a single edit. Omit when using `edit`.",
                         ),
                 )
                 .arg(
@@ -103,6 +103,14 @@ pub fn command() -> Command {
                         .long("write")
                         .action(ArgAction::SetTrue)
                         .help("Apply the edit by reprojecting the model."),
+                )
+                .arg(
+                    Arg::new("edit")
+                        .long("edit")
+                        .action(ArgAction::Append)
+                        .help(
+                            "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.",
+                        ),
                 ),
         )
         .subcommand(
@@ -183,10 +191,10 @@ impl QueryRequest {
 /// The `PatchRequest` request, parsed from command-line arguments.
 #[derive(Debug, Clone)]
 pub struct PatchRequest {
-    /// The verb: add, remove, rename, or set.
-    pub verb: String,
-    /// Handle of the parent, for add; of the node, for remove, rename, and set.
-    pub target: String,
+    /// The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.
+    pub verb: Option<String>,
+    /// Handle of the parent or node for a single edit. Omit when using `edit`.
+    pub target: Option<String>,
     /// Node kind to add: operation, type, port, method, field, or variant.
     pub kind: Option<String>,
     /// Name of the node to add.
@@ -199,14 +207,16 @@ pub struct PatchRequest {
     pub expect_model_hash: String,
     /// Apply the edit by reprojecting the model.
     pub write: bool,
+    /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.
+    pub edit: Vec<String>,
 }
 impl PatchRequest {
     /// Build the request from parsed command-line arguments.
     fn from_matches(matches: &ArgMatches) -> Self {
         let arg = |name: &str| matches.get_one::<String>(name).cloned();
         PatchRequest {
-            verb: arg("verb").unwrap_or_default(),
-            target: arg("target").unwrap_or_default(),
+            verb: arg("verb"),
+            target: arg("target"),
             kind: arg("kind"),
             name: arg("name"),
             to: arg("to"),
@@ -216,6 +226,10 @@ impl PatchRequest {
                 .unwrap_or_default(),
             expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
             write: matches.get_flag("write"),
+            edit: matches
+                .get_many::<String>("edit")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }
     }
 }

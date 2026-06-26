@@ -11,7 +11,7 @@ use anyhow::Context;
 use theseus_model::{AUTHORED_IMPL_PATH, generated_files};
 use theseus_modeling::{
     CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
-    coverage, describe, handler_source, model_hash, query, verify,
+    apply_edits, coverage, describe, handler_source, model_hash, query, verify,
 };
 
 use crate::generated::{
@@ -89,8 +89,17 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
-        let edit = build_edit(&request)?;
-        let (outcome, proposed) = apply_edit(self.model, &edit, &request.expect_model_hash);
+        let (outcome, proposed) = if request.edit.is_empty() {
+            let edit = build_edit(&request)?;
+            apply_edit(self.model, &edit, &request.expect_model_hash)
+        } else {
+            let edits = request
+                .edit
+                .iter()
+                .map(|spec| parse_edit_spec(spec))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            apply_edits(self.model, &edits, &request.expect_model_hash)
+        };
         if request.write
             && let Some(proposed) = proposed
         {
@@ -107,27 +116,70 @@ impl TheseusService for Ctx<'_> {
 }
 
 /// Build the structured [`Edit`] from a parsed patch request — the inbound
-/// adapter's wire-to-domain conversion for the verb vocabulary. The verb selects
-/// the edit; a missing argument the verb needs is a usage error.
+/// adapter's wire-to-domain conversion for the verb vocabulary.
 fn build_edit(request: &PatchRequest) -> anyhow::Result<Edit> {
-    let target = request.target.clone();
-    let attrs = parse_assignments(&request.set)?;
-    match request.verb.as_str() {
+    let verb = request.verb.as_deref().context("patch needs --verb or --edit")?;
+    let target = request.target.clone().context("patch needs --target")?;
+    make_edit(
+        verb,
+        target,
+        request.kind.clone(),
+        request.to.clone(),
+        request.name.clone(),
+        parse_assignments(&request.set)?,
+    )
+}
+
+/// Parse one batch edit spec, `verb|target|key=value|…`, into an [`Edit`]. The
+/// keys `kind`, `name`, and `to` set the matching fields. The rest are scalar
+/// assignments. A pipe never appears in a value, so it is the field separator.
+fn parse_edit_spec(spec: &str) -> anyhow::Result<Edit> {
+    let mut parts = spec.split('|');
+    let verb = parts.next().unwrap_or_default().trim();
+    let target = parts
+        .next()
+        .context("edit spec must be `verb|target|…`")?
+        .trim()
+        .to_string();
+    let (mut kind, mut name, mut to, mut attrs) = (None, None, None, Vec::new());
+    for part in parts {
+        let (key, value) = part
+            .split_once('=')
+            .with_context(|| format!("edit field `{part}` must be key=value"))?;
+        match key.trim() {
+            "kind" => kind = Some(value.to_string()),
+            "name" => name = Some(value.to_string()),
+            "to" => to = Some(value.to_string()),
+            key => attrs.push((key.to_string(), value.to_string())),
+        }
+    }
+    make_edit(verb, target, kind, to, name, attrs)
+}
+
+/// Assemble an [`Edit`] from a verb and its parts. A missing part the verb needs
+/// is a usage error.
+fn make_edit(
+    verb: &str,
+    target: String,
+    kind: Option<String>,
+    to: Option<String>,
+    name: Option<String>,
+    attrs: Vec<(String, String)>,
+) -> anyhow::Result<Edit> {
+    match verb {
         "add" => Ok(Edit::Add {
             parent: target,
-            kind: request.kind.clone().context("add needs --kind")?,
-            name: request.name.clone().context("add needs --name")?,
+            kind: kind.context("add needs a kind")?,
+            name: name.context("add needs a name")?,
             attrs,
         }),
         "remove" => Ok(Edit::Remove { target }),
         "rename" => Ok(Edit::Rename {
             target,
-            to: request.to.clone().context("rename needs --to")?,
+            to: to.context("rename needs a new name")?,
         }),
         "set" => Ok(Edit::Set { target, attrs }),
-        other => {
-            anyhow::bail!("unknown verb `{other}`; expected add, remove, rename, or set")
-        }
+        other => anyhow::bail!("unknown verb `{other}`; expected add, remove, rename, or set"),
     }
 }
 

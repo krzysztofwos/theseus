@@ -76,13 +76,25 @@ impl PatchOutcome {
     }
 }
 
-/// Attempt an edit, checking `expected_hash` against the current model first.
+/// Attempt one edit, checking `expected_hash` against the current model first.
 ///
 /// On success, returns the accepted outcome and the edited model. On refusal,
 /// returns the outcome with diagnostics and no model.
 pub fn apply_edit(
     current: &Model,
     edit: &Edit,
+    expected_hash: &str,
+) -> (PatchOutcome, Option<Model>) {
+    apply_edits(current, std::slice::from_ref(edit), expected_hash)
+}
+
+/// Attempt a sequence of edits, checking `expected_hash` once and then applying
+/// each to the running result. The first refusal stops the sequence and writes
+/// nothing. On success the accepted outcome carries every edit's diff, and the
+/// whole sequence costs one hash check.
+pub fn apply_edits(
+    current: &Model,
+    edits: &[Edit],
     expected_hash: &str,
 ) -> (PatchOutcome, Option<Model>) {
     let base = model_hash(current);
@@ -95,20 +107,26 @@ pub fn apply_edit(
         return (PatchOutcome::refused(base, vec![diagnostic]), None);
     }
 
-    match plan(current, edit) {
-        Err(diagnostics) => (PatchOutcome::refused(base, diagnostics), None),
-        Ok(plan) => {
-            let next = apply(current, &plan);
-            let outcome = PatchOutcome {
-                ok: true,
-                base_model_hash: base,
-                new_model_hash: Some(model_hash(&next)),
-                diff: describe(&plan),
-                diagnostics: Vec::new(),
-            };
-            (outcome, Some(next))
+    let mut model = current.clone();
+    let mut diff = Vec::new();
+    for edit in edits {
+        match plan(&model, edit) {
+            Err(diagnostics) => return (PatchOutcome::refused(base, diagnostics), None),
+            Ok(plan) => {
+                diff.extend(describe(&plan));
+                model = apply(&model, &plan);
+            }
         }
     }
+
+    let outcome = PatchOutcome {
+        ok: true,
+        base_model_hash: base,
+        new_model_hash: Some(model_hash(&model)),
+        diff,
+        diagnostics: Vec::new(),
+    };
+    (outcome, Some(model))
 }
 
 /// A validated, resolved edit, ready to apply.
@@ -992,6 +1010,45 @@ mod tests {
             ),
         );
         assert!(next.operation("ping").is_some());
+    }
+
+    #[test]
+    fn a_batch_applies_every_edit_under_one_hash() {
+        let model = sample_model();
+        let hash = model_hash(&model);
+        let edits = vec![
+            add("model:sample", "type", "Token", &[("shape", "newtype:String")]),
+            add("model:sample", "operation", "ping", &[]),
+            Edit::Rename {
+                target: "op:sample:ping".to_string(),
+                to: "pong".to_string(),
+            },
+        ];
+        let (outcome, next) = apply_edits(&model, &edits, &hash);
+        assert!(outcome.ok, "batch refused: {:?}", outcome.diagnostics);
+        assert_eq!(outcome.diff.len(), 3);
+        // The rename sees the operation the earlier edit added.
+        let next = next.unwrap();
+        assert!(next.type_def("Token").is_some());
+        assert!(next.operation("pong").is_some());
+        assert!(next.operation("ping").is_none());
+    }
+
+    #[test]
+    fn a_batch_is_atomic_on_failure() {
+        let model = sample_model();
+        let hash = model_hash(&model);
+        let edits = vec![
+            add("model:sample", "type", "Token", &[("shape", "newtype:String")]),
+            Edit::Remove {
+                target: "op:sample:nope".to_string(),
+            },
+        ];
+        let (outcome, next) = apply_edits(&model, &edits, &hash);
+        assert!(!outcome.ok);
+        // The first edit's effect is discarded — nothing is written.
+        assert!(next.is_none());
+        assert_eq!(code(&outcome), "PATCH005");
     }
 
     #[test]

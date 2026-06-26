@@ -12,6 +12,12 @@ pub fn theseus_model() -> Model {
         .crate_node("theseus-model", "model", 2, &["theseus-modeling"])
         .crate_node("theseus-calculator", "calculator", 1, &[])
         .crate_node(
+            "theseus-calculator-cli",
+            "calculator-cli",
+            2,
+            &["theseus-calculator"],
+        )
+        .crate_node(
             "theseus-cli",
             "cli",
             3,
@@ -218,4 +224,5 @@ pub fn theseus_model() -> Model {
                 )
                 .operation("divide", "Divide the operands.", "Operands", "CalcResult"),
         )
+        .inbound("calculator", Transport::Cli, "Calculator", "theseus-calculator-cli")
 }

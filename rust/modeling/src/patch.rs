@@ -896,7 +896,8 @@ enum ShapeError {
 }
 
 /// Parse a shape spec into a [`TypeShape`]: `newtype:Inner`, `foreign:Path`,
-/// `enum:A,B,C`, or `struct:field=Type,field=Type`.
+/// `enum:A,B,C`, or `struct:field=Type,field=Type` (a field may carry an inline
+/// doc as `field=Type:doc`).
 fn parse_shape(spec: &str) -> Result<TypeShape, ShapeError> {
     let (kind, value) = spec.split_once(':').ok_or(ShapeError::Format)?;
     match kind {
@@ -916,13 +917,15 @@ fn parse_shape(spec: &str) -> Result<TypeShape, ShapeError> {
     }
 }
 
-/// Parse one `name=Type` struct field. Field docs are added with `add field`.
+/// Parse one struct field: `name=Type`, or `name=Type:doc` to carry a doc inline.
+/// The type holds no `:`, so the first one after the type begins the doc.
 fn parse_field(spec: &str) -> Result<Field, ShapeError> {
-    let (name, ty) = spec.split_once('=').ok_or(ShapeError::Field)?;
+    let (name, rest) = spec.split_once('=').ok_or(ShapeError::Field)?;
+    let (ty, doc) = rest.split_once(':').unwrap_or((rest, ""));
     Ok(Field {
         name: name.trim().to_string(),
         ty: ty.trim().to_string(),
-        doc: String::new(),
+        doc: doc.trim().to_string(),
     })
 }
 
@@ -1107,6 +1110,25 @@ mod tests {
         let model = sample_model();
         let (outcome, _) = edit(&model, add("model:sample", "type", "Bare", &[]));
         assert_eq!(code(&outcome), "PATCH011");
+    }
+
+    #[test]
+    fn a_struct_shape_carries_inline_field_docs() {
+        let next = accept(
+            &sample_model(),
+            add(
+                "model:sample",
+                "type",
+                "Operands",
+                &[("shape", "struct:a=String:Left operand.,b=String:Right operand.")],
+            ),
+        );
+        let fields = match &next.type_def("Operands").unwrap().shape {
+            TypeShape::Struct(fields) => fields,
+            other => panic!("expected a struct, found {other:?}"),
+        };
+        assert_eq!(fields[0].doc, "Left operand.");
+        assert_eq!(fields[1].doc, "Right operand.");
     }
 
     #[test]

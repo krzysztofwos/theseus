@@ -9,11 +9,13 @@ use theseus_modeling::{
     Edit, Model, Service, Transport, apply_edit, model_hash, render_cli_module, render_model_source,
 };
 
-/// A bare Calculator model: one crate, one inbound CLI service, no operations.
+/// A bare Calculator model: one crate, one service driven by a CLI inbound, no
+/// operations yet.
 fn seed() -> Model {
     Model::new("Calculator")
         .crate_node("calculator", "calculator", 0, &[])
-        .service(Service::new("Calculator", Transport::Cli))
+        .service(Service::new("Calculator", Transport::Cli).crate_name("calculator"))
+        .inbound("calculator", Transport::Cli, "Calculator", "calculator")
 }
 
 /// Apply an edit against the current hash, asserting acceptance, and return the

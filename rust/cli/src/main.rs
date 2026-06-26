@@ -103,7 +103,7 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
                 std::process::exit(1);
             }
         }
-        other => generated::present(service, other)?,
+        other => generated::dispatch(service, other)?,
     }
     Ok(())
 }

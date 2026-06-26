@@ -2,7 +2,7 @@
 name = "theseus-calculator-cli"
 version = "0.1.0"
 edition = "2024"
-description = "A standalone command-line calculator built from the Calculator service"
+description = "A standalone command-line interface to the Calculator service"
 
 [[bin]]
 name = "calculator"

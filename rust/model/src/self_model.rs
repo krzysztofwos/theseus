@@ -224,5 +224,6 @@ pub fn theseus_model() -> Model {
                 )
                 .operation("divide", "Divide the operands.", "Operands", "CalcResult"),
         )
+        .inbound("theseus", Transport::Cli, "Theseus", "theseus-cli")
         .inbound("calculator", Transport::Cli, "Calculator", "theseus-calculator-cli")
 }

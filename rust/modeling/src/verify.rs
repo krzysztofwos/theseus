@@ -233,9 +233,30 @@ fn container_inner(label: &str) -> Option<&str> {
         .and_then(|rest| rest.strip_suffix('>'))
 }
 
-/// The type labels a model may use without defining them.
+/// The type labels a model may use without defining them: the unit marker, and
+/// the Rust scalar primitives a command-line argument can parse into.
 fn is_builtin_type(label: &str) -> bool {
-    matches!(label, "Empty" | "String" | "bool")
+    matches!(
+        label,
+        "Empty"
+            | "String"
+            | "bool"
+            | "char"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
 }
 
 /// Every expected generated file on disk must match the rendered contents.
@@ -509,6 +530,15 @@ mod tests {
         let model = Model::new("Sample")
             .foreign_type("Ghost", "String")
             .service(Service::new("Sample", Transport::Cli).operation("op", "", "Empty", "Ghost"));
+        assert!(check_type_references(&model).is_ok());
+    }
+
+    #[test]
+    fn a_scalar_primitive_field_resolves() {
+        // A struct field typed as a scalar primitive needs no definition.
+        let model = Model::new("Sample")
+            .struct_type("Operands", &[("a", "f64", "")])
+            .service(Service::new("Sample", Transport::Cli).operation("op", "", "Operands", "Empty"));
         assert!(check_type_references(&model).is_ok());
     }
 }

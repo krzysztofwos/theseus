@@ -68,3 +68,19 @@ Everything between the command line and the port — command surface, request st
 Answer so far: yes, the surface of the harness is built with Theseus alone. The walls are (1) port methods cannot yet carry model-defined struct types, and (2) a write that yields non-compiling code disables the protocol until a `git checkout`. Neither blocked phase 1.
 
 Next: the tool-dispatch loop — the model calling Theseus's own operations as tools — and a scripted `OfflineLlm` with an end-to-end test, then the real model adapter behind a write gate.
+
+### The tool-dispatch loop
+
+The `chat` handler is now the agent loop. The model drives Theseus's own read-only operations as tools, so the loop closes onto the model it inspects.
+
+The reply protocol is one JSON object per turn: `{"tool": name, "input": {…}}` to call a tool, or `{"answer": text}` to finish. `run_agent` opens a transcript with the framing and the user's message, then each turn parses the completion: a tool call runs through `run_tool` (a dispatch over `self`'s own operations — `model`, `query`, `verify`, `coverage`) and its JSON result is appended to the transcript; an answer ends the loop. `MAX_TURNS` guards a model that never finishes. The handler is a single line, `run_agent(self, self.llm, &request.message)`; the loop is generic over `TheseusService` and `Llm`, so it tests with doubles.
+
+Two unit tests in `service.rs`, both offline: a `ScriptedLlm` replays a fixed list of completions, a `NoopWorkspace` stands in for the filesystem. One drives the whole loop — a `query` tool call, then an answer — and asserts the final text. The other calls `run_tool` directly and asserts the `query` result names the `chat` operation, proving the dispatch reaches a real operation and returns real data. No network, no writes.
+
+This part is authored, not generated: the loop and the tool dispatch are the `chat` handler's behavior, which is an authored leaf. The model surface around it was protocol-built. Generating the tool schema and dispatch from the operations — the second inbound projection — remains the open engine step (phase 2 of the plan): it would replace the hand-written `run_tool` match the way the generated command surface replaced a hand-written argument parser.
+
+The tool surface is read-only by choice. A write tool (`patch`/`generate`) closes the self-modification loop, gated by a `chat --allow-writes` permission — that, and the real model adapter, are next.
+
+### Result
+
+`theseus chat --message "…"` runs the loop end to end against the offline stub, which answers without tools. The scripted tests run the loop with a tool call. Green: full suite, clippy, conformant.

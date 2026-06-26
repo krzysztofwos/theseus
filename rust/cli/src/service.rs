@@ -15,16 +15,14 @@ use theseus_modeling::{
 };
 
 use crate::generated::{
-    CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+    CalcRequest, ChatRequest, Ctx, ImplementRequest, Llm, PatchRequest, QueryRequest, ShowRequest,
+    TheseusService,
 };
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
-    fn chat(&self, request: crate::generated::ChatRequest) -> anyhow::Result<String> {
-        // Open the transcript with the user's message and let the model reply. Tool
-        // dispatch — the model calling Theseus's own operations — joins the loop next.
-        let transcript = format!("User: {}\nAssistant: ", request.message);
-        self.llm.complete(&transcript)
+    fn chat(&self, request: ChatRequest) -> anyhow::Result<String> {
+        run_agent(self, self.llm, &request.message)
     }
 
     fn model(&self) -> anyhow::Result<String> {
@@ -180,6 +178,107 @@ impl Ctx<'_> {
     }
 }
 
+// ============================================================================
+// The agent loop — the `chat` handler's behavior. The model drives Theseus's own
+// read-only operations as tools, so the loop closes onto the model it inspects.
+// ============================================================================
+
+/// The most model turns the loop runs before giving up, a guard against a model
+/// that never answers.
+const MAX_TURNS: usize = 8;
+
+/// The framing handed to the model: the tool surface and the reply protocol. The
+/// offline stub ignores it. A real model adapter relies on it.
+const SYSTEM: &str = "You are Theseus, answering questions about your own model by \
+calling tools. Reply with exactly one JSON object: {\"tool\": name, \"input\": {…}} \
+to call a tool, or {\"answer\": text} to finish. Tools: model (no input), query \
+(input: find, node, kind, each an optional string), verify (no input), coverage \
+(no input).";
+
+/// The model's next move, parsed from one completion.
+enum AgentAction {
+    /// Call a tool with a JSON input object.
+    Tool {
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Finish, answering the user.
+    Answer(String),
+}
+
+/// Run the agent loop: the model drives Theseus's own operations as tools. The
+/// transcript opens with the framing and the user's message. Each turn the model
+/// either calls a tool, whose result is appended, or answers and ends.
+fn run_agent(
+    service: &impl TheseusService,
+    llm: &dyn Llm,
+    message: &str,
+) -> anyhow::Result<String> {
+    let mut transcript = format!("{SYSTEM}\n\nUser: {message}\n");
+    for _ in 0..MAX_TURNS {
+        let reply = llm.complete(&transcript)?;
+        match parse_action(&reply)? {
+            AgentAction::Answer(answer) => return Ok(answer),
+            AgentAction::Tool { name, input } => {
+                let result = run_tool(service, &name, &input)?;
+                transcript.push_str(&format!("Assistant: call {name}\nTool result: {result}\n"));
+            }
+        }
+    }
+    anyhow::bail!("the agent did not answer within {MAX_TURNS} turns")
+}
+
+/// Parse one completion into the next action. The model replies with a single
+/// JSON object: a tool call or an answer.
+fn parse_action(reply: &str) -> anyhow::Result<AgentAction> {
+    let value: serde_json::Value = serde_json::from_str(reply.trim())
+        .with_context(|| format!("the model reply was not JSON: {reply}"))?;
+    if let Some(answer) = value.get("answer").and_then(serde_json::Value::as_str) {
+        return Ok(AgentAction::Answer(answer.to_string()));
+    }
+    if let Some(name) = value.get("tool").and_then(serde_json::Value::as_str) {
+        let input = value
+            .get("input")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Ok(AgentAction::Tool {
+            name: name.to_string(),
+            input,
+        });
+    }
+    anyhow::bail!("the model reply was neither a tool call nor an answer: {reply}")
+}
+
+/// Run one tool — a read-only self-modeling operation — and return its result as
+/// a JSON string to feed back to the model. The tool surface is Theseus's own
+/// operations.
+fn run_tool(
+    service: &impl TheseusService,
+    name: &str,
+    input: &serde_json::Value,
+) -> anyhow::Result<String> {
+    match name {
+        "model" => service.model(),
+        "verify" => Ok(serde_json::to_string(&service.verify()?)?),
+        "coverage" => Ok(serde_json::to_string(&service.coverage()?)?),
+        "query" => {
+            let field = |key: &str| {
+                input
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            };
+            let request = QueryRequest {
+                find: field("find"),
+                node: field("node"),
+                kind: field("kind"),
+            };
+            Ok(serde_json::to_string(&service.query(request)?)?)
+        }
+        other => anyhow::bail!("unknown tool `{other}`; tools are model, query, verify, coverage"),
+    }
+}
+
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
 /// A crate added to the model is registered before its skeleton is written, so
 /// its generated code waits for `scaffold` rather than landing in a directory
@@ -294,4 +393,92 @@ fn parse_assignments(set: &[String]) -> anyhow::Result<Vec<(String, String)>> {
             Ok((key.trim().to_string(), value.to_string()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    use anyhow::Context;
+    use theseus_model::theseus_model;
+    use theseus_modeling::GeneratedFile;
+
+    use super::run_tool;
+    use crate::generated::{ChatRequest, Ctx, Llm, TheseusService, Workspace};
+
+    /// A model that replays a fixed script of completions, so the loop runs with
+    /// no network.
+    struct ScriptedLlm {
+        replies: RefCell<VecDeque<String>>,
+    }
+
+    impl ScriptedLlm {
+        fn new(replies: impl IntoIterator<Item = &'static str>) -> Self {
+            Self {
+                replies: RefCell::new(replies.into_iter().map(str::to_string).collect()),
+            }
+        }
+    }
+
+    impl Llm for ScriptedLlm {
+        fn complete(&self, _transcript: &str) -> anyhow::Result<String> {
+            self.replies
+                .borrow_mut()
+                .pop_front()
+                .context("the scripted model ran out of replies")
+        }
+    }
+
+    /// A workspace that writes nowhere. The loop's read-only tools never reach it.
+    struct NoopWorkspace;
+
+    impl Workspace for NoopWorkspace {
+        fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_loop_calls_a_tool_then_answers() {
+        let model = theseus_model();
+        let workspace = NoopWorkspace;
+        let calculator = theseus_calculator::Calculator;
+        let llm = ScriptedLlm::new([
+            r#"{"tool": "query", "input": {"kind": "operation"}}"#,
+            r#"{"answer": "Theseus exposes a chat operation."}"#,
+        ]);
+        let ctx = Ctx {
+            model: &model,
+            workspace: &workspace,
+            calculator: &calculator,
+            llm: &llm,
+        };
+        let reply = ctx
+            .chat(ChatRequest {
+                message: "What can you do?".to_string(),
+            })
+            .expect("the loop answers");
+        assert_eq!(reply, "Theseus exposes a chat operation.");
+    }
+
+    #[test]
+    fn the_query_tool_finds_the_chat_operation() {
+        let model = theseus_model();
+        let workspace = NoopWorkspace;
+        let calculator = theseus_calculator::Calculator;
+        let llm = ScriptedLlm::new(["unused"]);
+        let ctx = Ctx {
+            model: &model,
+            workspace: &workspace,
+            calculator: &calculator,
+            llm: &llm,
+        };
+        let result = run_tool(&ctx, "query", &serde_json::json!({ "kind": "operation" }))
+            .expect("the query tool runs");
+        assert!(
+            result.contains("chat"),
+            "the chat operation handle should appear: {result}"
+        );
+    }
 }

@@ -61,14 +61,17 @@ impl Workspace for FsWorkspace {
     }
 }
 
-/// The offline model adapter: a scripted stand-in for a real model, so the agent
-/// loop runs with no network. Phase 1 wires the port. The scripted replies that
-/// drive the loop arrive with the `chat` handler.
+/// The offline model adapter: a stand-in with no model behind it, so the agent
+/// loop runs with no network. It answers at once rather than calling tools. A real
+/// model adapter implements the same port and speaks the same JSON protocol.
 struct OfflineLlm;
 
 impl Llm for OfflineLlm {
     fn complete(&self, _transcript: &str) -> anyhow::Result<String> {
-        Ok("offline model: the loop reached me, with no real model behind it yet.".to_string())
+        Ok(
+            r#"{"answer": "I am the offline model. Wire a real model adapter to use tools."}"#
+                .to_string(),
+        )
     }
 }
 

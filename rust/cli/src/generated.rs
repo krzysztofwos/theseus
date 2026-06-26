@@ -189,6 +189,12 @@ pub fn command() -> Command {
                         .help("Right operand."),
                 ),
         )
+        .subcommand(
+            Command::new("scaffold")
+                .about(
+                    "Write the skeleton of each library service crate that is missing it.",
+                ),
+        )
 }
 /// Writes generated files into the workspace.
 pub trait Workspace {
@@ -350,6 +356,8 @@ pub enum Invocation {
     Show(ShowRequest),
     /// Evaluate an arithmetic expression through the calculator service.
     Calc(CalcRequest),
+    /// Write the skeleton of each library service crate that is missing it.
+    Scaffold,
 }
 impl Invocation {
     /// Parse the invocation from the matched command line.
@@ -366,6 +374,7 @@ impl Invocation {
             }
             Some(("show", sub)) => Invocation::Show(ShowRequest::from_matches(sub)),
             Some(("calc", sub)) => Invocation::Calc(CalcRequest::from_matches(sub)),
+            Some(("scaffold", _)) => Invocation::Scaffold,
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -415,6 +424,10 @@ pub trait TheseusService {
     fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: calc")
     }
+    /// Write the skeleton of each library service crate that is missing it.
+    fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+        anyhow::bail!("unimplemented operation: scaffold")
+    }
 }
 /// Render an operation with the default presentation: text for a string,
 /// otherwise pretty JSON. The authored presenter delegates here.
@@ -442,6 +455,9 @@ pub fn present(
         Invocation::Implement(request) => println!("{}", service.implement(request) ?),
         Invocation::Show(request) => println!("{}", service.show(request) ?),
         Invocation::Calc(request) => println!("{}", service.calc(request) ?),
+        Invocation::Scaffold => {
+            println!("{}", serde_json::to_string_pretty(& service.scaffold() ?) ?)
+        }
     }
     Ok(())
 }

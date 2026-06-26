@@ -177,6 +177,12 @@ pub fn theseus_model() -> Model {
                     "CalcRequest",
                     "CalcResult",
                 )
+                .operation(
+                    "scaffold",
+                    "Write the skeleton of each library service crate that is missing it.",
+                    "Empty",
+                    "GeneratedFiles",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(

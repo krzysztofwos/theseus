@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     let workspace = FsWorkspace {
         root: workspace_root(),
     };
-    let calculator = theseus_calculator::Calc;
+    let calculator = theseus_calculator::Calculator;
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
@@ -49,7 +49,12 @@ struct FsWorkspace {
 
 impl Workspace for FsWorkspace {
     fn write_file(&self, request: &GeneratedFile) -> anyhow::Result<()> {
-        std::fs::write(self.root.join(&request.path), &request.contents)?;
+        let path = self.root.join(&request.path);
+        // Scaffolding a new crate writes into a directory that does not exist yet.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, &request.contents)?;
         Ok(())
     }
 }
@@ -74,6 +79,15 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
         Invocation::Generate => {
             for file in service.generate()? {
                 println!("wrote {}", file.path);
+            }
+        }
+        Invocation::Scaffold => {
+            let written = service.scaffold()?;
+            if written.is_empty() {
+                println!("every library service crate is already scaffolded");
+            }
+            for file in &written {
+                println!("scaffolded {}", file.path);
             }
         }
         Invocation::Patch(request) => {

@@ -11,7 +11,7 @@ use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
     CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
-    apply_edits, coverage, describe, handler_source, model_hash, query, verify,
+    apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files, verify,
 };
 
 use crate::generated::{
@@ -39,6 +39,20 @@ impl TheseusService for Ctx<'_> {
             self.workspace.write_file(file)?;
         }
         Ok(files)
+    }
+
+    fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+        // The skeleton files are authored leaves, so only the absent ones are
+        // written. An existing file is left as the author left it.
+        let root = workspace_root();
+        let mut written = Vec::new();
+        for file in scaffold_files(self.model) {
+            if !root.join(&file.path).exists() {
+                self.workspace.write_file(&file)?;
+                written.push(file);
+            }
+        }
+        Ok(written)
     }
 
     fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {

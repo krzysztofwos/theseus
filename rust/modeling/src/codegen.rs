@@ -141,9 +141,26 @@ pub(crate) fn space_items(body: &str) -> String {
 fn opens_item(line: &str) -> bool {
     let line = line.trim_start();
     const KEYWORDS: [&str; 20] = [
-        "use ", "pub use ", "fn ", "pub fn ", "struct ", "pub struct ", "enum ", "pub enum ",
-        "trait ", "pub trait ", "impl ", "impl<", "const ", "pub const ", "type ", "pub type ",
-        "mod ", "pub mod ", "static ", "pub static ",
+        "use ",
+        "pub use ",
+        "fn ",
+        "pub fn ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "trait ",
+        "pub trait ",
+        "impl ",
+        "impl<",
+        "const ",
+        "pub const ",
+        "type ",
+        "pub type ",
+        "mod ",
+        "pub mod ",
+        "static ",
+        "pub static ",
     ];
     line.starts_with("///")
         || line.starts_with("#[")

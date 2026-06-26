@@ -104,7 +104,10 @@ fn all_handles(model: &Model) -> Vec<Handle> {
             model,
             target,
             inbound.name.clone(),
-            format!("{:?} inbound driving {}", inbound.transport, inbound.service),
+            format!(
+                "{:?} inbound driving {}",
+                inbound.transport, inbound.service
+            ),
         ));
     }
 

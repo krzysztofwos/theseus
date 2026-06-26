@@ -642,7 +642,8 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
             if let Some(inbound) = model.inbounds.iter_mut().find(|i| &i.name == name) {
                 set_if(attrs, "service", &mut inbound.service);
                 set_if(attrs, "crate", &mut inbound.crate_name);
-                if let Some(transport) = attr(attrs, "transport").and_then(|v| parse_transport(v).ok())
+                if let Some(transport) =
+                    attr(attrs, "transport").and_then(|v| parse_transport(v).ok())
                 {
                     inbound.transport = transport;
                 }

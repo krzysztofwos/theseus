@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::{
     hash::model_hash,
-    model::{Field, Method, Model, Operation, Port, TypeDef, TypeShape},
+    model::{Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape},
     path::{NodeKind, Target},
 };
 
@@ -152,11 +152,13 @@ enum Plan {
 
 /// Resolve and check an edit, yielding a [`Plan`] or the reasons it was refused.
 fn plan(model: &Model, edit: &Edit) -> Result<Plan, Vec<Diagnostic>> {
-    if model.services.is_empty() {
+    // Every edit but adding a service needs a service to act on or within.
+    let adding_service = matches!(edit, Edit::Add { kind, .. } if kind == "service");
+    if model.services.is_empty() && !adding_service {
         return Err(vec![diagnostic(
             "PATCH004",
             "model has no service to edit",
-            "declare a service before editing it",
+            "add a service before editing within it",
         )]);
     }
     match edit {
@@ -184,7 +186,7 @@ fn plan_add(
         vec![diagnostic(
             "PATCH002",
             format!("unknown node kind `{kind}`"),
-            "kind is one of: operation, type, port, method, field, variant",
+            "kind is one of: service, operation, type, port, method, field, variant",
         )]
     })?;
     if name.trim().is_empty() {
@@ -196,8 +198,15 @@ fn plan_add(
     }
 
     match kind {
-        NodeKind::Operation => {
+        NodeKind::Service => {
             under_root(&parent, kind)?;
+            free(service_exists(model, name), "service", name)?;
+            allow_keys(attrs, &["inbound", "crate"])?;
+            parse_transport(required(attrs, "inbound")?).map_err(transport_refused)?;
+            required(attrs, "crate")?;
+        }
+        NodeKind::Operation => {
+            attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
             allow_keys(attrs, &["summary", "request", "response"])?;
         }
@@ -209,7 +218,7 @@ fn plan_add(
             parse_shape(shape).map_err(shape_refused)?;
         }
         NodeKind::Port => {
-            under_root(&parent, kind)?;
+            attaches_to_service(model, &parent)?;
             free(port_exists(model, name), "port", name)?;
             allow_keys(attrs, &["summary", "target"])?;
         }
@@ -332,23 +341,39 @@ fn apply_add(
     attrs: &[(String, String)],
 ) {
     match kind {
-        NodeKind::Operation => model.services[0].operations.push(Operation {
+        NodeKind::Service => model.services.push(Service {
             name: name.to_string(),
-            summary: attr(attrs, "summary").unwrap_or_default().to_string(),
-            request: attr(attrs, "request").unwrap_or("Empty").to_string(),
-            response: attr(attrs, "response").unwrap_or("Empty").to_string(),
+            crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
+            inbound: parse_transport(attr(attrs, "inbound").unwrap_or("Cli"))
+                .expect("inbound validated during planning"),
+            operations: Vec::new(),
+            outbound: Vec::new(),
         }),
+        NodeKind::Operation => {
+            let service =
+                target_service_index(model, parent).expect("service resolved in planning");
+            model.services[service].operations.push(Operation {
+                name: name.to_string(),
+                summary: attr(attrs, "summary").unwrap_or_default().to_string(),
+                request: attr(attrs, "request").unwrap_or("Empty").to_string(),
+                response: attr(attrs, "response").unwrap_or("Empty").to_string(),
+            });
+        }
         NodeKind::Type => model.types.push(TypeDef {
             name: name.to_string(),
             shape: parse_shape(attr(attrs, "shape").unwrap_or_default())
                 .expect("shape validated during planning"),
         }),
-        NodeKind::Port => model.services[0].outbound.push(Port {
-            name: name.to_string(),
-            summary: attr(attrs, "summary").unwrap_or_default().to_string(),
-            target: attr(attrs, "target").map(str::to_string),
-            methods: Vec::new(),
-        }),
+        NodeKind::Port => {
+            let service =
+                target_service_index(model, parent).expect("service resolved in planning");
+            model.services[service].outbound.push(Port {
+                name: name.to_string(),
+                summary: attr(attrs, "summary").unwrap_or_default().to_string(),
+                target: attr(attrs, "target").map(str::to_string),
+                methods: Vec::new(),
+            });
+        }
         NodeKind::Method => {
             if let Target::Port(port) = parent
                 && let Some(port) = port_mut(model, port)
@@ -384,6 +409,7 @@ fn apply_add(
 
 fn apply_remove(model: &mut Model, target: &Target) {
     match target {
+        Target::Service(name) => model.services.retain(|service| &service.name != name),
         Target::Operation(name) => {
             for service in &mut model.services {
                 service.operations.retain(|op| &op.name != name);
@@ -416,6 +442,19 @@ fn apply_remove(model: &mut Model, target: &Target) {
 
 fn apply_rename(model: &mut Model, target: &Target, to: &str) {
     match target {
+        Target::Service(name) => {
+            for service in &mut model.services {
+                if &service.name == name {
+                    service.name = to.to_string();
+                }
+            }
+            // A port bound to the renamed service follows it.
+            for port in ports_mut(model) {
+                if port.target.as_deref() == Some(name) {
+                    port.target = Some(to.to_string());
+                }
+            }
+        }
         Target::Operation(name) => {
             for op in operations_mut(model) {
                 if &op.name == name {
@@ -503,7 +542,7 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
                 set_if(attrs, "doc", &mut field.doc);
             }
         }
-        Target::Type(_) | Target::Variant { .. } | Target::Model => {}
+        Target::Service(_) | Target::Type(_) | Target::Variant { .. } | Target::Model => {}
     }
 }
 
@@ -523,6 +562,11 @@ fn describe(plan: &Plan) -> Vec<String> {
                     kind.word(),
                     attr(attrs, "request").unwrap_or("Empty"),
                     attr(attrs, "response").unwrap_or("Empty"),
+                ),
+                NodeKind::Service => format!(
+                    "+ service {at} ({} in {})",
+                    attr(attrs, "inbound").unwrap_or(""),
+                    attr(attrs, "crate").unwrap_or(""),
                 ),
                 NodeKind::Type => format!("+ type {at} ({})", attr(attrs, "shape").unwrap_or("")),
                 NodeKind::Field => format!("+ field {at}: {}", attr(attrs, "ty").unwrap_or("")),
@@ -547,7 +591,10 @@ fn describe(plan: &Plan) -> Vec<String> {
 fn address(target: &Target) -> String {
     match target {
         Target::Model => "model".to_string(),
-        Target::Operation(name) | Target::Type(name) | Target::Port(name) => name.clone(),
+        Target::Service(name)
+        | Target::Operation(name)
+        | Target::Type(name)
+        | Target::Port(name) => name.clone(),
         Target::Method { port, name } => format!("{port}.{name}"),
         Target::Field { ty, name } | Target::Variant { ty, name } => format!("{ty}.{name}"),
     }
@@ -709,13 +756,14 @@ fn settable_keys(target: &Target) -> &'static [&'static str] {
         Target::Operation(_) | Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
-        Target::Type(_) | Target::Variant { .. } | Target::Model => &[],
+        Target::Service(_) | Target::Type(_) | Target::Variant { .. } | Target::Model => &[],
     }
 }
 
 /// Whether the name `to` is already taken among a node's siblings.
 fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
     match target {
+        Target::Service(_) => service_exists(model, to),
         Target::Operation(_) => model.operation(to).is_some(),
         Target::Type(_) => model.type_def(to).is_some(),
         Target::Port(_) => port_exists(model, to),
@@ -729,6 +777,7 @@ fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
 fn node_exists(model: &Model, target: &Target) -> bool {
     match target {
         Target::Model => true,
+        Target::Service(name) => service_exists(model, name),
         Target::Operation(name) => model.operation(name).is_some(),
         Target::Type(name) => model.type_def(name).is_some(),
         Target::Port(name) => port_exists(model, name),
@@ -760,6 +809,41 @@ fn port_exists(model: &Model, name: &str) -> bool {
         .services
         .iter()
         .any(|service| service.outbound.iter().any(|port| port.name == name))
+}
+
+fn service_exists(model: &Model, name: &str) -> bool {
+    model.services.iter().any(|service| service.name == name)
+}
+
+/// An operation or port attaches to the model root or to an existing service.
+fn attaches_to_service(model: &Model, parent: &Target) -> Result<(), Vec<Diagnostic>> {
+    match parent {
+        Target::Model => Ok(()),
+        Target::Service(name) if service_exists(model, name) => Ok(()),
+        _ => Err(vec![diagnostic(
+            "PATCH006",
+            "an operation or port attaches to the model root or a service",
+            "pass --parent model:<model> or service:<model>:<name>",
+        )]),
+    }
+}
+
+/// The index of the service an operation or port attaches to: the one a service
+/// handle names, or the primary service — the inbound CLI service, else the
+/// first — under the model root.
+fn target_service_index(model: &Model, parent: &Target) -> Option<usize> {
+    match parent {
+        Target::Service(name) => model.services.iter().position(|s| &s.name == name),
+        _ => model
+            .services
+            .iter()
+            .position(|s| s.inbound == Transport::Cli)
+            .or(if model.services.is_empty() {
+                None
+            } else {
+                Some(0)
+            }),
+    }
 }
 
 fn shape_of<'a>(model: &'a Model, ty: &str) -> Option<&'a TypeShape> {
@@ -956,6 +1040,25 @@ fn shape_refused(error: ShapeError) -> Vec<Diagnostic> {
     )]
 }
 
+/// Parse an inbound transport name into a [`Transport`].
+fn parse_transport(text: &str) -> Result<Transport, String> {
+    match text {
+        "Cli" => Ok(Transport::Cli),
+        "Http" => Ok(Transport::Http),
+        "Grpc" => Ok(Transport::Grpc),
+        "InProcess" => Ok(Transport::InProcess),
+        other => Err(format!("unknown transport `{other}`")),
+    }
+}
+
+fn transport_refused(message: String) -> Vec<Diagnostic> {
+    vec![diagnostic(
+        "PATCH013",
+        message,
+        "inbound is one of: Cli, Http, Grpc, InProcess",
+    )]
+}
+
 fn diagnostic(code: &str, message: impl Into<String>, repair: impl Into<String>) -> Diagnostic {
     Diagnostic {
         code: code.to_string(),
@@ -996,6 +1099,95 @@ mod tests {
 
     fn code(outcome: &PatchOutcome) -> &str {
         &outcome.diagnostics[0].code
+    }
+
+    #[test]
+    fn add_a_service_and_an_operation_addressed_to_it() {
+        let model = sample_model();
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "service",
+                "Calculator",
+                &[("inbound", "InProcess"), ("crate", "calc")],
+            ),
+        );
+        let calculator = model
+            .services
+            .iter()
+            .find(|s| s.name == "Calculator")
+            .expect("the service was added");
+        assert_eq!(calculator.crate_name, "calc");
+
+        // An operation addressed to the new service lands there, not in the first.
+        let model = accept(
+            &model,
+            add(
+                "service:sample:Calculator",
+                "operation",
+                "add",
+                &[("request", "Operands")],
+            ),
+        );
+        let calculator = model
+            .services
+            .iter()
+            .find(|s| s.name == "Calculator")
+            .unwrap();
+        assert!(calculator.operations.iter().any(|op| op.name == "add"));
+        assert!(
+            !model.services[0]
+                .operations
+                .iter()
+                .any(|op| op.name == "add")
+        );
+    }
+
+    #[test]
+    fn add_a_service_targeting_port_to_a_named_service() {
+        let model = accept(
+            &sample_model(),
+            add(
+                "model:sample",
+                "service",
+                "Calculator",
+                &[("inbound", "InProcess"), ("crate", "calc")],
+            ),
+        );
+        let model = accept(
+            &model,
+            add(
+                "service:sample:Sample",
+                "port",
+                "calculator",
+                &[
+                    ("summary", "Calls the calculator."),
+                    ("target", "Calculator"),
+                ],
+            ),
+        );
+        let port = model.services[0]
+            .outbound
+            .iter()
+            .find(|p| p.name == "calculator")
+            .expect("the port was added to the named service");
+        assert_eq!(port.target.as_deref(), Some("Calculator"));
+    }
+
+    #[test]
+    fn add_service_rejects_an_unknown_transport() {
+        let model = sample_model();
+        let (outcome, _) = edit(
+            &model,
+            add(
+                "model:sample",
+                "service",
+                "Calculator",
+                &[("inbound", "Carrier Pigeon"), ("crate", "calc")],
+            ),
+        );
+        assert_eq!(code(&outcome), "PATCH013");
     }
 
     #[test]

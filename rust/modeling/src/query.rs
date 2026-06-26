@@ -71,6 +71,16 @@ fn field_summary(field: &Field) -> String {
 fn all_handles(model: &Model) -> Vec<Handle> {
     let mut handles = Vec::new();
 
+    for service in &model.services {
+        let target = Target::Service(service.name.clone());
+        handles.push(handle(
+            model,
+            target,
+            service.name.clone(),
+            format!("{:?} service", service.inbound),
+        ));
+    }
+
     for op in model.operations() {
         let target = Target::Operation(op.name.clone());
         handles.push(handle(model, target, op.name.clone(), op.summary.clone()));
@@ -212,7 +222,8 @@ mod tests {
         assert!(kinds.contains(&"type"));
         assert!(kinds.contains(&"port"));
 
-        let expected = model.operations().len()
+        let expected = model.services.len()
+            + model.operations().len()
             + model.types.len()
             + model
                 .services

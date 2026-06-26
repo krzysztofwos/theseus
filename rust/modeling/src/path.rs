@@ -14,6 +14,8 @@ use crate::model::Model;
 pub enum Target {
     /// The model itself — the parent of a top-level addition.
     Model,
+    /// A service, by name — the parent an operation or port may attach to.
+    Service(String),
     /// An operation, by name.
     Operation(String),
     /// A type, by name.
@@ -31,6 +33,7 @@ pub enum Target {
 /// The kind of node an addition creates, naming where it attaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    Service,
     Operation,
     Type,
     Port,
@@ -77,6 +80,7 @@ impl Target {
         let m = model.name.to_lowercase();
         match self {
             Target::Model => format!("model:{m}"),
+            Target::Service(name) => format!("service:{m}:{name}"),
             Target::Operation(name) => format!("op:{m}:{name}"),
             Target::Type(name) => format!("type:{m}:{name}"),
             Target::Port(name) => format!("port:{m}:{name}"),
@@ -90,6 +94,7 @@ impl Target {
     pub fn kind_word(&self) -> &'static str {
         match self {
             Target::Model => "model",
+            Target::Service(_) => "service",
             Target::Operation(_) => "operation",
             Target::Type(_) => "type",
             Target::Port(_) => "port",
@@ -104,6 +109,7 @@ impl NodeKind {
     /// Parse the node-kind word an `add` names.
     pub fn parse(text: &str) -> Option<NodeKind> {
         Some(match text {
+            "service" => NodeKind::Service,
             "operation" => NodeKind::Operation,
             "type" => NodeKind::Type,
             "port" => NodeKind::Port,
@@ -117,6 +123,7 @@ impl NodeKind {
     /// The word naming this kind, for display.
     pub fn word(self) -> &'static str {
         match self {
+            NodeKind::Service => "service",
             NodeKind::Operation => "operation",
             NodeKind::Type => "type",
             NodeKind::Port => "port",
@@ -146,6 +153,7 @@ fn parse_kind(handle: &str, kind: &str, rest: &str) -> Result<Target, HandleErro
             .ok_or_else(|| HandleError::Malformed(handle.to_string()))
     };
     match kind {
+        "service" => Ok(Target::Service(rest.to_string())),
         "op" => Ok(Target::Operation(rest.to_string())),
         "type" => Ok(Target::Type(rest.to_string())),
         "port" => Ok(Target::Port(rest.to_string())),

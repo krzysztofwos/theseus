@@ -131,7 +131,6 @@ pub fn command() -> Command {
                     Arg::new("body")
                         .long("body")
                         .action(ArgAction::Set)
-                        .required(true)
                         .help("The handler body to splice into the impl."),
                 )
                 .arg(
@@ -140,6 +139,14 @@ pub fn command() -> Command {
                         .action(ArgAction::Set)
                         .required(true)
                         .help("The model hash the edit was computed against."),
+                )
+                .arg(
+                    Arg::new("body-file")
+                        .long("body-file")
+                        .action(ArgAction::Set)
+                        .help(
+                            "Read the body from this file, or from stdin when `-`. Overrides body.",
+                        ),
                 ),
         )
         .subcommand(
@@ -239,9 +246,11 @@ pub struct ImplementRequest {
     /// Name of the operation to implement.
     pub method: String,
     /// The handler body to splice into the impl.
-    pub body: String,
+    pub body: Option<String>,
     /// The model hash the edit was computed against.
     pub expect_model_hash: String,
+    /// Read the body from this file, or from stdin when `-`. Overrides body.
+    pub body_file: Option<String>,
 }
 impl ImplementRequest {
     /// Build the request from parsed command-line arguments.
@@ -249,8 +258,9 @@ impl ImplementRequest {
         let arg = |name: &str| matches.get_one::<String>(name).cloned();
         ImplementRequest {
             method: arg("method").unwrap_or_default(),
-            body: arg("body").unwrap_or_default(),
+            body: arg("body"),
             expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
+            body_file: arg("body-file"),
         }
     }
 }

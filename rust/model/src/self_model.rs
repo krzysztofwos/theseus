@@ -83,11 +83,16 @@ pub fn theseus_model() -> Model {
             "ImplementRequest",
             &[
                 ("method", "String", "Name of the operation to implement."),
-                ("body", "String", "The handler body to splice into the impl."),
+                ("body", "Option<String>", "The handler body to splice into the impl."),
                 (
                     "expect_model_hash",
                     "String",
                     "The model hash the edit was computed against.",
+                ),
+                (
+                    "body_file",
+                    "Option<String>",
+                    "Read the body from this file, or from stdin when `-`. Overrides body.",
                 ),
             ],
         )

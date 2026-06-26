@@ -69,13 +69,14 @@ impl TheseusService for Ctx<'_> {
                 request.expect_model_hash
             );
         }
+        let body = resolve_body(&request)?;
         let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
             .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
         let spliced = theseus_modeling::implement(
             self.model,
             &source,
             &request.method,
-            &request.body,
+            &body,
             "crate::generated::",
         )?;
         self.workspace.write_file(&GeneratedFile {
@@ -112,6 +113,23 @@ impl TheseusService for Ctx<'_> {
             }
         }
         Ok(outcome)
+    }
+}
+
+/// The handler body for an implement request: read from `--body-file` (or stdin
+/// when `-`) if given, otherwise the inline `--body`.
+fn resolve_body(request: &ImplementRequest) -> anyhow::Result<String> {
+    match &request.body_file {
+        Some(path) if path == "-" => {
+            std::io::read_to_string(std::io::stdin()).context("reading the body from stdin")
+        }
+        Some(path) => {
+            std::fs::read_to_string(path).with_context(|| format!("reading the body from {path}"))
+        }
+        None => request
+            .body
+            .clone()
+            .context("implement needs --body or --body-file"),
     }
 }
 

@@ -223,12 +223,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-calculator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "theseus-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "theseus-calculator",
  "theseus-model",
  "theseus-modeling",
 ]

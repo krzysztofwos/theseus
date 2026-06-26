@@ -2,15 +2,16 @@
 //! the model.
 //!
 //! Code generation keeps rewriting a crate's generated contract. Scaffolding
-//! instead lays down the authored leaves a new service crate starts from — its
-//! manifest, its module wiring, and an empty adapter. These are authored after
-//! they land, so an adopter writes only the files that are absent and never
-//! clobbers work. The skeleton is produced for a library service crate: one that
-//! hosts services and no inbound adapter of its own.
+//! instead lays down the authored leaves a new crate starts from. A library
+//! service crate (hosting services, no inbound) gets a manifest, module wiring,
+//! and an empty adapter. A binary application crate (hosting an inbound adapter,
+//! no service of its own) gets a manifest with a binary target and a composition
+//! root. These are authored after they land, so an adopter writes only the files
+//! that are absent and never clobbers work.
 
 use crate::{
     codegen::{GeneratedFile, pascal_case},
-    model::{CrateNode, Model, Service, TypeShape},
+    model::{CrateNode, Inbound, Model, Service, TypeShape},
 };
 
 /// The skeleton files for every library service crate the model describes.
@@ -55,7 +56,84 @@ pub fn scaffold_files(model: &Model) -> Vec<GeneratedFile> {
             contents: service_rs(&services),
         });
     }
+
+    // A crate that hosts an inbound adapter but no service of its own is a binary
+    // application: a command-line entry point that drives a service from another
+    // crate. Its skeleton is a manifest with a binary target and a composition root.
+    for inbound in &model.inbounds {
+        if seen.contains(&inbound.crate_name.as_str()) {
+            continue;
+        }
+        seen.push(&inbound.crate_name);
+        if model
+            .services
+            .iter()
+            .any(|s| s.crate_name == inbound.crate_name)
+        {
+            continue;
+        }
+        let (Some(node), Some(service)) = (
+            model.crate_named(&inbound.crate_name),
+            model.service_named(&inbound.service),
+        ) else {
+            continue;
+        };
+        let dir = &node.dir;
+        files.push(GeneratedFile {
+            path: format!("rust/{dir}/Cargo.toml"),
+            contents: binary_cargo_toml(node, inbound, service, model),
+        });
+        files.push(GeneratedFile {
+            path: format!("rust/{dir}/src/main.rs"),
+            contents: binary_main(service),
+        });
+    }
     files
+}
+
+/// Render a binary application's manifest: a binary target named for the inbound,
+/// `anyhow` and the command-surface dependency, and a path dependency on the
+/// service's crate.
+fn binary_cargo_toml(
+    node: &CrateNode,
+    inbound: &Inbound,
+    service: &Service,
+    model: &Model,
+) -> String {
+    let service_dir = model
+        .crate_named(&service.crate_name)
+        .map(|n| n.dir.as_str())
+        .unwrap_or(&service.crate_name);
+    let service_dep = format!(
+        "{} = {{ path = \"../{service_dir}\" }}\n",
+        service.crate_name,
+    );
+    format!(
+        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"A standalone command-line interface to the {} service\"\n\n\
+         [[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n\n\
+         [dependencies]\nanyhow = {{ workspace = true }}\nclap = {{ workspace = true }}\n\n{service_dep}",
+        node.name, service.name, inbound.name,
+    )
+}
+
+/// Render the binary's composition root: construct the service adapter and drive
+/// it from the generated command surface.
+fn binary_main(service: &Service) -> String {
+    let module = service.crate_name.replace('-', "_");
+    let adapter = adapter_name(service);
+    let var = service.name.to_lowercase();
+    format!(
+        "//! A standalone command-line interface to the {} service.\n//!\n\
+         //! The command surface, the parsed invocation, and the dispatch are generated\n\
+         //! from the service's operations. This entry point backs the contract with the\n\
+         //! `{adapter}` adapter and drives it from the command line.\n\n\
+         mod generated;\n\n\
+         fn main() -> anyhow::Result<()> {{\n    \
+         let {var} = {module}::{adapter};\n    \
+         let matches = generated::command().get_matches();\n    \
+         generated::dispatch(&{var}, generated::Invocation::from_matches(&matches))\n}}\n",
+        service.name,
+    )
 }
 
 /// Render the crate manifest: `anyhow` for the generated contract, then a path
@@ -212,6 +290,32 @@ mod tests {
         let files = scaffold_files(&model);
         let cargo = file(&files, "app/Cargo.toml");
         assert!(cargo.contains("kit = { path = \"../kit\" }"));
+    }
+
+    #[test]
+    fn scaffolds_a_binary_adapter_crate() {
+        let model = Model::new("App")
+            .crate_node("calc", "calc", 0, &[])
+            .crate_node("calc-cli", "calc-cli", 1, &["calc"])
+            .service(Service::new("Calculator").crate_name("calc"))
+            .inbound("calculator", Transport::Cli, "Calculator", "calc-cli");
+        let files = scaffold_files(&model);
+
+        let cargo = file(&files, "calc-cli/Cargo.toml");
+        assert!(cargo.contains("[[bin]]"));
+        assert!(cargo.contains("name = \"calculator\""));
+        assert!(cargo.contains("clap = { workspace = true }"));
+        assert!(cargo.contains("calc = { path = \"../calc\" }"));
+
+        let main = file(&files, "calc-cli/src/main.rs");
+        assert!(main.contains("let calculator = calc::Calculator;"));
+        assert!(main.contains("generated::dispatch(&calculator,"));
+        // A binary crate has no lib.rs or service.rs of its own.
+        assert!(
+            !files
+                .iter()
+                .any(|f| f.path.ends_with("calc-cli/src/lib.rs"))
+        );
     }
 
     #[test]

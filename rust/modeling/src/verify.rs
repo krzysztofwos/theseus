@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Six checks, all derived from the same [`Model`]:
+//! Seven checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -13,8 +13,10 @@
 //!      builtin or a defined type, so no operation points at a phantom type.
 //!   4. **Port targets** — every service-targeting port names a service the
 //!      model defines, so no port is bound to a phantom service.
-//!   5. **Generated drift** — model-derived files on disk match a fresh render.
-//!   6. **Implementation coverage** — every operation has an authored handler.
+//!   5. **Inbound services** — every inbound adapter drives a service the model
+//!      defines, so no adapter is bound to a phantom service.
+//!   6. **Generated drift** — model-derived files on disk match a fresh render.
+//!   7. **Implementation coverage** — every operation has an authored handler.
 //!      The service trait defaults each method to `unimplemented`, so this check
 //!      holds the gate the compiler once did.
 //!
@@ -134,6 +136,11 @@ pub fn verify(
     );
 
     report.record(
+        "inbounds: every inbound adapter drives a defined service",
+        check_inbound_services(model),
+    );
+
+    report.record(
         "generated code: in sync with model (drift gate)",
         check_generated_in_sync(generated, workspace_root),
     );
@@ -201,6 +208,25 @@ fn check_port_targets(model: &Model) -> Result<String, String> {
         }
     }
     Ok(format!("{bound} service-targeting port(s) all resolve"))
+}
+
+/// Every inbound adapter must drive a service the model defines, so an adapter
+/// bound to a phantom service is caught before code generation reaches for its
+/// trait.
+fn check_inbound_services(model: &Model) -> Result<String, String> {
+    let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
+    for inbound in &model.inbounds {
+        if !services.contains(inbound.service.as_str()) {
+            return Err(format!(
+                "inbound `{}` drives service `{}`, which the model does not define",
+                inbound.name, inbound.service
+            ));
+        }
+    }
+    Ok(format!(
+        "{} inbound adapter(s) all drive a defined service",
+        model.inbounds.len()
+    ))
 }
 
 /// Every type a service or port names must resolve: a builtin, an `Option` of a

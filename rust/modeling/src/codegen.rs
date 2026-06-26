@@ -643,12 +643,12 @@ mod tests {
             .crate_node("app", "app", 1, &["calc"])
             .crate_node("calc", "calc", 0, &[])
             .service(
-                Service::new("Calc", Transport::Cli)
+                Service::new("Calc")
                     .crate_name("calc")
                     .operation("add", "Add.", "Empty", "Empty"),
             )
             .service(
-                Service::new("App", Transport::Cli)
+                Service::new("App")
                     .crate_name("app")
                     .port(Port::new("calculator", "Calls the calculator.").targeting("Calc")),
             );
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn a_service_without_an_inbound_renders_a_trait_but_no_command() {
         let model = Model::new("Calc")
-            .service(Service::new("Calculator", Transport::Cli).operation("add", "Add.", "Empty", "Empty"));
+            .service(Service::new("Calculator").operation("add", "Add.", "Empty", "Empty"));
         let rendered = render_cli_module(&model);
         // The service trait is present. With no inbound, nothing builds a command.
         assert!(rendered.contains("trait CalculatorService"));
@@ -674,7 +674,7 @@ mod tests {
         let model = Model::new("Calc")
             .struct_type("Operands", &[("a", "f64", "Left operand.")])
             .service(
-                Service::new("Calculator", Transport::Cli)
+                Service::new("Calculator")
                     .crate_name("calc")
                     .operation("add", "Add.", "Operands", "Empty"),
             );
@@ -692,7 +692,7 @@ mod tests {
             .crate_node("calc", "calc", 0, &[])
             .struct_type("Operands", &[("a", "f64", "Left operand.")])
             .service(
-                Service::new("Calc", Transport::Cli)
+                Service::new("Calc")
                     .crate_name("calc")
                     .operation("add", "Add.", "Operands", "Empty"),
             )

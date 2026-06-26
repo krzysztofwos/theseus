@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::{
     hash::model_hash,
-    model::{CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape},
+    model::{CrateNode, Field, Method, Model, Operation, Port, Service, TypeDef, TypeShape},
     path::{NodeKind, Target},
 };
 
@@ -154,8 +154,7 @@ enum Plan {
 fn plan(model: &Model, edit: &Edit) -> Result<Plan, Vec<Diagnostic>> {
     // Crate, dependency, and service additions operate on the crate graph or
     // create a service. Every other edit needs a service to act on or within.
-    let crate_graph_edit =
-        matches!(edit, Edit::Add { kind, .. } if matches!(kind.as_str(), "crate" | "dep" | "service"));
+    let crate_graph_edit = matches!(edit, Edit::Add { kind, .. } if matches!(kind.as_str(), "crate" | "dep" | "service"));
     if model.services.is_empty() && !crate_graph_edit {
         return Err(vec![diagnostic(
             "PATCH004",
@@ -219,8 +218,7 @@ fn plan_add(
         NodeKind::Service => {
             under_root(&parent, kind)?;
             free(service_exists(model, name), "service", name)?;
-            allow_keys(attrs, &["inbound", "crate"])?;
-            parse_transport(required(attrs, "inbound")?).map_err(transport_refused)?;
+            allow_keys(attrs, &["crate"])?;
             required(attrs, "crate")?;
         }
         NodeKind::Operation => {
@@ -376,8 +374,6 @@ fn apply_add(
         NodeKind::Service => model.services.push(Service {
             name: name.to_string(),
             crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
-            inbound: parse_transport(attr(attrs, "inbound").unwrap_or("Cli"))
-                .expect("inbound validated during planning"),
             operations: Vec::new(),
             outbound: Vec::new(),
         }),
@@ -641,11 +637,9 @@ fn describe(plan: &Plan) -> Vec<String> {
                     attr(attrs, "request").unwrap_or("Empty"),
                     attr(attrs, "response").unwrap_or("Empty"),
                 ),
-                NodeKind::Service => format!(
-                    "+ service {at} ({} in {})",
-                    attr(attrs, "inbound").unwrap_or(""),
-                    attr(attrs, "crate").unwrap_or(""),
-                ),
+                NodeKind::Service => {
+                    format!("+ service {at} (in {})", attr(attrs, "crate").unwrap_or(""))
+                }
                 NodeKind::Crate => format!(
                     "+ crate {at} ({} at layer {})",
                     attr(attrs, "dir").unwrap_or(""),
@@ -949,20 +943,12 @@ fn attaches_to_service(model: &Model, parent: &Target) -> Result<(), Vec<Diagnos
 }
 
 /// The index of the service an operation or port attaches to: the one a service
-/// handle names, or the primary service — the inbound CLI service, else the
-/// first — under the model root.
+/// handle names, or the first service under the model root.
 fn target_service_index(model: &Model, parent: &Target) -> Option<usize> {
     match parent {
         Target::Service(name) => model.services.iter().position(|s| &s.name == name),
-        _ => model
-            .services
-            .iter()
-            .position(|s| s.inbound == Transport::Cli)
-            .or(if model.services.is_empty() {
-                None
-            } else {
-                Some(0)
-            }),
+        _ if model.services.is_empty() => None,
+        _ => Some(0),
     }
 }
 
@@ -1160,25 +1146,6 @@ fn shape_refused(error: ShapeError) -> Vec<Diagnostic> {
     )]
 }
 
-/// Parse an inbound transport name into a [`Transport`].
-fn parse_transport(text: &str) -> Result<Transport, String> {
-    match text {
-        "Cli" => Ok(Transport::Cli),
-        "Http" => Ok(Transport::Http),
-        "Grpc" => Ok(Transport::Grpc),
-        "InProcess" => Ok(Transport::InProcess),
-        other => Err(format!("unknown transport `{other}`")),
-    }
-}
-
-fn transport_refused(message: String) -> Vec<Diagnostic> {
-    vec![diagnostic(
-        "PATCH013",
-        message,
-        "inbound is one of: Cli, Http, Grpc, InProcess",
-    )]
-}
-
 /// Parse a crate's architectural layer, a non-negative integer.
 fn parse_layer(text: &str) -> Result<u32, String> {
     text.parse()
@@ -1186,7 +1153,11 @@ fn parse_layer(text: &str) -> Result<u32, String> {
 }
 
 fn layer_refused(message: String) -> Vec<Diagnostic> {
-    vec![diagnostic("PATCH014", message, "pass --set layer=<integer>")]
+    vec![diagnostic(
+        "PATCH014",
+        message,
+        "pass --set layer=<integer>",
+    )]
 }
 
 fn diagnostic(code: &str, message: impl Into<String>, repair: impl Into<String>) -> Diagnostic {
@@ -1289,7 +1260,7 @@ mod tests {
                 "model:sample",
                 "service",
                 "Calculator",
-                &[("inbound", "InProcess"), ("crate", "calc")],
+                &[("crate", "calc")],
             ),
         );
         let calculator = model
@@ -1331,7 +1302,7 @@ mod tests {
                 "model:sample",
                 "service",
                 "Calculator",
-                &[("inbound", "InProcess"), ("crate", "calc")],
+                &[("crate", "calc")],
             ),
         );
         let model = accept(
@@ -1352,21 +1323,6 @@ mod tests {
             .find(|p| p.name == "calculator")
             .expect("the port was added to the named service");
         assert_eq!(port.target.as_deref(), Some("Calculator"));
-    }
-
-    #[test]
-    fn add_service_rejects_an_unknown_transport() {
-        let model = sample_model();
-        let (outcome, _) = edit(
-            &model,
-            add(
-                "model:sample",
-                "service",
-                "Calculator",
-                &[("inbound", "Carrier Pigeon"), ("crate", "calc")],
-            ),
-        );
-        assert_eq!(code(&outcome), "PATCH013");
     }
 
     #[test]

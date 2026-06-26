@@ -503,7 +503,7 @@ fn check_layering(model: &Model, impl_cat: &Category) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CrateNode, Service, Transport};
+    use crate::model::{CrateNode, Service};
 
     fn layered_model() -> Model {
         Model {
@@ -558,7 +558,7 @@ mod tests {
     fn dangling_type_reference_is_detected() {
         // The operation responds with `Ghost`, which no type defines.
         let model = Model::new("Sample")
-            .service(Service::new("Sample", Transport::Cli).operation("op", "", "Empty", "Ghost"));
+            .service(Service::new("Sample").operation("op", "", "Empty", "Ghost"));
         assert!(check_type_references(&model).is_err());
     }
 
@@ -567,7 +567,7 @@ mod tests {
         // Registering `Ghost` as a foreign type makes the reference resolve.
         let model = Model::new("Sample")
             .foreign_type("Ghost", "String")
-            .service(Service::new("Sample", Transport::Cli).operation("op", "", "Empty", "Ghost"));
+            .service(Service::new("Sample").operation("op", "", "Empty", "Ghost"));
         assert!(check_type_references(&model).is_ok());
     }
 
@@ -576,9 +576,7 @@ mod tests {
         // A struct field typed as a scalar primitive needs no definition.
         let model = Model::new("Sample")
             .struct_type("Operands", &[("a", "f64", "")])
-            .service(
-                Service::new("Sample", Transport::Cli).operation("op", "", "Operands", "Empty"),
-            );
+            .service(Service::new("Sample").operation("op", "", "Operands", "Empty"));
         assert!(check_type_references(&model).is_ok());
     }
 }

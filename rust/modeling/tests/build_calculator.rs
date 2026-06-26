@@ -14,7 +14,7 @@ use theseus_modeling::{
 fn seed() -> Model {
     Model::new("Calculator")
         .crate_node("calculator", "calculator", 0, &[])
-        .service(Service::new("Calculator", Transport::Cli).crate_name("calculator"))
+        .service(Service::new("Calculator").crate_name("calculator"))
         .inbound("calculator", Transport::Cli, "Calculator", "calculator")
 }
 

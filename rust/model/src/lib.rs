@@ -65,7 +65,12 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
         .services
         .iter()
         .map(|service| service.crate_name.as_str())
-        .chain(model.inbounds.iter().map(|inbound| inbound.crate_name.as_str()));
+        .chain(
+            model
+                .inbounds
+                .iter()
+                .map(|inbound| inbound.crate_name.as_str()),
+        );
     for crate_name in hosting {
         if rendered.contains(&crate_name) {
             continue;
@@ -155,12 +160,15 @@ mod tests {
         use theseus_modeling::Transport;
         let model = theseus_model();
         let rendered = render_cli_module(&model);
-        let cli = model
-            .services
+        let inbound = model
+            .inbounds
             .iter()
-            .find(|service| service.inbound == Transport::Cli)
-            .expect("the model has an inbound CLI service");
-        for op in &cli.operations {
+            .find(|inbound| inbound.transport == Transport::Cli)
+            .expect("the model has a CLI inbound adapter");
+        let service = model
+            .service_named(&inbound.service)
+            .expect("the inbound drives a defined service");
+        for op in &service.operations {
             assert!(
                 rendered.contains(&format!("Command::new({:?})", op.name)),
                 "operation `{}` missing from generated surface",

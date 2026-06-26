@@ -23,7 +23,13 @@ impl Model {
 
     /// Add an inbound adapter named `name`, speaking `transport`, driving
     /// `service`, hosted in `crate_name`.
-    pub fn inbound(mut self, name: &str, transport: Transport, service: &str, crate_name: &str) -> Self {
+    pub fn inbound(
+        mut self,
+        name: &str,
+        transport: Transport,
+        service: &str,
+        crate_name: &str,
+    ) -> Self {
         self.inbounds.push(Inbound {
             name: name.to_string(),
             transport,
@@ -98,12 +104,11 @@ impl Model {
 }
 
 impl Service {
-    /// Start a service with the given name and inbound transport.
-    pub fn new(name: &str, inbound: Transport) -> Self {
+    /// Start a service with the given name.
+    pub fn new(name: &str) -> Self {
         Service {
             name: name.to_string(),
             crate_name: String::new(),
-            inbound,
             operations: Vec::new(),
             outbound: Vec::new(),
         }

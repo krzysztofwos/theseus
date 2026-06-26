@@ -127,7 +127,7 @@ pub fn theseus_model() -> Model {
             ],
         )
         .service(
-            Service::new("Theseus", Transport::Cli)
+            Service::new("Theseus")
                 .crate_name("theseus-cli")
                 .operation(
                     "model",
@@ -207,7 +207,7 @@ pub fn theseus_model() -> Model {
                 ),
         )
         .service(
-            Service::new("Calculator", Transport::InProcess)
+            Service::new("Calculator")
                 .crate_name("theseus-calculator")
                 .operation("add", "Add the operands.", "Operands", "CalcResult")
                 .operation(

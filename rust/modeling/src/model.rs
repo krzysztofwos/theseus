@@ -93,8 +93,9 @@ pub struct CrateNode {
     pub depends_on: Vec<String>,
 }
 
-/// A service: an inbound transport, a set of operations, and outbound ports,
-/// living in one crate of the workspace.
+/// A service: a set of operations and outbound ports, living in one crate of the
+/// workspace. Its operations are its inbound contract. An [`Inbound`] adapter
+/// drives it over a transport, and a service may carry none, one, or several.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Service {
     /// Service name.
@@ -102,23 +103,18 @@ pub struct Service {
     /// Cargo package name of the crate this service lives in. Code generation
     /// renders the service's contract into that crate.
     pub crate_name: String,
-    /// How the service is invoked.
-    pub inbound: Transport,
     /// The operations the service exposes.
     pub operations: Vec<Operation>,
     /// The outbound dependencies the service calls.
     pub outbound: Vec<Port>,
 }
 
-/// How a service is driven from the outside.
+/// A transport an [`Inbound`] adapter speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transport {
     Cli,
     Http,
     Grpc,
-    /// An in-process call from another service. The service contributes a trait
-    /// its callers depend on, without a command surface of its own.
-    InProcess,
 }
 
 /// One operation in a service's inbound surface.

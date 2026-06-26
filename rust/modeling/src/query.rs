@@ -94,7 +94,7 @@ fn all_handles(model: &Model) -> Vec<Handle> {
             model,
             target,
             service.name.clone(),
-            format!("{:?} service", service.inbound),
+            format!("service in {}", service.crate_name),
         ));
     }
 

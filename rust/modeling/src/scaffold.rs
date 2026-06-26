@@ -6,11 +6,11 @@
 //! manifest, its module wiring, and an empty adapter. These are authored after
 //! they land, so an adopter writes only the files that are absent and never
 //! clobbers work. The skeleton is produced for a library service crate: one that
-//! hosts services, none of them inbound from the command line.
+//! hosts services and no inbound adapter of its own.
 
 use crate::{
     codegen::{GeneratedFile, pascal_case},
-    model::{CrateNode, Model, Service, Transport, TypeShape},
+    model::{CrateNode, Model, Service, TypeShape},
 };
 
 /// The skeleton files for every library service crate the model describes.
@@ -28,9 +28,13 @@ pub fn scaffold_files(model: &Model) -> Vec<GeneratedFile> {
             .iter()
             .filter(|s| s.crate_name == service.crate_name)
             .collect();
-        // A crate with an inbound CLI service has a hand-written composition root,
-        // not the adapter skeleton; it is not scaffolded.
-        if services.iter().any(|s| s.inbound == Transport::Cli) {
+        // A crate that also hosts an inbound adapter is a binary with a
+        // hand-written composition root, not the library adapter skeleton.
+        if model
+            .inbounds
+            .iter()
+            .any(|inbound| inbound.crate_name == service.crate_name)
+        {
             continue;
         }
         let Some(node) = model.crate_named(&service.crate_name) else {
@@ -161,7 +165,7 @@ fn request_structs(services: &[&Service], model: &Model) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Model;
+    use crate::model::{Model, Transport};
 
     fn calculator_model() -> Model {
         Model::new("App")
@@ -169,7 +173,7 @@ mod tests {
             .struct_type("Operands", &[("a", "f64", "Left.")])
             .foreign_type("Sum", "String")
             .service(
-                Service::new("Calculator", Transport::InProcess)
+                Service::new("Calculator")
                     .crate_name("app")
                     .operation("add", "Add.", "Operands", "Sum"),
             )
@@ -204,17 +208,19 @@ mod tests {
         let model = Model::new("App")
             .crate_node("kit", "kit", 0, &[])
             .crate_node("app", "app", 1, &["kit"])
-            .service(Service::new("Worker", Transport::InProcess).crate_name("app"));
+            .service(Service::new("Worker").crate_name("app"));
         let files = scaffold_files(&model);
         let cargo = file(&files, "app/Cargo.toml");
         assert!(cargo.contains("kit = { path = \"../kit\" }"));
     }
 
     #[test]
-    fn a_cli_crate_is_not_scaffolded() {
+    fn a_crate_hosting_an_inbound_and_a_service_is_not_scaffolded() {
+        // A crate with an inbound adapter is a binary with an authored root.
         let model = Model::new("App")
             .crate_node("cli", "cli", 0, &[])
-            .service(Service::new("App", Transport::Cli).crate_name("cli"));
+            .service(Service::new("App").crate_name("cli"))
+            .inbound("app", Transport::Cli, "App", "cli");
         assert!(scaffold_files(&model).is_empty());
     }
 }

@@ -1,6 +1,6 @@
 //! Shared fixtures for engine unit tests.
 
-use crate::model::{CrateNode, Model, Operation, Port, Service, Transport};
+use crate::model::{CrateNode, Model, Operation, Port, Service};
 
 /// A small, self-contained model for exercising the engine.
 pub(crate) fn sample_model() -> Model {
@@ -16,7 +16,6 @@ pub(crate) fn sample_model() -> Model {
         services: vec![Service {
             name: "Sample".to_string(),
             crate_name: "sample".to_string(),
-            inbound: Transport::Cli,
             operations: vec![
                 operation("greet", "Greet."),
                 operation("status", "Report status."),

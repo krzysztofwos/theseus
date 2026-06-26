@@ -18,7 +18,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use serde::Serialize;
 
-use crate::model::{Field, Model, Operation, Port, Service, Transport, TypeDef, TypeShape};
+use crate::model::{Field, Inbound, Model, Operation, Port, Service, Transport, TypeDef, TypeShape};
 
 /// A file rendered from the model, addressed relative to the workspace root. An
 /// adopter sets the path.
@@ -82,9 +82,23 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         ),
         None => (quote! {}, quote! {}, quote! {}),
     };
+    // An inbound adapter hosted in this crate renders a command surface for the
+    // service it drives, even when that service lives in another crate.
+    let inbound_modules: Vec<TokenStream> = model
+        .inbounds
+        .iter()
+        .filter(|inbound| inbound.crate_name == crate_name)
+        .filter_map(|inbound| {
+            model
+                .service_named(&inbound.service)
+                .map(|service| render_inbound_module(inbound, service, model))
+        })
+        .collect();
+    let has_command = cli_service.is_some() || !inbound_modules.is_empty();
+
     // The command surface and its parsers carry the only command-line dependency.
-    // a crate without a CLI service imports none of it.
-    let command_import = if cli_service.is_some() {
+    // a crate without a CLI surface imports none of it.
+    let command_import = if has_command {
         quote! { use clap::{Arg, ArgAction, ArgMatches, Command}; }
     } else {
         quote! {}
@@ -100,6 +114,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         #invocation
         #(#service_traits)*
         #present
+        #(#inbound_modules)*
     };
 
     let file = syn::parse2(tokens).expect("generated code is valid Rust syntax");
@@ -534,6 +549,182 @@ fn render_present(service: &Service, model: &Model) -> TokenStream {
             Ok(())
         }
     }
+}
+
+/// The crate module path of a service, e.g. `theseus_calculator`.
+fn service_crate_path(service: &Service, model: &Model) -> String {
+    model
+        .crate_named(&service.crate_name)
+        .map(|node| node.name.replace('-', "_"))
+        .unwrap_or_default()
+}
+
+/// The parser function name for a request struct, e.g. `parse_operands`.
+fn parser_fn(def: &TypeDef) -> proc_macro2::Ident {
+    format_ident!("parse_{}", def.name.to_lowercase())
+}
+
+/// Render an inbound CLI adapter: the command surface, the request parsers, the
+/// parsed invocation, and the default presentation for the service it drives.
+/// Request types are qualified by the service's crate path, so the adapter may
+/// live in a crate other than the one that defines them.
+fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) -> TokenStream {
+    let bin = &inbound.name;
+    let crate_path = service_crate_path(service, model);
+    let trait_path = syn_type(&format!("{crate_path}::{}Service", pascal_case(&service.name)));
+
+    let subcommands: Vec<TokenStream> = service
+        .operations
+        .iter()
+        .map(|op| render_subcommand(op, model))
+        .collect();
+    let about = format!("The {} service.", service.name);
+    let command = quote! {
+        #[doc = " Build the command surface from the model."]
+        pub fn command() -> Command {
+            Command::new(#bin)
+                .about(#about)
+                .arg_required_else_help(true)
+                #(#subcommands)*
+        }
+    };
+
+    let parsers = render_inbound_parsers(service, model, &crate_path);
+
+    let variants: Vec<TokenStream> = service
+        .operations
+        .iter()
+        .map(|op| {
+            let variant = format_ident!("{}", pascal_case(&op.name));
+            match request_type(op, model) {
+                Some(def) => {
+                    let ty = syn_type(&format!("{crate_path}::{}", def.name));
+                    quote! { #variant(#ty), }
+                }
+                None => quote! { #variant, },
+            }
+        })
+        .collect();
+    let arms: Vec<TokenStream> = service
+        .operations
+        .iter()
+        .map(|op| {
+            let name = &op.name;
+            let variant = format_ident!("{}", pascal_case(&op.name));
+            match request_type(op, model) {
+                Some(def) => {
+                    let parser = parser_fn(def);
+                    quote! { Some((#name, sub)) => Invocation::#variant(#parser(sub)), }
+                }
+                None => quote! { Some((#name, _)) => Invocation::#variant, },
+            }
+        })
+        .collect();
+    let invocation = quote! {
+        pub enum Invocation {
+            #(#variants)*
+        }
+        impl Invocation {
+            #[doc = " Parse the invocation from the matched command line."]
+            pub fn from_matches(matches: &ArgMatches) -> Self {
+                match matches.subcommand() {
+                    #(#arms)*
+                    _ => unreachable!("arg_required_else_help guarantees a subcommand"),
+                }
+            }
+        }
+    };
+
+    let present_arms: Vec<TokenStream> = service
+        .operations
+        .iter()
+        .map(|op| {
+            let variant = format_ident!("{}", pascal_case(&op.name));
+            let method = format_ident!("{}", op.name);
+            let (pattern, call) = match request_type(op, model) {
+                Some(_) => (
+                    quote! { Invocation::#variant(request) },
+                    quote! { service.#method(request)? },
+                ),
+                None => (
+                    quote! { Invocation::#variant },
+                    quote! { service.#method()? },
+                ),
+            };
+            let render = if rust_type(&op.response, model) == "String" {
+                quote! { println!("{}", #call) }
+            } else {
+                quote! { println!("{}", serde_json::to_string_pretty(&#call)?) }
+            };
+            quote! { #pattern => #render, }
+        })
+        .collect();
+    let present = quote! {
+        #[doc = " Render an operation's result with the default presentation."]
+        pub fn present(service: &impl #trait_path, invocation: Invocation) -> anyhow::Result<()> {
+            match invocation {
+                #(#present_arms)*
+            }
+            Ok(())
+        }
+    };
+
+    quote! {
+        #command
+        #parsers
+        #invocation
+        #present
+    }
+}
+
+/// Render a free-function parser per distinct request struct the service's
+/// operations take, building the request type at its crate-qualified path.
+fn render_inbound_parsers(service: &Service, model: &Model, crate_path: &str) -> TokenStream {
+    let mut seen: Vec<&str> = Vec::new();
+    let parsers: Vec<TokenStream> = service
+        .operations
+        .iter()
+        .filter_map(|op| request_type(op, model))
+        .filter(|def| {
+            let fresh = !seen.contains(&def.name.as_str());
+            if fresh {
+                seen.push(&def.name);
+            }
+            fresh
+        })
+        .filter_map(|def| {
+            let TypeShape::Struct(fields) = &def.shape else {
+                return None;
+            };
+            let fn_name = parser_fn(def);
+            let ty = syn_type(&format!("{crate_path}::{}", def.name));
+            let arg_closure = if fields
+                .iter()
+                .any(|f| f.ty == "String" || f.ty == "Option<String>")
+            {
+                quote! { let arg = |name: &str| matches.get_one::<String>(name).cloned(); }
+            } else {
+                quote! {}
+            };
+            let inits: Vec<TokenStream> = fields
+                .iter()
+                .map(|field| {
+                    let field_name = format_ident!("{}", field.name);
+                    let parse = field_parse(field);
+                    quote! { #field_name: #parse, }
+                })
+                .collect();
+            Some(quote! {
+                fn #fn_name(matches: &ArgMatches) -> #ty {
+                    #arg_closure
+                    #ty {
+                        #(#inits)*
+                    }
+                }
+            })
+        })
+        .collect();
+    quote! { #(#parsers)* }
 }
 
 /// The response type a method returns, as a parsed Rust type.

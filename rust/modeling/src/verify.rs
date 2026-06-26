@@ -524,6 +524,7 @@ mod tests {
             ],
             types: vec![],
             services: vec![],
+            inbounds: vec![],
         }
     }
 

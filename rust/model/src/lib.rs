@@ -60,15 +60,24 @@ const SELF_MODEL_HEADER: &str = concat!(
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
-    for service in &model.services {
-        if rendered.contains(&service.crate_name.as_str()) {
+    // Every crate that hosts a service or an inbound adapter gets a generated file.
+    let hosting = model
+        .services
+        .iter()
+        .map(|service| service.crate_name.as_str())
+        .chain(model.inbounds.iter().map(|inbound| inbound.crate_name.as_str()));
+    for crate_name in hosting {
+        if rendered.contains(&crate_name) {
             continue;
         }
-        rendered.push(&service.crate_name);
-        let dir = crate_dir(model, service);
+        rendered.push(crate_name);
+        let dir = model
+            .crate_named(crate_name)
+            .map(|node| node.dir.as_str())
+            .unwrap_or_else(|| panic!("crate `{crate_name}` is not modeled"));
         files.push(GeneratedFile {
             path: format!("rust/{dir}/src/generated.rs"),
-            contents: render_module_for_crate(model, &service.crate_name),
+            contents: render_module_for_crate(model, crate_name),
         });
     }
     files.push(GeneratedFile {

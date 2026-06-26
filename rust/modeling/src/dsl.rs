@@ -5,7 +5,8 @@
 //! values ([`Service`], [`Port`]) are built with their own chains and handed up.
 
 use crate::model::{
-    CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
+    CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
+    TypeShape,
 };
 
 impl Model {
@@ -16,7 +17,20 @@ impl Model {
             crates: Vec::new(),
             types: Vec::new(),
             services: Vec::new(),
+            inbounds: Vec::new(),
         }
+    }
+
+    /// Add an inbound adapter named `name`, speaking `transport`, driving
+    /// `service`, hosted in `crate_name`.
+    pub fn inbound(mut self, name: &str, transport: Transport, service: &str, crate_name: &str) -> Self {
+        self.inbounds.push(Inbound {
+            name: name.to_string(),
+            transport,
+            service: service.to_string(),
+            crate_name: crate_name.to_string(),
+        });
+        self
     }
 
     /// Add a crate node at `layer` depending on `depends_on`.

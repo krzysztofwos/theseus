@@ -21,6 +21,24 @@ pub struct Model {
     pub types: Vec<TypeDef>,
     /// The services the tool runs.
     pub services: Vec<Service>,
+    /// The inbound adapters that drive services over a transport.
+    pub inbounds: Vec<Inbound>,
+}
+
+/// An inbound adapter: a transport that drives a service from the outside. The
+/// service's operations are its inbound contract. The adapter translates external
+/// input into operation calls. A service may carry more than one, and an adapter
+/// may live in a crate other than the service it drives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inbound {
+    /// Adapter name, e.g. `calculator`.
+    pub name: String,
+    /// The transport the adapter speaks.
+    pub transport: Transport,
+    /// The service the adapter drives.
+    pub service: String,
+    /// Cargo package name of the crate that hosts the adapter.
+    pub crate_name: String,
 }
 
 impl Model {
@@ -35,6 +53,11 @@ impl Model {
     /// Look up an operation by name across all services.
     pub fn operation(&self, name: &str) -> Option<&Operation> {
         self.operations().into_iter().find(|op| op.name == name)
+    }
+
+    /// Look up a service by name.
+    pub fn service_named(&self, name: &str) -> Option<&Service> {
+        self.services.iter().find(|service| service.name == name)
     }
 
     /// The service whose operations include `op_name`.

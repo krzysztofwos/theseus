@@ -28,6 +28,7 @@ pub(crate) fn sample_model() -> Model {
                 methods: vec![],
             }],
         }],
+        inbounds: vec![],
     }
 }
 

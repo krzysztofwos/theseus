@@ -20,6 +20,8 @@ pub enum Target {
     Dep { crate_name: String, dep: String },
     /// A service, by name — the parent an operation or port may attach to.
     Service(String),
+    /// An inbound adapter, by name.
+    Inbound(String),
     /// An operation, by name.
     Operation(String),
     /// A type, by name.
@@ -40,6 +42,7 @@ pub enum NodeKind {
     Crate,
     Dep,
     Service,
+    Inbound,
     Operation,
     Type,
     Port,
@@ -89,6 +92,7 @@ impl Target {
             Target::Crate(name) => format!("crate:{m}:{name}"),
             Target::Dep { crate_name, dep } => format!("dep:{m}:{crate_name}.{dep}"),
             Target::Service(name) => format!("service:{m}:{name}"),
+            Target::Inbound(name) => format!("inbound:{m}:{name}"),
             Target::Operation(name) => format!("op:{m}:{name}"),
             Target::Type(name) => format!("type:{m}:{name}"),
             Target::Port(name) => format!("port:{m}:{name}"),
@@ -105,6 +109,7 @@ impl Target {
             Target::Crate(_) => "crate",
             Target::Dep { .. } => "dependency",
             Target::Service(_) => "service",
+            Target::Inbound(_) => "inbound",
             Target::Operation(_) => "operation",
             Target::Type(_) => "type",
             Target::Port(_) => "port",
@@ -122,6 +127,7 @@ impl NodeKind {
             "crate" => NodeKind::Crate,
             "dep" => NodeKind::Dep,
             "service" => NodeKind::Service,
+            "inbound" => NodeKind::Inbound,
             "operation" => NodeKind::Operation,
             "type" => NodeKind::Type,
             "port" => NodeKind::Port,
@@ -138,6 +144,7 @@ impl NodeKind {
             NodeKind::Crate => "crate",
             NodeKind::Dep => "dependency",
             NodeKind::Service => "service",
+            NodeKind::Inbound => "inbound",
             NodeKind::Operation => "operation",
             NodeKind::Type => "type",
             NodeKind::Port => "port",

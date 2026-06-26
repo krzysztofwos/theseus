@@ -98,6 +98,16 @@ fn all_handles(model: &Model) -> Vec<Handle> {
         ));
     }
 
+    for inbound in &model.inbounds {
+        let target = Target::Inbound(inbound.name.clone());
+        handles.push(handle(
+            model,
+            target,
+            inbound.name.clone(),
+            format!("{:?} inbound driving {}", inbound.transport, inbound.service),
+        ));
+    }
+
     for op in model.operations() {
         let target = Target::Operation(op.name.clone());
         handles.push(handle(model, target, op.name.clone(), op.summary.clone()));
@@ -246,6 +256,7 @@ mod tests {
                 .map(|c| c.depends_on.len())
                 .sum::<usize>()
             + model.services.len()
+            + model.inbounds.len()
             + model.operations().len()
             + model.types.len()
             + model

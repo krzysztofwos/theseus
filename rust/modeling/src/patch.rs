@@ -16,7 +16,10 @@ use serde::Serialize;
 
 use crate::{
     hash::model_hash,
-    model::{CrateNode, Field, Method, Model, Operation, Port, Service, TypeDef, TypeShape},
+    model::{
+        CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
+        TypeShape,
+    },
     path::{NodeKind, Target},
 };
 
@@ -221,6 +224,14 @@ fn plan_add(
             allow_keys(attrs, &["crate"])?;
             required(attrs, "crate")?;
         }
+        NodeKind::Inbound => {
+            under_root(&parent, kind)?;
+            free(inbound_exists(model, name), "inbound", name)?;
+            allow_keys(attrs, &["transport", "service", "crate"])?;
+            parse_transport(required(attrs, "transport")?).map_err(transport_refused)?;
+            required(attrs, "service")?;
+            required(attrs, "crate")?;
+        }
         NodeKind::Operation => {
             attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
@@ -377,6 +388,13 @@ fn apply_add(
             operations: Vec::new(),
             outbound: Vec::new(),
         }),
+        NodeKind::Inbound => model.inbounds.push(Inbound {
+            name: name.to_string(),
+            transport: parse_transport(attr(attrs, "transport").unwrap_or("Cli"))
+                .expect("transport validated during planning"),
+            service: attr(attrs, "service").unwrap_or_default().to_string(),
+            crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
+        }),
         NodeKind::Operation => {
             let service =
                 target_service_index(model, parent).expect("service resolved in planning");
@@ -444,6 +462,7 @@ fn apply_remove(model: &mut Model, target: &Target) {
             }
         }
         Target::Service(name) => model.services.retain(|service| &service.name != name),
+        Target::Inbound(name) => model.inbounds.retain(|inbound| &inbound.name != name),
         Target::Operation(name) => {
             for service in &mut model.services {
                 service.operations.retain(|op| &op.name != name);
@@ -492,6 +511,13 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
             for service in &mut model.services {
                 if service.crate_name == *name {
                     service.crate_name = to.to_string();
+                }
+            }
+        }
+        Target::Inbound(name) => {
+            for inbound in &mut model.inbounds {
+                if &inbound.name == name {
+                    inbound.name = to.to_string();
                 }
             }
         }
@@ -612,6 +638,16 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
                 set_if(attrs, "doc", &mut field.doc);
             }
         }
+        Target::Inbound(name) => {
+            if let Some(inbound) = model.inbounds.iter_mut().find(|i| &i.name == name) {
+                set_if(attrs, "service", &mut inbound.service);
+                set_if(attrs, "crate", &mut inbound.crate_name);
+                if let Some(transport) = attr(attrs, "transport").and_then(|v| parse_transport(v).ok())
+                {
+                    inbound.transport = transport;
+                }
+            }
+        }
         Target::Dep { .. }
         | Target::Service(_)
         | Target::Type(_)
@@ -640,6 +676,12 @@ fn describe(plan: &Plan) -> Vec<String> {
                 NodeKind::Service => {
                     format!("+ service {at} (in {})", attr(attrs, "crate").unwrap_or(""))
                 }
+                NodeKind::Inbound => format!(
+                    "+ inbound {at} ({} driving {} in {})",
+                    attr(attrs, "transport").unwrap_or(""),
+                    attr(attrs, "service").unwrap_or(""),
+                    attr(attrs, "crate").unwrap_or(""),
+                ),
                 NodeKind::Crate => format!(
                     "+ crate {at} ({} at layer {})",
                     attr(attrs, "dir").unwrap_or(""),
@@ -672,6 +714,7 @@ fn address(target: &Target) -> String {
         Target::Model => "model".to_string(),
         Target::Crate(name)
         | Target::Service(name)
+        | Target::Inbound(name)
         | Target::Operation(name)
         | Target::Type(name)
         | Target::Port(name) => name.clone(),
@@ -836,6 +879,7 @@ fn required<'a>(attrs: &'a [(String, String)], key: &str) -> Result<&'a str, Vec
 fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
         Target::Crate(_) => &["dir", "layer"],
+        Target::Inbound(_) => &["transport", "service", "crate"],
         Target::Operation(_) | Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
@@ -853,6 +897,7 @@ fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
         Target::Crate(_) => model.crate_named(to).is_some(),
         Target::Dep { crate_name, .. } => dep_exists(model, crate_name, to),
         Target::Service(_) => service_exists(model, to),
+        Target::Inbound(_) => inbound_exists(model, to),
         Target::Operation(_) => model.operation(to).is_some(),
         Target::Type(_) => model.type_def(to).is_some(),
         Target::Port(_) => port_exists(model, to),
@@ -869,6 +914,7 @@ fn node_exists(model: &Model, target: &Target) -> bool {
         Target::Crate(name) => model.crate_named(name).is_some(),
         Target::Dep { crate_name, dep } => dep_exists(model, crate_name, dep),
         Target::Service(name) => service_exists(model, name),
+        Target::Inbound(name) => inbound_exists(model, name),
         Target::Operation(name) => model.operation(name).is_some(),
         Target::Type(name) => model.type_def(name).is_some(),
         Target::Port(name) => port_exists(model, name),
@@ -904,6 +950,10 @@ fn port_exists(model: &Model, name: &str) -> bool {
 
 fn service_exists(model: &Model, name: &str) -> bool {
     model.services.iter().any(|service| service.name == name)
+}
+
+fn inbound_exists(model: &Model, name: &str) -> bool {
+    model.inbounds.iter().any(|inbound| inbound.name == name)
 }
 
 /// Whether `crate_name` already declares a dependency on `dep`.
@@ -1102,6 +1152,24 @@ enum ShapeError {
     UnknownKind(String),
     #[error("struct field must be `name=Type`")]
     Field,
+}
+
+/// Parse an inbound transport name into a [`Transport`].
+fn parse_transport(text: &str) -> Result<Transport, String> {
+    match text {
+        "Cli" => Ok(Transport::Cli),
+        "Http" => Ok(Transport::Http),
+        "Grpc" => Ok(Transport::Grpc),
+        other => Err(format!("unknown transport `{other}`")),
+    }
+}
+
+fn transport_refused(message: String) -> Vec<Diagnostic> {
+    vec![diagnostic(
+        "PATCH013",
+        message,
+        "transport is one of: Cli, Http, Grpc",
+    )]
 }
 
 /// Parse a shape spec into a [`TypeShape`]: `newtype:Inner`, `foreign:Path`,
@@ -1323,6 +1391,47 @@ mod tests {
             .find(|p| p.name == "calculator")
             .expect("the port was added to the named service");
         assert_eq!(port.target.as_deref(), Some("Calculator"));
+    }
+
+    #[test]
+    fn add_an_inbound_adapter() {
+        let model = sample_model();
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "inbound",
+                "tools",
+                &[
+                    ("transport", "Cli"),
+                    ("service", "Sample"),
+                    ("crate", "sample"),
+                ],
+            ),
+        );
+        let inbound = model
+            .inbounds
+            .iter()
+            .find(|i| i.name == "tools")
+            .expect("the inbound was added");
+        assert_eq!(inbound.service, "Sample");
+        assert_eq!(inbound.crate_name, "sample");
+        assert_eq!(inbound.transport, Transport::Cli);
+    }
+
+    #[test]
+    fn add_inbound_rejects_an_unknown_transport() {
+        let model = sample_model();
+        let (outcome, _) = edit(
+            &model,
+            add(
+                "model:sample",
+                "inbound",
+                "tools",
+                &[("transport", "Telepathy"), ("service", "Sample")],
+            ),
+        );
+        assert_eq!(code(&outcome), "PATCH013");
     }
 
     #[test]

@@ -131,7 +131,8 @@ fn request_fields<'a>(op: &Operation, model: &'a Model) -> &'a [Field] {
 
 /// Render one request field as a command-line argument. The field type decides
 /// the shape: `bool` is a flag, `Vec<T>` a repeatable value, `Option<T>` an
-/// optional value, anything else a required value.
+/// optional value, anything else a required value. A non-`String` value type is
+/// parsed and validated as that type.
 fn render_arg(field: &Field) -> TokenStream {
     let flag = field.name.replace('_', "-");
     let help = &field.doc;
@@ -139,11 +140,29 @@ fn render_arg(field: &Field) -> TokenStream {
         quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::SetTrue).help(#help)) }
     } else if field.ty.starts_with("Vec<") {
         quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Append).help(#help)) }
-    } else if field.ty.starts_with("Option<") {
-        quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Set).help(#help)) }
+    } else if let Some(inner) = optional_inner(&field.ty) {
+        let parser = value_parser(inner);
+        quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Set) #parser .help(#help)) }
     } else {
-        quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Set).required(true).help(#help)) }
+        let parser = value_parser(&field.ty);
+        quote! { .arg(Arg::new(#flag).long(#flag).action(ArgAction::Set).required(true) #parser .help(#help)) }
     }
+}
+
+/// The `.value_parser(...)` fragment for a typed argument. A `String` value needs
+/// none. Any other value type is parsed and validated as that type.
+fn value_parser(ty: &str) -> TokenStream {
+    if ty == "String" {
+        quote! {}
+    } else {
+        let ty = syn_type(ty);
+        quote! { .value_parser(clap::value_parser!(#ty)) }
+    }
+}
+
+/// The element type of an `Option<…>` label, when the label is one.
+fn optional_inner(ty: &str) -> Option<&str> {
+    ty.strip_prefix("Option<")?.strip_suffix('>')
 }
 
 /// Render one outbound port as a trait. The hand-written adapter implements it.
@@ -248,11 +267,12 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
         })
         .collect();
 
-    // The `arg` closure reads a single optional value; emit it only when a field
-    // reads one (a flag and a repeatable value read the matches directly).
+    // The `arg` closure reads a single optional string; emit it only when a field
+    // reads one (flags, repeatable values, and typed values read the matches with
+    // their own type).
     let arg_closure = if fields
         .iter()
-        .any(|field| field.ty != "bool" && !field.ty.starts_with("Vec<"))
+        .any(|field| field.ty == "String" || field.ty == "Option<String>")
     {
         quote! { let arg = |name: &str| matches.get_one::<String>(name).cloned(); }
     } else {
@@ -288,17 +308,26 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
 
 /// The expression that reads one request field from the parsed arguments: a flag
 /// for `bool`, the collected values for `Vec<T>`, an optional value for
-/// `Option<T>`, otherwise a required value.
+/// `Option<T>`, otherwise a required value. A non-`String` value is read as its
+/// parsed type.
 fn field_parse(field: &Field) -> TokenStream {
     let flag = field.name.replace('_', "-");
     if field.ty == "bool" {
         quote! { matches.get_flag(#flag) }
     } else if field.ty.starts_with("Vec<") {
         quote! { matches.get_many::<String>(#flag).map(|values| values.cloned().collect()).unwrap_or_default() }
-    } else if field.ty.starts_with("Option<") {
-        quote! { arg(#flag) }
-    } else {
+    } else if let Some(inner) = optional_inner(&field.ty) {
+        if inner == "String" {
+            quote! { arg(#flag) }
+        } else {
+            let inner = syn_type(inner);
+            quote! { matches.get_one::<#inner>(#flag).cloned() }
+        }
+    } else if field.ty == "String" {
         quote! { arg(#flag).unwrap_or_default() }
+    } else {
+        let ty = syn_type(&field.ty);
+        quote! { matches.get_one::<#ty>(#flag).cloned().unwrap_or_default() }
     }
 }
 
@@ -517,10 +546,28 @@ fn snake_case(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Model, Service, Transport};
 
     #[test]
     fn case_helpers() {
         assert_eq!(pascal_case("source-store"), "SourceStore");
         assert_eq!(snake_case("source-store"), "source_store");
+    }
+
+    #[test]
+    fn a_typed_request_field_parses_as_its_type() {
+        let model = Model::new("Calc")
+            .struct_type("Operands", &[("a", "f64", "Left operand.")])
+            .service(Service::new("Calc", Transport::Cli).operation(
+                "add",
+                "Add.",
+                "Operands",
+                "Empty",
+            ));
+        let rendered = render_cli_module(&model);
+        // The argument validates as the field type, and the field reads it back.
+        assert!(rendered.contains("value_parser"));
+        assert!(rendered.contains("get_one::<f64>"));
+        assert!(rendered.contains("pub a: f64"));
     }
 }

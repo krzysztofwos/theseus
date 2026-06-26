@@ -5,6 +5,7 @@
 //! that holds it, projected back to its builder form.
 
 use theseus_modeling::{Model, Port, Service, Transport};
+
 pub fn theseus_model() -> Model {
     Model::new("Theseus")
         .crate_node("theseus-kernel", "kernel", 0, &[])

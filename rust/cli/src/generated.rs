@@ -2,6 +2,7 @@
 //! Theseus's generated scaffolding: command surface, request types, invocation, service contract, dispatch, outbound ports, composition root.
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
+
 /// Writes generated files into the workspace.
 pub trait Workspace {
     /// Write one generated file to disk.
@@ -10,12 +11,14 @@ pub trait Workspace {
         request: &theseus_modeling::GeneratedFile,
     ) -> anyhow::Result<()>;
 }
+
 /// Composition root: the model plus the wired outbound ports.
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,
     pub workspace: &'a dyn Workspace,
     pub calculator: &'a dyn theseus_calculator::CalculatorService,
 }
+
 /// The `QueryRequest` request.
 #[derive(Debug, Clone)]
 pub struct QueryRequest {
@@ -26,6 +29,7 @@ pub struct QueryRequest {
     /// Keep only handles of this element kind (operation, type, or port).
     pub kind: Option<String>,
 }
+
 /// The `PatchRequest` request.
 #[derive(Debug, Clone)]
 pub struct PatchRequest {
@@ -48,6 +52,7 @@ pub struct PatchRequest {
     /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.
     pub edit: Vec<String>,
 }
+
 /// The `ImplementRequest` request.
 #[derive(Debug, Clone)]
 pub struct ImplementRequest {
@@ -60,12 +65,14 @@ pub struct ImplementRequest {
     /// Read the body from this file, or from stdin when `-`. Overrides body.
     pub body_file: Option<String>,
 }
+
 /// The `ShowRequest` request.
 #[derive(Debug, Clone)]
 pub struct ShowRequest {
     /// Name of the operation whose handler to show.
     pub method: String,
 }
+
 /// The `CalcRequest` request.
 #[derive(Debug, Clone)]
 pub struct CalcRequest {
@@ -76,6 +83,7 @@ pub struct CalcRequest {
     /// Right operand.
     pub b: f64,
 }
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait TheseusService {
@@ -83,14 +91,17 @@ pub trait TheseusService {
     fn model(&self) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: model")
     }
+
     /// Check that the workspace conforms to its self-model.
     fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
         anyhow::bail!("unimplemented operation: verify")
     }
+
     /// Regenerate model-derived code from the self-model.
     fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         anyhow::bail!("unimplemented operation: generate")
     }
+
     /// Return a stable handle and model hash for a model element.
     fn query(
         &self,
@@ -98,6 +109,7 @@ pub trait TheseusService {
     ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
         anyhow::bail!("unimplemented operation: query")
     }
+
     /// Propose a hash-checked edit to the model.
     fn patch(
         &self,
@@ -105,27 +117,33 @@ pub trait TheseusService {
     ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
         anyhow::bail!("unimplemented operation: patch")
     }
+
     /// Report which operations have an authored handler.
     fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         anyhow::bail!("unimplemented operation: coverage")
     }
+
     /// Splice an authored handler for an unimplemented operation.
     fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: implement")
     }
+
     /// Show an operation's current handler source.
     fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: show")
     }
+
     /// Evaluate an arithmetic expression through the calculator service.
     fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: calc")
     }
+
     /// Write the skeleton of each library service crate that is missing it.
     fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         anyhow::bail!("unimplemented operation: scaffold")
     }
 }
+
 /// Build the command surface from the model.
 pub fn command() -> Command {
     Command::new("theseus")
@@ -320,6 +338,7 @@ pub fn command() -> Command {
                 ),
         )
 }
+
 fn parse_queryrequest(matches: &ArgMatches) -> QueryRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     QueryRequest {
@@ -328,6 +347,7 @@ fn parse_queryrequest(matches: &ArgMatches) -> QueryRequest {
         kind: arg("kind"),
     }
 }
+
 fn parse_patchrequest(matches: &ArgMatches) -> PatchRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     PatchRequest {
@@ -348,6 +368,7 @@ fn parse_patchrequest(matches: &ArgMatches) -> PatchRequest {
             .unwrap_or_default(),
     }
 }
+
 fn parse_implementrequest(matches: &ArgMatches) -> ImplementRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     ImplementRequest {
@@ -357,12 +378,14 @@ fn parse_implementrequest(matches: &ArgMatches) -> ImplementRequest {
         body_file: arg("body-file"),
     }
 }
+
 fn parse_showrequest(matches: &ArgMatches) -> ShowRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     ShowRequest {
         method: arg("method").unwrap_or_default(),
     }
 }
+
 fn parse_calcrequest(matches: &ArgMatches) -> CalcRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     CalcRequest {
@@ -371,6 +394,7 @@ fn parse_calcrequest(matches: &ArgMatches) -> CalcRequest {
         b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
     }
 }
+
 pub enum Invocation {
     Model,
     Verify,
@@ -383,6 +407,7 @@ pub enum Invocation {
     Calc(CalcRequest),
     Scaffold,
 }
+
 impl Invocation {
     /// Parse the invocation from the matched command line.
     pub fn from_matches(matches: &ArgMatches) -> Self {
@@ -403,6 +428,7 @@ impl Invocation {
         }
     }
 }
+
 /// Dispatch a parsed invocation to the service and render its result:
 /// text for a string, otherwise pretty JSON. The authored entry point
 /// overrides the operations that need bespoke output and delegates here.

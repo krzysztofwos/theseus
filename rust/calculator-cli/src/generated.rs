@@ -2,6 +2,7 @@
 //! Theseus's generated scaffolding: command surface, request types, invocation, service contract, dispatch, outbound ports, composition root.
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
+
 /// Build the command surface from the model.
 pub fn command() -> Command {
     Command::new("calculator")
@@ -88,18 +89,21 @@ pub fn command() -> Command {
                 ),
         )
 }
+
 fn parse_operands(matches: &ArgMatches) -> theseus_calculator::Operands {
     theseus_calculator::Operands {
         a: matches.get_one::<f64>("a").cloned().unwrap_or_default(),
         b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
     }
 }
+
 pub enum Invocation {
     Add(theseus_calculator::Operands),
     Subtract(theseus_calculator::Operands),
     Multiply(theseus_calculator::Operands),
     Divide(theseus_calculator::Operands),
 }
+
 impl Invocation {
     /// Parse the invocation from the matched command line.
     pub fn from_matches(matches: &ArgMatches) -> Self {
@@ -112,6 +116,7 @@ impl Invocation {
         }
     }
 }
+
 /// Dispatch a parsed invocation to the service and render its result:
 /// text for a string, otherwise pretty JSON. The authored entry point
 /// overrides the operations that need bespoke output and delegates here.

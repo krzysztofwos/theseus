@@ -30,7 +30,7 @@ pub fn render_model_source(model: &Model, header: &str, function: &str) -> Strin
         }
     };
     let file = syn::parse2(tokens).expect("rendered model source is valid Rust");
-    let body = prettyplease::unparse(&file);
+    let body = crate::codegen::space_items(&prettyplease::unparse(&file));
     format!("{header}{body}")
 }
 

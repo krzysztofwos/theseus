@@ -9,6 +9,7 @@ pub struct Operands {
     /// Right operand.
     pub b: f64,
 }
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait CalculatorService {
@@ -16,14 +17,17 @@ pub trait CalculatorService {
     fn add(&self, _request: Operands) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: add")
     }
+
     /// Subtract the operands.
     fn subtract(&self, _request: Operands) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: subtract")
     }
+
     /// Multiply the operands.
     fn multiply(&self, _request: Operands) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: multiply")
     }
+
     /// Divide the operands.
     fn divide(&self, _request: Operands) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: divide")

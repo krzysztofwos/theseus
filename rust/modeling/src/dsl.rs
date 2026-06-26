@@ -88,10 +88,18 @@ impl Service {
     pub fn new(name: &str, inbound: Transport) -> Self {
         Service {
             name: name.to_string(),
+            crate_name: String::new(),
             inbound,
             operations: Vec::new(),
             outbound: Vec::new(),
         }
+    }
+
+    /// Place the service in the crate named `crate_name`. Code generation renders
+    /// its contract into that crate.
+    pub fn crate_name(mut self, crate_name: &str) -> Self {
+        self.crate_name = crate_name.to_string();
+        self
     }
 
     /// Add an operation.

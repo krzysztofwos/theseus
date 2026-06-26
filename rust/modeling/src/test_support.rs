@@ -15,6 +15,7 @@ pub(crate) fn sample_model() -> Model {
         types: vec![],
         services: vec![Service {
             name: "Sample".to_string(),
+            crate_name: "sample".to_string(),
             inbound: Transport::Cli,
             operations: vec![
                 operation("greet", "Greet."),

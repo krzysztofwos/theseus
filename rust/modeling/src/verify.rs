@@ -95,13 +95,14 @@ impl VerifyReport {
 ///
 /// `workspace_root` is the repository root (the directory holding `rust/`).
 /// `generated` is the set of files the adopter expects on disk, each compared
-/// against a fresh render for the drift gate. `impl_path` is the workspace-relative
-/// authored file implementing the service trait, read for the coverage check.
+/// against a fresh render for the drift gate. `impls` pairs each service name with
+/// the workspace-relative authored file implementing its trait, read for the
+/// coverage check.
 pub fn verify(
     model: &Model,
     workspace_root: &Path,
     generated: &[GeneratedFile],
-    impl_path: &str,
+    impls: &[(String, String)],
 ) -> VerifyReport {
     let mut report = VerifyReport::new();
 
@@ -132,7 +133,7 @@ pub fn verify(
 
     report.record(
         "operations: every operation has an authored handler",
-        check_implementation_coverage(model, workspace_root, impl_path),
+        check_implementation_coverage(model, workspace_root, impls),
     );
 
     report
@@ -140,15 +141,22 @@ pub fn verify(
 
 /// Every modeled operation must have an authored handler. An operation left on
 /// the service trait's `unimplemented` default is reported here, moving the gate
-/// on missing behavior from the compiler to verification.
+/// on missing behavior from the compiler to verification. Each service's handlers
+/// are read from the file `impls` pairs with its name.
 fn check_implementation_coverage(
     model: &Model,
     root: &Path,
-    impl_path: &str,
+    impls: &[(String, String)],
 ) -> Result<String, String> {
-    let source =
-        fs::read_to_string(root.join(impl_path)).map_err(|e| format!("reading {impl_path}: {e}"))?;
-    let report = crate::coverage::coverage(model, &source).map_err(|e| e.to_string())?;
+    let report = crate::coverage::coverage(model, |service| {
+        let path = impls
+            .iter()
+            .find(|(name, _)| name == &service.name)
+            .map(|(_, path)| path.as_str())
+            .ok_or_else(|| format!("no authored impl path for service `{}`", service.name))?;
+        fs::read_to_string(root.join(path)).map_err(|e| format!("reading {path}: {e}"))
+    })
+    .map_err(|e| e.to_string())?;
     if report.unimplemented.is_empty() {
         Ok(format!("{} operation(s) all implemented", report.total))
     } else {
@@ -538,7 +546,9 @@ mod tests {
         // A struct field typed as a scalar primitive needs no definition.
         let model = Model::new("Sample")
             .struct_type("Operands", &[("a", "f64", "")])
-            .service(Service::new("Sample", Transport::Cli).operation("op", "", "Operands", "Empty"));
+            .service(
+                Service::new("Sample", Transport::Cli).operation("op", "", "Operands", "Empty"),
+            );
         assert!(check_type_references(&model).is_ok());
     }
 }

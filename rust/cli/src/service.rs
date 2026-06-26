@@ -8,16 +8,16 @@
 //! [`main`](crate) stay hand-written.
 
 use anyhow::Context;
-use theseus_model::{AUTHORED_IMPL_PATH, generated_files};
+use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
     CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
     apply_edits, coverage, describe, handler_source, model_hash, query, verify,
 };
 
-use crate::generated::{
-    Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+use crate::{
+    generated::{Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService},
+    workspace_root,
 };
-use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
     fn model(&self) -> anyhow::Result<String> {
@@ -29,7 +29,7 @@ impl TheseusService for Ctx<'_> {
             self.model,
             &workspace_root(),
             &generated_files(self.model),
-            AUTHORED_IMPL_PATH,
+            &authored_impls(self.model),
         ))
     }
 
@@ -50,14 +50,17 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn coverage(&self) -> anyhow::Result<CoverageReport> {
-        let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
-            .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
-        Ok(coverage(self.model, &source)?)
+        let root = workspace_root();
+        Ok(coverage(self.model, |service| -> anyhow::Result<String> {
+            let path = authored_impl_path(self.model, service);
+            std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
+        })?)
     }
 
     fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
-            .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
+        let path = self.handler_path(&request.method)?;
+        let source = std::fs::read_to_string(workspace_root().join(&path))
+            .with_context(|| format!("reading {path}"))?;
         Ok(handler_source(self.model, &source, &request.method)?)
     }
 
@@ -70,8 +73,9 @@ impl TheseusService for Ctx<'_> {
             );
         }
         let body = resolve_body(&request)?;
-        let source = std::fs::read_to_string(workspace_root().join(AUTHORED_IMPL_PATH))
-            .with_context(|| format!("reading {AUTHORED_IMPL_PATH}"))?;
+        let path = self.handler_path(&request.method)?;
+        let source = std::fs::read_to_string(workspace_root().join(&path))
+            .with_context(|| format!("reading {path}"))?;
         let spliced = theseus_modeling::implement(
             self.model,
             &source,
@@ -80,11 +84,11 @@ impl TheseusService for Ctx<'_> {
             "crate::generated::",
         )?;
         self.workspace.write_file(&GeneratedFile {
-            path: AUTHORED_IMPL_PATH.to_string(),
+            path: path.clone(),
             contents: spliced,
         })?;
         Ok(format!(
-            "wrote the handler for `{}` into {AUTHORED_IMPL_PATH}. Rebuild to load it",
+            "wrote the handler for `{}` into {path}. Rebuild to load it",
             request.method
         ))
     }
@@ -116,6 +120,18 @@ impl TheseusService for Ctx<'_> {
     }
 }
 
+impl Ctx<'_> {
+    /// The authored impl file holding the handler for `method`: the `service.rs`
+    /// of the crate the method's service lives in.
+    fn handler_path(&self, method: &str) -> anyhow::Result<String> {
+        let service = self
+            .model
+            .service_of_operation(method)
+            .with_context(|| format!("no operation named `{method}`"))?;
+        Ok(authored_impl_path(self.model, service))
+    }
+}
+
 /// The handler body for an implement request: read from `--body-file` (or stdin
 /// when `-`) if given, otherwise the inline `--body`.
 fn resolve_body(request: &ImplementRequest) -> anyhow::Result<String> {
@@ -136,7 +152,10 @@ fn resolve_body(request: &ImplementRequest) -> anyhow::Result<String> {
 /// Build the structured [`Edit`] from a parsed patch request — the inbound
 /// adapter's wire-to-domain conversion for the verb vocabulary.
 fn build_edit(request: &PatchRequest) -> anyhow::Result<Edit> {
-    let verb = request.verb.as_deref().context("patch needs --verb or --edit")?;
+    let verb = request
+        .verb
+        .as_deref()
+        .context("patch needs --verb or --edit")?;
     let target = request.target.clone().context("patch needs --target")?;
     make_edit(
         verb,

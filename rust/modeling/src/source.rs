@@ -95,11 +95,18 @@ fn render_field(field: &Field) -> TokenStream {
 fn render_service(service: &Service) -> TokenStream {
     let name = &service.name;
     let transport = format_ident!("{}", format!("{:?}", service.inbound));
+    let crate_name = if service.crate_name.is_empty() {
+        quote! {}
+    } else {
+        let name = &service.crate_name;
+        quote! { .crate_name(#name) }
+    };
     let operations = service.operations.iter().map(render_operation);
     let ports = service.outbound.iter().map(render_port);
     quote! {
         .service(
             Service::new(#name, Transport::#transport)
+                #crate_name
                 #(#operations)*
                 #(#ports)*
         )

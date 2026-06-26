@@ -19,7 +19,7 @@ mod verify;
 #[cfg(test)]
 mod test_support;
 
-pub use codegen::{GeneratedFile, render_cli_module};
+pub use codegen::{GeneratedFile, render_cli_module, render_module_for_crate};
 pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use hash::model_hash;
 pub use implement::{ImplementError, handler_source, implement};

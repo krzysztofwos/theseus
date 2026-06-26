@@ -37,6 +37,13 @@ impl Model {
         self.operations().into_iter().find(|op| op.name == name)
     }
 
+    /// The service whose operations include `op_name`.
+    pub fn service_of_operation(&self, op_name: &str) -> Option<&Service> {
+        self.services
+            .iter()
+            .find(|service| service.operations.iter().any(|op| op.name == op_name))
+    }
+
     /// Look up a type definition by name.
     pub fn type_def(&self, name: &str) -> Option<&TypeDef> {
         self.types.iter().find(|t| t.name == name)
@@ -63,11 +70,15 @@ pub struct CrateNode {
     pub depends_on: Vec<String>,
 }
 
-/// A service: an inbound transport, a set of operations, and outbound ports.
+/// A service: an inbound transport, a set of operations, and outbound ports,
+/// living in one crate of the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Service {
     /// Service name.
     pub name: String,
+    /// Cargo package name of the crate this service lives in. Code generation
+    /// renders the service's contract into that crate.
+    pub crate_name: String,
     /// How the service is invoked.
     pub inbound: Transport,
     /// The operations the service exposes.

@@ -6,18 +6,43 @@
 mod self_model;
 
 pub use self_model::theseus_model;
-use theseus_modeling::{GeneratedFile, Model, render_cli_module, render_model_source};
+use theseus_modeling::{
+    GeneratedFile, Model, Service, render_model_source, render_module_for_crate,
+};
 
 /// The self-model source file, relative to the workspace root. It is the model's
 /// own projection — `generate` and `patch` reproject it.
 pub const SELF_MODEL_PATH: &str = "rust/model/src/self_model.rs";
 
-/// The generated scaffolding module, relative to the workspace root.
-pub const GENERATED_CLI_PATH: &str = "rust/cli/src/generated.rs";
+/// The authored service implementation for `service`, relative to the workspace
+/// root: the `service.rs` of the crate the service lives in. `verify` and the
+/// coverage report read it to find which operations have a handler.
+pub fn authored_impl_path(model: &Model, service: &Service) -> String {
+    let dir = crate_dir(model, service);
+    format!("rust/{dir}/src/service.rs")
+}
 
-/// The authored service implementation, relative to the workspace root. `verify`
-/// and the coverage report read it to find which operations have a handler.
-pub const AUTHORED_IMPL_PATH: &str = "rust/cli/src/service.rs";
+/// The authored impl path of every service, paired with the service name.
+pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
+    model
+        .services
+        .iter()
+        .map(|service| (service.name.clone(), authored_impl_path(model, service)))
+        .collect()
+}
+
+/// The directory under `rust/` of the crate a service lives in.
+fn crate_dir<'a>(model: &'a Model, service: &Service) -> &'a str {
+    model
+        .crate_named(&service.crate_name)
+        .map(|node| node.dir.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "service `{}` names unknown crate `{}`",
+                service.name, service.crate_name
+            )
+        })
+}
 
 /// The leading comment block of the projected self-model source.
 const SELF_MODEL_HEADER: &str = concat!(
@@ -33,23 +58,31 @@ const SELF_MODEL_HEADER: &str = concat!(
 /// source itself. `generate` and `patch` write them. `verify` drift-gates them, so
 /// the self-model source is checked to be a fixed point of the renderer.
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
-    vec![
-        GeneratedFile {
-            path: GENERATED_CLI_PATH.to_string(),
-            contents: render_cli_module(model),
-        },
-        GeneratedFile {
-            path: SELF_MODEL_PATH.to_string(),
-            contents: render_model_source(model, SELF_MODEL_HEADER, "theseus_model"),
-        },
-    ]
+    let mut files = Vec::new();
+    let mut rendered: Vec<&str> = Vec::new();
+    for service in &model.services {
+        if rendered.contains(&service.crate_name.as_str()) {
+            continue;
+        }
+        rendered.push(&service.crate_name);
+        let dir = crate_dir(model, service);
+        files.push(GeneratedFile {
+            path: format!("rust/{dir}/src/generated.rs"),
+            contents: render_module_for_crate(model, &service.crate_name),
+        });
+    }
+    files.push(GeneratedFile {
+        path: SELF_MODEL_PATH.to_string(),
+        contents: render_model_source(model, SELF_MODEL_HEADER, "theseus_model"),
+    });
+    files
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use theseus_modeling::verify;
+    use theseus_modeling::{render_cli_module, verify};
 
     use super::*;
 
@@ -83,7 +116,7 @@ mod tests {
             &model,
             &workspace_root(),
             &generated_files(&model),
-            AUTHORED_IMPL_PATH,
+            &authored_impls(&model),
         );
         assert!(
             report.conformant,
@@ -103,7 +136,7 @@ mod tests {
             &model,
             &workspace_root(),
             &generated_files(&model),
-            AUTHORED_IMPL_PATH,
+            &authored_impls(&model),
         );
         assert!(!report.conformant);
     }

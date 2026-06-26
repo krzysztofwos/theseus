@@ -28,9 +28,31 @@ pub struct GeneratedFile {
     pub contents: String,
 }
 
-/// Render the generated scaffolding as formatted Rust source.
+/// Render the generated scaffolding for the crate owning the inbound CLI service.
 pub fn render_cli_module(model: &Model) -> String {
-    let ports = outbound_ports(model);
+    let crate_name = model
+        .services
+        .iter()
+        .find(|service| service.inbound == Transport::Cli)
+        .map(|service| service.crate_name.as_str())
+        .unwrap_or("");
+    render_module_for_crate(model, crate_name)
+}
+
+/// Render the generated scaffolding for one crate: the services it owns, their
+/// request types and contract traits, the outbound ports they depend on with the
+/// composition root that carries them, and — when the crate owns the inbound CLI
+/// service — the command surface, parsed invocation, and default presentation.
+pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
+    let services: Vec<&Service> = model
+        .services
+        .iter()
+        .filter(|service| service.crate_name == crate_name)
+        .collect();
+    let ports: Vec<&Port> = services
+        .iter()
+        .flat_map(|service| service.outbound.iter())
+        .collect();
     let port_traits: Vec<TokenStream> = ports
         .iter()
         .map(|port| render_port_trait(port, model))
@@ -41,17 +63,12 @@ pub fn render_cli_module(model: &Model) -> String {
         render_composition_root(&ports)
     };
 
-    // Every service contributes a trait, and the request types are rendered once
-    // across all of them. The command surface, the invocation, and the default
-    // presentation come from the inbound CLI service.
-    let service_traits: Vec<TokenStream> = model
-        .services
+    let service_traits: Vec<TokenStream> = services
         .iter()
         .map(|service| render_service_trait(service, model))
         .collect();
-    let requests = render_request_structs(model);
-    let (command, invocation, present) = match model
-        .services
+    let requests = render_request_structs(&services, model);
+    let (command, invocation, present) = match services
         .iter()
         .find(|service| service.inbound == Transport::Cli)
     {
@@ -90,15 +107,6 @@ pub fn render_cli_module(model: &Model) -> String {
 fn doc(text: &str) -> TokenStream {
     let line = format!(" {text}");
     quote! { #[doc = #line] }
-}
-
-/// Every outbound port across all services.
-fn outbound_ports(model: &Model) -> Vec<&Port> {
-    model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .collect()
 }
 
 /// Render the command surface: one subcommand per operation of the CLI service.
@@ -222,12 +230,12 @@ fn render_composition_root(ports: &[&Port]) -> TokenStream {
     }
 }
 
-/// Render each distinct request struct used by any service's operations.
-fn render_request_structs(model: &Model) -> TokenStream {
+/// Render each distinct request struct the given services' operations use.
+fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
     let mut seen: Vec<&str> = Vec::new();
-    let structs: Vec<TokenStream> = model
-        .operations()
-        .into_iter()
+    let structs: Vec<TokenStream> = services
+        .iter()
+        .flat_map(|service| service.operations.iter())
         .filter_map(|op| request_type(op, model))
         .filter(|def| {
             let fresh = !seen.contains(&def.name.as_str());

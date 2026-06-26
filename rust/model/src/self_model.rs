@@ -103,6 +103,7 @@ pub fn theseus_model() -> Model {
         )
         .service(
             Service::new("Theseus", Transport::Cli)
+                .crate_name("theseus-cli")
                 .operation(
                     "model",
                     "Print Theseus's model of itself as JSON.",

@@ -41,15 +41,23 @@ pub enum CoverageError {
     /// The authored impl source did not parse as Rust.
     #[error("parsing the authored impl: {0}")]
     Parse(String),
+    /// A service's authored impl source could not be read.
+    #[error("reading a service's authored impl: {0}")]
+    Source(String),
 }
 
-/// Report which of the model's operations have an authored handler in
-/// `impl_source` — the source of the file implementing the service trait.
-pub fn coverage(model: &Model, impl_source: &str) -> Result<CoverageReport, CoverageError> {
+/// Report which of the model's operations have an authored handler. `source_of`
+/// supplies the source of each service's authored impl, so a model whose services
+/// live in different crates is covered by reading each crate's file.
+pub fn coverage<E: std::fmt::Display>(
+    model: &Model,
+    mut source_of: impl FnMut(&Service) -> Result<String, E>,
+) -> Result<CoverageReport, CoverageError> {
     let mut total = 0;
     let mut unimplemented = Vec::new();
     for service in &model.services {
-        let implemented = implemented_methods(impl_source, &service_trait_name(service))?;
+        let source = source_of(service).map_err(|e| CoverageError::Source(e.to_string()))?;
+        let implemented = implemented_methods(&source, &service_trait_name(service))?;
         for op in &service.operations {
             total += 1;
             if !implemented.contains(&op.name) {
@@ -106,11 +114,19 @@ mod tests {
     use super::*;
     use crate::test_support::sample_model;
 
+    /// A resolver that hands every service the same source.
+    fn from(source: &str) -> impl FnMut(&Service) -> Result<String, String> + '_ {
+        move |_| Ok(source.to_string())
+    }
+
     #[test]
     fn reports_an_unimplemented_operation() {
         // The sample model has operations `greet` and `status`.
-        let source = "impl SampleService for Ctx { fn greet(&self) {} }";
-        let report = coverage(&sample_model(), source).unwrap();
+        let report = coverage(
+            &sample_model(),
+            from("impl SampleService for Ctx { fn greet(&self) {} }"),
+        )
+        .unwrap();
         assert_eq!(report.total, 2);
         assert_eq!(report.implemented, 1);
         assert_eq!(report.unimplemented.len(), 1);
@@ -119,23 +135,29 @@ mod tests {
 
     #[test]
     fn a_fully_implemented_impl_leaves_no_gaps() {
-        let source = "impl SampleService for Ctx { fn greet(&self) {} fn status(&self) {} }";
-        let report = coverage(&sample_model(), source).unwrap();
+        let report = coverage(
+            &sample_model(),
+            from("impl SampleService for Ctx { fn greet(&self) {} fn status(&self) {} }"),
+        )
+        .unwrap();
         assert!(report.unimplemented.is_empty());
         assert_eq!(report.implemented, 2);
     }
 
     #[test]
     fn methods_outside_the_service_trait_are_ignored() {
-        let source = "impl Other for Ctx { fn greet(&self) {} }";
-        let report = coverage(&sample_model(), source).unwrap();
+        let report = coverage(
+            &sample_model(),
+            from("impl Other for Ctx { fn greet(&self) {} }"),
+        )
+        .unwrap();
         assert_eq!(report.implemented, 0);
     }
 
     #[test]
     fn unparseable_source_is_an_error() {
         assert!(matches!(
-            coverage(&sample_model(), "fn (").unwrap_err(),
+            coverage(&sample_model(), from("fn (")).unwrap_err(),
             CoverageError::Parse(_)
         ));
     }

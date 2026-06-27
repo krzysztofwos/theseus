@@ -96,6 +96,8 @@ pub struct CalcRequest {
 pub struct ChatRequest {
     /// The user's message that opens or continues the conversation.
     pub message: String,
+    /// Permit the agent to call mutating tools that rewrite Theseus's own model.
+    pub allow_writes: bool,
 }
 
 /// The inbound service contract: one method per operation, each defaulting
@@ -369,6 +371,14 @@ pub fn command() -> Command {
                         .help(
                             "The user's message that opens or continues the conversation.",
                         ),
+                )
+                .arg(
+                    Arg::new("allow-writes")
+                        .long("allow-writes")
+                        .action(ArgAction::SetTrue)
+                        .help(
+                            "Permit the agent to call mutating tools that rewrite Theseus's own model.",
+                        ),
                 ),
         )
 }
@@ -433,6 +443,7 @@ fn parse_chatrequest(matches: &ArgMatches) -> ChatRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     ChatRequest {
         message: arg("message").unwrap_or_default(),
+        allow_writes: matches.get_flag("allow-writes"),
     }
 }
 

@@ -135,6 +135,11 @@ pub fn theseus_model() -> Model {
                     "String",
                     "The user's message that opens or continues the conversation.",
                 ),
+                (
+                    "allow_writes",
+                    "bool",
+                    "Permit the agent to call mutating tools that rewrite Theseus's own model.",
+                ),
             ],
         )
         .foreign_type("ChatReply", "String")

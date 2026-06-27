@@ -15,14 +15,14 @@ use theseus_modeling::{
 };
 
 use crate::generated::{
-    CalcRequest, ChatRequest, Ctx, ImplementRequest, Llm, PatchRequest, QueryRequest, ShowRequest,
+    CalcRequest, ChatRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
     TheseusService,
 };
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
     fn chat(&self, request: ChatRequest) -> anyhow::Result<String> {
-        run_agent(self, self.llm, &request.message)
+        run_agent(self, &request.message, request.allow_writes)
     }
 
     fn model(&self) -> anyhow::Result<String> {
@@ -189,11 +189,16 @@ const MAX_TURNS: usize = 8;
 
 /// The framing handed to the model: the tool surface and the reply protocol. The
 /// offline stub ignores it. A real model adapter relies on it.
-const SYSTEM: &str = "You are Theseus, answering questions about your own model by \
+const SYSTEM: &str = "You are Theseus, inspecting and editing your own model by \
 calling tools. Reply with exactly one JSON object: {\"tool\": name, \"input\": {…}} \
 to call a tool, or {\"answer\": text} to finish. Tools: model (no input), query \
 (input: find, node, kind, each an optional string), verify (no input), coverage \
-(no input).";
+(no input), patch (input: edit, a list of `verb|target|key=value` strings, and \
+write, a bool — applying a write needs the chat to permit it).";
+
+/// The result fed back when a write tool runs without the permission gate.
+const WRITE_REFUSED: &str =
+    "writes are not permitted; rerun chat with --allow-writes to apply this edit";
 
 /// The model's next move, parsed from one completion.
 enum AgentAction {
@@ -208,19 +213,16 @@ enum AgentAction {
 
 /// Run the agent loop: the model drives Theseus's own operations as tools. The
 /// transcript opens with the framing and the user's message. Each turn the model
-/// either calls a tool, whose result is appended, or answers and ends.
-fn run_agent(
-    service: &impl TheseusService,
-    llm: &dyn Llm,
-    message: &str,
-) -> anyhow::Result<String> {
+/// either calls a tool, whose result is appended, or answers and ends. A mutating
+/// tool runs only when `allow_writes` permits it.
+fn run_agent(ctx: &Ctx<'_>, message: &str, allow_writes: bool) -> anyhow::Result<String> {
     let mut transcript = format!("{SYSTEM}\n\nUser: {message}\n");
     for _ in 0..MAX_TURNS {
-        let reply = llm.complete(&transcript)?;
+        let reply = ctx.llm.complete(&transcript)?;
         match parse_action(&reply)? {
             AgentAction::Answer(answer) => return Ok(answer),
             AgentAction::Tool { name, input } => {
-                let result = run_tool(service, &name, &input)?;
+                let result = run_tool(ctx, &name, &input, allow_writes)?;
                 transcript.push_str(&format!("Assistant: call {name}\nTool result: {result}\n"));
             }
         }
@@ -249,18 +251,20 @@ fn parse_action(reply: &str) -> anyhow::Result<AgentAction> {
     anyhow::bail!("the model reply was neither a tool call nor an answer: {reply}")
 }
 
-/// Run one tool — a read-only self-modeling operation — and return its result as
-/// a JSON string to feed back to the model. The tool surface is Theseus's own
-/// operations.
+/// Run one tool — one of Theseus's own operations — and return its result as a
+/// JSON string to feed back to the model. The tool surface is Theseus's own
+/// operations, so the loop edits the model it inspects. A `patch` that writes is
+/// refused unless `allow_writes` permits it.
 fn run_tool(
-    service: &impl TheseusService,
+    ctx: &Ctx<'_>,
     name: &str,
     input: &serde_json::Value,
+    allow_writes: bool,
 ) -> anyhow::Result<String> {
     match name {
-        "model" => service.model(),
-        "verify" => Ok(serde_json::to_string(&service.verify()?)?),
-        "coverage" => Ok(serde_json::to_string(&service.coverage()?)?),
+        "model" => ctx.model(),
+        "verify" => Ok(serde_json::to_string(&ctx.verify()?)?),
+        "coverage" => Ok(serde_json::to_string(&ctx.coverage()?)?),
         "query" => {
             let field = |key: &str| {
                 input
@@ -273,9 +277,56 @@ fn run_tool(
                 node: field("node"),
                 kind: field("kind"),
             };
-            Ok(serde_json::to_string(&service.query(request)?)?)
+            Ok(serde_json::to_string(&ctx.query(request)?)?)
         }
-        other => anyhow::bail!("unknown tool `{other}`; tools are model, query, verify, coverage"),
+        "patch" => {
+            let request = patch_request(input, model_hash(ctx.model));
+            if request.write && !allow_writes {
+                return Ok(WRITE_REFUSED.to_string());
+            }
+            Ok(serde_json::to_string(&ctx.patch(request)?)?)
+        }
+        other => {
+            anyhow::bail!("unknown tool `{other}`; tools are model, query, verify, coverage, patch")
+        }
+    }
+}
+
+/// Build a patch request from the model's JSON tool input, stamping the current
+/// model hash so the model need not track it.
+fn patch_request(input: &serde_json::Value, model_hash: String) -> PatchRequest {
+    let field = |key: &str| {
+        input
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let list = |key: &str| {
+        input
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    PatchRequest {
+        verb: field("verb"),
+        target: field("target"),
+        kind: field("kind"),
+        name: field("name"),
+        to: field("to"),
+        set: list("set"),
+        edit: list("edit"),
+        write: input
+            .get("write")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        expect_model_hash: model_hash,
     }
 }
 
@@ -404,8 +455,12 @@ mod tests {
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
-    use super::run_tool;
+    use super::{WRITE_REFUSED, run_tool};
     use crate::generated::{ChatRequest, Ctx, Llm, TheseusService, Workspace};
+
+    /// An edit that adds a throwaway type, for exercising the `patch` tool. The
+    /// no-op workspace discards any reprojection, so a write touches no files.
+    const PROBE_EDIT: &str = "add|model:theseus|kind=type|name=Probe|shape=foreign:String";
 
     /// A model that replays a fixed script of completions, so the loop runs with
     /// no network.
@@ -457,6 +512,7 @@ mod tests {
         let reply = ctx
             .chat(ChatRequest {
                 message: "What can you do?".to_string(),
+                allow_writes: false,
             })
             .expect("the loop answers");
         assert_eq!(reply, "Theseus exposes a chat operation.");
@@ -474,11 +530,57 @@ mod tests {
             calculator: &calculator,
             llm: &llm,
         };
-        let result = run_tool(&ctx, "query", &serde_json::json!({ "kind": "operation" }))
-            .expect("the query tool runs");
+        let result = run_tool(
+            &ctx,
+            "query",
+            &serde_json::json!({ "kind": "operation" }),
+            false,
+        )
+        .expect("the query tool runs");
         assert!(
             result.contains("chat"),
             "the chat operation handle should appear: {result}"
+        );
+    }
+
+    #[test]
+    fn a_write_is_refused_without_the_gate() {
+        let model = theseus_model();
+        let workspace = NoopWorkspace;
+        let calculator = theseus_calculator::Calculator;
+        let llm = ScriptedLlm::new(["unused"]);
+        let ctx = Ctx {
+            model: &model,
+            workspace: &workspace,
+            calculator: &calculator,
+            llm: &llm,
+        };
+        let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
+        let result = run_tool(&ctx, "patch", &input, false).expect("the tool returns a result");
+        assert_eq!(result, WRITE_REFUSED);
+    }
+
+    #[test]
+    fn a_write_is_allowed_with_the_gate() {
+        let model = theseus_model();
+        let workspace = NoopWorkspace;
+        let calculator = theseus_calculator::Calculator;
+        let llm = ScriptedLlm::new(["unused"]);
+        let ctx = Ctx {
+            model: &model,
+            workspace: &workspace,
+            calculator: &calculator,
+            llm: &llm,
+        };
+        let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
+        let result = run_tool(&ctx, "patch", &input, true).expect("the patch tool runs");
+        assert!(
+            result.contains(r#""ok":true"#),
+            "the patch should apply: {result}"
+        );
+        assert!(
+            result.contains("Probe"),
+            "the diff should name the new type: {result}"
         );
     }
 }

@@ -84,3 +84,17 @@ The tool surface is read-only by choice. A write tool (`patch`/`generate`) close
 ### Result
 
 `theseus chat --message "…"` runs the loop end to end against the offline stub, which answers without tools. The scripted tests run the loop with a tool call. Green: full suite, clippy, conformant.
+
+### The write tool and the allow-writes gate
+
+The loop's tool surface was read-only. A `patch` tool now closes the self-modification loop: the model proposes edits as a list of `verb|target|key=value` strings — the same batch vocabulary `theseus patch --edit` takes — and the loop builds the request, stamping the current model hash so the model never tracks it. The agent edits the model it inspects.
+
+A `patch` that writes is refused unless the chat permits it. `allow_writes` returns to `ChatRequest` — added through the protocol, now with a consumer — and surfaces as the generated `--allow-writes` flag, default off. When a write tool runs without it, the loop feeds a refusal back to the model rather than failing, so the model can adapt. This is the one irreducible permission for an agent that can rewrite its own source.
+
+Two offline tests cover the gate, both driving `run_tool` directly with a `write: true` patch: refused without the flag (exact-matching the refusal text), applied with it. The applied case runs the real edit through a no-op workspace, which discards the reprojection — the test asserts the outcome is `ok` and the diff names the new type, and touches no files on disk.
+
+One in-process limit, noted not fixed: a write reprojects `self_model.rs` and `generated.rs` to disk, but the running agent's in-memory model is the fixed `theseus_model()` value, so later tool calls in the same session still see the pre-write model. The write persists; a rebuild loads it. Within one process the agent cannot see its own edits reflected.
+
+### Result
+
+The self-modification loop is closed and gated. Offline, the suite proves a scripted model can call a read-only tool and answer, and that the write gate refuses or permits a `patch` by the flag. `theseus chat --message "…" --allow-writes` accepts the flag and runs the loop; the offline stub still answers without tools. The remaining step is the real model adapter — blocking HTTP behind the same `Llm` port — so a live model drives the loop.

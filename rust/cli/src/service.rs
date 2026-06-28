@@ -10,13 +10,14 @@
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
-    apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files, verify,
+    CoverageReport, Edit, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
+    apply_edit, apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files,
+    verify,
 };
 
 use crate::generated::{
     CalcRequest, ChatRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
-    TheseusService,
+    TheseusService, Workspace,
 };
 use crate::workspace_root;
 
@@ -153,14 +154,8 @@ impl TheseusService for Ctx<'_> {
             // Reproject every file from the proposed model — the self-model source
             // and the generated scaffolding update together. A new operation's
             // handler defaults to unimplemented until authored here, and `coverage`
-            // reports what is left to write. A crate's generated code is deferred
-            // until the crate is scaffolded.
-            let root = workspace_root();
-            for file in generated_files(&proposed) {
-                if crate_is_scaffolded(&root, &file) {
-                    self.workspace.write_file(&file)?;
-                }
-            }
+            // reports what is left to write.
+            persist(&proposed, self.workspace)?;
         }
         Ok(outcome)
     }
@@ -216,13 +211,16 @@ enum AgentAction {
 /// either calls a tool, whose result is appended, or answers and ends. A mutating
 /// tool runs only when `allow_writes` permits it.
 fn run_agent(ctx: &Ctx<'_>, message: &str, allow_writes: bool) -> anyhow::Result<String> {
+    // The agent edits a working copy of the model, so each edit it makes is visible
+    // to its own later turns. A write also reprojects to disk through the workspace.
+    let mut working = ctx.model.clone();
     let mut transcript = format!("{SYSTEM}\n\nUser: {message}\n");
     for _ in 0..MAX_TURNS {
         let reply = ctx.llm.complete(&transcript)?;
         match parse_action(&reply)? {
             AgentAction::Answer(answer) => return Ok(answer),
             AgentAction::Tool { name, input } => {
-                let result = run_tool(ctx, &name, &input, allow_writes)?;
+                let result = run_tool(&mut working, ctx.workspace, &name, &input, allow_writes)?;
                 transcript.push_str(&format!("Assistant: call {name}\nTool result: {result}\n"));
             }
         }
@@ -256,78 +254,96 @@ fn parse_action(reply: &str) -> anyhow::Result<AgentAction> {
 /// operations, so the loop edits the model it inspects. A `patch` that writes is
 /// refused unless `allow_writes` permits it.
 fn run_tool(
-    ctx: &Ctx<'_>,
+    working: &mut Model,
+    workspace: &dyn Workspace,
     name: &str,
     input: &serde_json::Value,
     allow_writes: bool,
 ) -> anyhow::Result<String> {
     match name {
-        "model" => ctx.model(),
-        "verify" => Ok(serde_json::to_string(&ctx.verify()?)?),
-        "coverage" => Ok(serde_json::to_string(&ctx.coverage()?)?),
+        "model" => Ok(describe(working)),
+        "verify" => {
+            let root = workspace_root();
+            let report = verify(
+                working,
+                &root,
+                &generated_files(working),
+                &authored_impls(working),
+            );
+            Ok(serde_json::to_string(&report)?)
+        }
+        "coverage" => {
+            let root = workspace_root();
+            let report = coverage(working, |service| -> anyhow::Result<String> {
+                let path = authored_impl_path(working, service);
+                std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
+            })?;
+            Ok(serde_json::to_string(&report)?)
+        }
         "query" => {
-            let field = |key: &str| {
-                input
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            };
-            let request = QueryRequest {
-                find: field("find"),
-                node: field("node"),
-                kind: field("kind"),
-            };
-            Ok(serde_json::to_string(&ctx.query(request)?)?)
-        }
-        "patch" => {
-            let request = patch_request(input, model_hash(ctx.model));
-            if request.write && !allow_writes {
-                return Ok(WRITE_REFUSED.to_string());
+            let text = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
+            let mut outcome = query(working, text("find"), text("node"))?;
+            if let Some(kind) = text("kind") {
+                outcome.handles.retain(|handle| handle.kind == kind);
             }
-            Ok(serde_json::to_string(&ctx.patch(request)?)?)
+            Ok(serde_json::to_string(&outcome)?)
         }
+        "patch" => run_patch(working, workspace, input, allow_writes),
         other => {
             anyhow::bail!("unknown tool `{other}`; tools are model, query, verify, coverage, patch")
         }
     }
 }
 
-/// Build a patch request from the model's JSON tool input, stamping the current
-/// model hash so the model need not track it.
-fn patch_request(input: &serde_json::Value, model_hash: String) -> PatchRequest {
-    let field = |key: &str| {
-        input
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-    };
-    let list = |key: &str| {
-        input
-            .get(key)
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    PatchRequest {
-        verb: field("verb"),
-        target: field("target"),
-        kind: field("kind"),
-        name: field("name"),
-        to: field("to"),
-        set: list("set"),
-        edit: list("edit"),
-        write: input
-            .get("write")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        expect_model_hash: model_hash,
+/// Apply a `patch` tool call to the session's working model. Every accepted edit
+/// updates the working model, so the agent sees it on its next turn. A `write`
+/// additionally reprojects to disk, and is refused without `allow_writes`.
+fn run_patch(
+    working: &mut Model,
+    workspace: &dyn Workspace,
+    input: &serde_json::Value,
+    allow_writes: bool,
+) -> anyhow::Result<String> {
+    let specs: Vec<&str> = input
+        .get("edit")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| items.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    if specs.is_empty() {
+        anyhow::bail!("patch needs an `edit` list of `verb|target|key=value` strings");
     }
+    let edits = specs
+        .iter()
+        .map(|spec| parse_edit_spec(spec))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let write = input
+        .get("write")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let (outcome, proposed) = apply_edits(working, &edits, &model_hash(working));
+    if let Some(proposed) = proposed {
+        if write {
+            if !allow_writes {
+                return Ok(WRITE_REFUSED.to_string());
+            }
+            persist(&proposed, workspace)?;
+        }
+        *working = proposed;
+    }
+    Ok(serde_json::to_string(&outcome)?)
+}
+
+/// Reproject a model to disk through the workspace port, writing each generated
+/// file whose crate is scaffolded.
+fn persist(model: &Model, workspace: &dyn Workspace) -> anyhow::Result<()> {
+    let root = workspace_root();
+    for file in generated_files(model) {
+        if crate_is_scaffolded(&root, &file) {
+            workspace.write_file(&file)?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
@@ -520,18 +536,10 @@ mod tests {
 
     #[test]
     fn the_query_tool_finds_the_chat_operation() {
-        let model = theseus_model();
-        let workspace = NoopWorkspace;
-        let calculator = theseus_calculator::Calculator;
-        let llm = ScriptedLlm::new(["unused"]);
-        let ctx = Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &calculator,
-            llm: &llm,
-        };
+        let mut working = theseus_model();
         let result = run_tool(
-            &ctx,
+            &mut working,
+            &NoopWorkspace,
             "query",
             &serde_json::json!({ "kind": "operation" }),
             false,
@@ -544,36 +552,48 @@ mod tests {
     }
 
     #[test]
+    fn the_agent_sees_its_own_edit() {
+        let mut working = theseus_model();
+        // An in-memory edit, no write, updates the session's working model.
+        run_tool(
+            &mut working,
+            &NoopWorkspace,
+            "patch",
+            &serde_json::json!({ "edit": [PROBE_EDIT] }),
+            false,
+        )
+        .expect("the patch applies in memory");
+        // A later query in the same session sees the new type.
+        let result = run_tool(
+            &mut working,
+            &NoopWorkspace,
+            "query",
+            &serde_json::json!({ "node": "type:theseus:Probe" }),
+            false,
+        )
+        .expect("the query tool runs");
+        assert!(
+            result.contains("Probe"),
+            "the edit should be visible to a later turn: {result}"
+        );
+    }
+
+    #[test]
     fn a_write_is_refused_without_the_gate() {
-        let model = theseus_model();
-        let workspace = NoopWorkspace;
-        let calculator = theseus_calculator::Calculator;
-        let llm = ScriptedLlm::new(["unused"]);
-        let ctx = Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &calculator,
-            llm: &llm,
-        };
+        let mut working = theseus_model();
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = run_tool(&ctx, "patch", &input, false).expect("the tool returns a result");
+        let result = run_tool(&mut working, &NoopWorkspace, "patch", &input, false)
+            .expect("the tool returns a result");
         assert_eq!(result, WRITE_REFUSED);
     }
 
     #[test]
     fn a_write_is_allowed_with_the_gate() {
-        let model = theseus_model();
-        let workspace = NoopWorkspace;
-        let calculator = theseus_calculator::Calculator;
-        let llm = ScriptedLlm::new(["unused"]);
-        let ctx = Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &calculator,
-            llm: &llm,
-        };
+        let mut working = theseus_model();
+        // The no-op workspace discards the reprojection, so this touches no files.
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = run_tool(&ctx, "patch", &input, true).expect("the patch tool runs");
+        let result = run_tool(&mut working, &NoopWorkspace, "patch", &input, true)
+            .expect("the patch tool runs");
         assert!(
             result.contains(r#""ok":true"#),
             "the patch should apply: {result}"

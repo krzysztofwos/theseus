@@ -98,3 +98,17 @@ One in-process limit, noted not fixed: a write reprojects `self_model.rs` and `g
 ### Result
 
 The self-modification loop is closed and gated. Offline, the suite proves a scripted model can call a read-only tool and answer, and that the write gate refuses or permits a `patch` by the flag. `theseus chat --message "…" --allow-writes` accepts the flag and runs the loop; the offline stub still answers without tools. The remaining step is the real model adapter — blocking HTTP behind the same `Llm` port — so a live model drives the loop.
+
+### Closing the in-session staleness
+
+The earlier limit — a write persisted to disk but the running agent kept reading the fixed `theseus_model()` value, so it could not see its own edits within a session — is now closed.
+
+The loop clones the model into a working copy at the start of the session and threads it through the tools. Every accepted `patch` updates the working model, so a `query`, `verify`, or `model` on a later turn sees the edit. The corrected model was never far away: `apply_edits` already returns it; the loop simply keeps it as the session's model rather than discarding it.
+
+This moves the tools off the fixed-model service methods. `run_tool` now calls the operation functions — `query`, `apply_edits`, `verify`, `coverage`, `describe` — against the working model directly. These are the same functions the CLI handlers wrap; the loop binds them to the session's mutable model rather than the composition root's fixed one. The agent's tools are still Theseus's own operations, now over a model that moves as the agent edits it.
+
+The `write` flag keeps its meaning: persist to disk, gated by `allow_writes`. An in-memory edit always applies and is ephemeral — discarded when the process exits unless a write persists it. So an agent without the gate can still reason over hypothetical edits in memory; only persistence to its own source is gated.
+
+A `persist` helper now shares the reprojection between the loop and the CLI `patch` handler. The new test adds a type with no write, then queries it on a later call and finds it — the proof that the session sees its own edits.
+
+What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits; across a restart the rebuilt binary loads them.

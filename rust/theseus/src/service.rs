@@ -4,21 +4,21 @@
 //! generated [`TheseusService`](crate::generated::TheseusService) contract. An
 //! operation without a handler here falls through to the trait's `unimplemented`
 //! default, and `verify`'s coverage check reports it. This is the one file the
-//! structured-edit tooling writes. The composition root and adapters in
-//! [`main`](crate) stay hand-written.
+//! structured-edit tooling writes. The composition root and adapters live in the
+//! inbound binaries (`theseus-cli`, and the agent and MCP adapters to come).
 
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    CoverageReport, Edit, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
-    apply_edit, apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files,
-    verify,
+    CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
+    apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files, verify,
 };
 
 use crate::generated::{
     CalcRequest, ChatRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
-    TheseusService, Workspace,
+    TheseusService,
 };
+use crate::session::{Session, persist};
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
@@ -174,8 +174,9 @@ impl Ctx<'_> {
 }
 
 // ============================================================================
-// The agent loop — the `chat` handler's behavior. The model drives Theseus's own
-// read-only operations as tools, so the loop closes onto the model it inspects.
+// The agent loop — the `chat` handler's behavior. The model drives a `Session`,
+// calling Theseus's own operations as tools, so the loop edits the model it
+// inspects. An external host over MCP drives the same `Session`.
 // ============================================================================
 
 /// The most model turns the loop runs before giving up, a guard against a model
@@ -190,10 +191,6 @@ to call a tool, or {\"answer\": text} to finish. Tools: model (no input), query 
 (input: find, node, kind, each an optional string), verify (no input), coverage \
 (no input), patch (input: edit, a list of `verb|target|key=value` strings, and \
 write, a bool — applying a write needs the chat to permit it).";
-
-/// The result fed back when a write tool runs without the permission gate.
-const WRITE_REFUSED: &str =
-    "writes are not permitted; rerun chat with --allow-writes to apply this edit";
 
 /// The model's next move, parsed from one completion.
 enum AgentAction {
@@ -211,16 +208,16 @@ enum AgentAction {
 /// either calls a tool, whose result is appended, or answers and ends. A mutating
 /// tool runs only when `allow_writes` permits it.
 fn run_agent(ctx: &Ctx<'_>, message: &str, allow_writes: bool) -> anyhow::Result<String> {
-    // The agent edits a working copy of the model, so each edit it makes is visible
-    // to its own later turns. A write also reprojects to disk through the workspace.
-    let mut working = ctx.model.clone();
+    // The session holds a working copy of the model, so each edit the agent makes
+    // is visible to its own later turns. The MCP inbound drives the same session.
+    let mut session = Session::new(ctx.model.clone(), ctx.workspace, allow_writes);
     let mut transcript = format!("{SYSTEM}\n\nUser: {message}\n");
     for _ in 0..MAX_TURNS {
         let reply = ctx.llm.complete(&transcript)?;
         match parse_action(&reply)? {
             AgentAction::Answer(answer) => return Ok(answer),
             AgentAction::Tool { name, input } => {
-                let result = run_tool(&mut working, ctx.workspace, &name, &input, allow_writes)?;
+                let result = session.call(&name, &input)?;
                 transcript.push_str(&format!("Assistant: call {name}\nTool result: {result}\n"));
             }
         }
@@ -249,108 +246,11 @@ fn parse_action(reply: &str) -> anyhow::Result<AgentAction> {
     anyhow::bail!("the model reply was neither a tool call nor an answer: {reply}")
 }
 
-/// Run one tool — one of Theseus's own operations — and return its result as a
-/// JSON string to feed back to the model. The tool surface is Theseus's own
-/// operations, so the loop edits the model it inspects. A `patch` that writes is
-/// refused unless `allow_writes` permits it.
-fn run_tool(
-    working: &mut Model,
-    workspace: &dyn Workspace,
-    name: &str,
-    input: &serde_json::Value,
-    allow_writes: bool,
-) -> anyhow::Result<String> {
-    match name {
-        "model" => Ok(describe(working)),
-        "verify" => {
-            let root = workspace_root();
-            let report = verify(
-                working,
-                &root,
-                &generated_files(working),
-                &authored_impls(working),
-            );
-            Ok(serde_json::to_string(&report)?)
-        }
-        "coverage" => {
-            let root = workspace_root();
-            let report = coverage(working, |service| -> anyhow::Result<String> {
-                let path = authored_impl_path(working, service);
-                std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
-            })?;
-            Ok(serde_json::to_string(&report)?)
-        }
-        "query" => {
-            let text = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
-            let mut outcome = query(working, text("find"), text("node"))?;
-            if let Some(kind) = text("kind") {
-                outcome.handles.retain(|handle| handle.kind == kind);
-            }
-            Ok(serde_json::to_string(&outcome)?)
-        }
-        "patch" => run_patch(working, workspace, input, allow_writes),
-        other => {
-            anyhow::bail!("unknown tool `{other}`; tools are model, query, verify, coverage, patch")
-        }
-    }
-}
-
-/// Apply a `patch` tool call to the session's working model. Every accepted edit
-/// updates the working model, so the agent sees it on its next turn. A `write`
-/// additionally reprojects to disk, and is refused without `allow_writes`.
-fn run_patch(
-    working: &mut Model,
-    workspace: &dyn Workspace,
-    input: &serde_json::Value,
-    allow_writes: bool,
-) -> anyhow::Result<String> {
-    let specs: Vec<&str> = input
-        .get("edit")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| items.iter().filter_map(serde_json::Value::as_str).collect())
-        .unwrap_or_default();
-    if specs.is_empty() {
-        anyhow::bail!("patch needs an `edit` list of `verb|target|key=value` strings");
-    }
-    let edits = specs
-        .iter()
-        .map(|spec| parse_edit_spec(spec))
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    let write = input
-        .get("write")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-
-    let (outcome, proposed) = apply_edits(working, &edits, &model_hash(working));
-    if let Some(proposed) = proposed {
-        if write {
-            if !allow_writes {
-                return Ok(WRITE_REFUSED.to_string());
-            }
-            persist(&proposed, workspace)?;
-        }
-        *working = proposed;
-    }
-    Ok(serde_json::to_string(&outcome)?)
-}
-
-/// Reproject a model to disk through the workspace port, writing each generated
-/// file whose crate is scaffolded.
-fn persist(model: &Model, workspace: &dyn Workspace) -> anyhow::Result<()> {
-    let root = workspace_root();
-    for file in generated_files(model) {
-        if crate_is_scaffolded(&root, &file) {
-            workspace.write_file(&file)?;
-        }
-    }
-    Ok(())
-}
-
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
 /// A crate added to the model is registered before its skeleton is written, so
 /// its generated code waits for `scaffold` rather than landing in a directory
 /// the workspace cannot yet build.
-fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
+pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
     match file
         .path
         .strip_prefix("rust/")
@@ -399,7 +299,7 @@ fn build_edit(request: &PatchRequest) -> anyhow::Result<Edit> {
 /// Parse one batch edit spec, `verb|target|key=value|…`, into an [`Edit`]. The
 /// keys `kind`, `name`, and `to` set the matching fields. The rest are scalar
 /// assignments. A pipe never appears in a value, so it is the field separator.
-fn parse_edit_spec(spec: &str) -> anyhow::Result<Edit> {
+pub(crate) fn parse_edit_spec(spec: &str) -> anyhow::Result<Edit> {
     let mut parts = spec.split('|');
     let verb = parts.next().unwrap_or_default().trim();
     let target = parts
@@ -471,8 +371,8 @@ mod tests {
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
-    use super::{WRITE_REFUSED, run_tool};
     use crate::generated::{ChatRequest, Ctx, Llm, TheseusService, Workspace};
+    use crate::session::{Session, WRITE_REFUSED};
 
     /// An edit that adds a throwaway type, for exercising the `patch` tool. The
     /// no-op workspace discards any reprojection, so a write touches no files.
@@ -536,15 +436,9 @@ mod tests {
 
     #[test]
     fn the_query_tool_finds_the_chat_operation() {
-        let mut working = theseus_model();
-        let result = run_tool(
-            &mut working,
-            &NoopWorkspace,
-            "query",
-            &serde_json::json!({ "kind": "operation" }),
-            false,
-        )
-        .expect("the query tool runs");
+        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+            .call("query", &serde_json::json!({ "kind": "operation" }))
+            .expect("the query tool runs");
         assert!(
             result.contains("chat"),
             "the chat operation handle should appear: {result}"
@@ -552,47 +446,40 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_sees_its_own_edit() {
-        let mut working = theseus_model();
-        // An in-memory edit, no write, updates the session's working model.
-        run_tool(
-            &mut working,
-            &NoopWorkspace,
-            "patch",
-            &serde_json::json!({ "edit": [PROBE_EDIT] }),
-            false,
-        )
-        .expect("the patch applies in memory");
-        // A later query in the same session sees the new type.
-        let result = run_tool(
-            &mut working,
-            &NoopWorkspace,
-            "query",
-            &serde_json::json!({ "node": "type:theseus:Probe" }),
-            false,
-        )
-        .expect("the query tool runs");
+    fn the_session_sees_its_own_edit() {
+        let mut session = Session::new(theseus_model(), &NoopWorkspace, false);
+        // An in-memory edit, no write, updates the working model.
+        session
+            .call("patch", &serde_json::json!({ "edit": [PROBE_EDIT] }))
+            .expect("the patch applies in memory");
+        // A later call in the same session sees the new type.
+        let result = session
+            .call(
+                "query",
+                &serde_json::json!({ "node": "type:theseus:Probe" }),
+            )
+            .expect("the query tool runs");
         assert!(
             result.contains("Probe"),
-            "the edit should be visible to a later turn: {result}"
+            "the edit should be visible to a later call: {result}"
         );
     }
 
     #[test]
     fn a_write_is_refused_without_the_gate() {
-        let mut working = theseus_model();
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = run_tool(&mut working, &NoopWorkspace, "patch", &input, false)
+        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+            .call("patch", &input)
             .expect("the tool returns a result");
         assert_eq!(result, WRITE_REFUSED);
     }
 
     #[test]
     fn a_write_is_allowed_with_the_gate() {
-        let mut working = theseus_model();
         // The no-op workspace discards the reprojection, so this touches no files.
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = run_tool(&mut working, &NoopWorkspace, "patch", &input, true)
+        let result = Session::new(theseus_model(), &NoopWorkspace, true)
+            .call("patch", &input)
             .expect("the patch tool runs");
         assert!(
             result.contains(r#""ok":true"#),

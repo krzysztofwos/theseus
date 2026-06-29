@@ -6,12 +6,14 @@
 //! filesystem workspace and runs the loop over a single message.
 
 mod agent;
+mod anthropic;
 
 use anyhow::Context;
 use theseus::{FsWorkspace, Session};
 use theseus_model::theseus_model;
 
 use agent::{OfflineLlm, Reply, run_agent};
+use anthropic::AnthropicLlm;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -19,13 +21,18 @@ async fn main() -> anyhow::Result<()> {
     let workspace = FsWorkspace::at_repo_root();
     let mut session = Session::new(theseus_model(), &workspace, allow_writes);
 
-    // No real model adapter yet: the offline stub answers without calling tools.
-    // Step 3b wires an Anthropic adapter behind the same `Llm` port.
-    let llm = OfflineLlm::new([Reply::answer(
-        "the offline agent has no model behind it; wire the Anthropic adapter to drive tools",
-    )]);
-
-    let answer = run_agent(&llm, &mut session, &message).await?;
+    // A real model when the API key is set; the offline stub otherwise, so the
+    // binary runs with no network and the no-key path is obvious.
+    let answer = match AnthropicLlm::from_env() {
+        Some(llm) => run_agent(&llm, &mut session, &message).await?,
+        None => {
+            eprintln!("ANTHROPIC_API_KEY is unset; answering offline without tools");
+            let llm = OfflineLlm::new([Reply::answer(
+                "set ANTHROPIC_API_KEY to drive Theseus's tools with a real model",
+            )]);
+            run_agent(&llm, &mut session, &message).await?
+        }
+    };
     println!("{answer}");
     Ok(())
 }

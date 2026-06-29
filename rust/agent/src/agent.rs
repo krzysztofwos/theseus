@@ -34,9 +34,7 @@ pub enum Role {
 }
 
 /// A content block within a message. A model adapter reads these to build its API
-/// request; the offline stub ignores the conversation, so the fields read as
-/// unused until the Anthropic adapter lands.
-#[allow(dead_code)]
+/// request.
 pub enum Block {
     Text(String),
     ToolUse(ToolUse),
@@ -48,7 +46,6 @@ pub enum Block {
 
 /// A message in the running conversation. A model adapter reads it to build its
 /// API request.
-#[allow(dead_code)]
 pub struct Message {
     pub role: Role,
     pub blocks: Vec<Block>,

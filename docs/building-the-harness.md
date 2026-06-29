@@ -111,4 +111,30 @@ The `write` flag keeps its meaning: persist to disk, gated by `allow_writes`. An
 
 A `persist` helper now shares the reprojection between the loop and the CLI `patch` handler. The new test adds a type with no write, then queries it on a later call and finds it — the proof that the session sees its own edits.
 
+### The pivot: chat is an inbound, not an operation
+
+Modeling `chat` as one of Theseus's operations was a category error. The operations are capabilities — what the tool can do. Chat is a driver — a way to invoke those capabilities, like the CLI. It sits at the same level as the command surface, not inside it. The tell was the urge to mark `chat` so the tool catalog would exclude it from itself. A flag that says "this operation is not really an operation" is the model asking to be corrected.
+
+So chat moved out of the service and became an inbound, beside the CLI. The one binary split into a service library and a set of inbound binaries that drive it. `theseus` (the library, L3) holds the operations, the `Session`, and the shared tool catalog. `theseus-cli` keeps the command surface. `theseus-agent` runs the loop. The model gained a second transport kind for the agent loop, and the codegen learned that only a `Cli` inbound renders a command surface — an agent or server inbound is a purely authored binary, so the model renders nothing for it.
+
+The working model carried over unchanged. A `Session` now holds it, and both the agent loop and a server drive the same `Session::call`, so every inbound sees one tool surface with one set of semantics. The tool catalog is a curated, hand-written view of the operations — a subset, with simplified inputs — co-located with the dispatch it must agree with, and shared by every agent-driving inbound.
+
+### The real model adapter
+
+The `Llm` port gained a real implementation beside the offline stub. `AnthropicLlm` drives the loop over the Messages API with native tool use: the conversation and the catalog render into a request, and the reply's `tool_use` blocks come back as the tools the loop dispatches. The port stayed the seam — the loop is identical whether a scripted stub or a live model answers. Configuration is read from the environment, and the binary falls back to the offline stub when no key is set, so it runs with or without a network.
+
+The port turned async at this step. The loop and its inbound binaries run on a current-thread runtime at the transport edge, while the core — the kernel, the engine, the service — stays synchronous. The port method returns `impl Future`, so a synchronous stub and an async HTTP adapter satisfy the same trait with no boxing.
+
+### The second agent-driving inbound: MCP
+
+The agent loop drives Theseus from inside its own process. A Model Context Protocol server drives it from outside. The point is the comparison: an external agent — Claude Code, say — and Theseus's own loop can drive the same tools, over the same session, and be measured against each other. For that to be fair, the two must share one surface, not two parallel implementations of it.
+
+They do. `theseus-mcp` is a third inbound binary that serves `theseus::tool_catalog()` over stdio and dispatches each `tools/call` to a `Session::call` — the same catalog and the same dispatch the agent loop uses. The server implements the SDK's `ServerHandler`: `list_tools` renders the catalog into the protocol's `Tool` shape, and `call_tool` runs the named tool against the session and returns its result as text. A failed tool returns its error as the result so the host can recover, the way the loop feeds an error back into the conversation. A new transport kind models the inbound, and the write gate carries over as a launch flag — writes refused unless the server is started with `--allow-writes`.
+
+One wrinkle shaped the design. A `Session` borrows its workspace, so it cannot be held for the server's whole lifetime behind the `'static` bound the SDK requires. The server holds the working model behind a lock instead, and reconstructs a session per call over a copy of it, reading the model back through a new `Session::into_model` so accepted edits carry into the next call. The working-model semantics are preserved across calls without the session outliving any one of them.
+
+### Result
+
+Three inbounds now drive one service: the CLI, the in-process agent loop, and the MCP server. A stdio handshake against `theseus-mcp` — initialize, `tools/list`, `tools/call` — returns the five tools with their schemas and dispatches a `query` through the session, returning the model hash and the operation handles. The catalog the external host sees is the catalog the loop sends a model. Green: full suite, clippy, conformant. What remains is to run the comparison — register `theseus-mcp` with an external host and drive the same edits both ways.
+
 What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits. Across a restart the rebuilt binary loads them.

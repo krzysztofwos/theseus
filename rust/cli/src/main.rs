@@ -5,11 +5,11 @@
 //! [`Invocation`](generated::Invocation), the inbound
 //! [`TheseusService`](generated::TheseusService) contract, the outbound port
 //! traits, and the [`Ctx`](generated::Ctx) that carries the wired ports. Here we
-//! override presentation for the operations that need bespoke output — an exit
-//! code, per-file lines, a follow-up notice — and delegate the rest to the
-//! generated default presentation, then back the ports with real filesystem
-//! adapters. The operation handlers are the authored leaves in [`service`]. A new
-//! operation surfaces through the default, so adding one needs no change here.
+//! render bespoke output for the operations that need it — an exit code,
+//! per-file lines, a follow-up notice — and delegate the rest to the generated
+//! `dispatch`, then back the ports with real filesystem adapters. The operation
+//! handlers are the authored leaves in [`service`]. A new operation surfaces
+//! through the default, so adding one needs no change here.
 
 mod generated;
 mod service;
@@ -76,10 +76,10 @@ impl Llm for OfflineLlm {
 }
 
 // ============================================================================
-// Authored presentation — the CLI inbound adapter's response side. Each arm
-// overrides the default for an operation that needs bespoke output: an exit code,
-// per-file lines, a follow-up notice. Every other operation falls to the generated
-// `present`, so a new operation surfaces as text or JSON without a change here.
+// Authored output — the CLI inbound adapter's response side. Each arm overrides
+// the default for an operation that needs bespoke output: an exit code, per-file
+// lines, a follow-up notice. Every other operation falls to the generated
+// `dispatch`, so a new operation surfaces as text or JSON without a change here.
 // ============================================================================
 
 /// Run a parsed invocation against the service and write the result.

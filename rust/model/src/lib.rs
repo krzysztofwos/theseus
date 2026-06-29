@@ -7,7 +7,7 @@ mod self_model;
 
 pub use self_model::theseus_model;
 use theseus_modeling::{
-    GeneratedFile, Model, Service, render_model_source, render_module_for_crate,
+    GeneratedFile, Model, Service, Transport, render_model_source, render_module_for_crate,
 };
 
 /// The self-model source file, relative to the workspace root. It is the model's
@@ -60,7 +60,8 @@ const SELF_MODEL_HEADER: &str = concat!(
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
-    // Every crate that hosts a service or an inbound adapter gets a generated file.
+    // Every crate that hosts a service or a CLI inbound adapter gets a generated
+    // file. A non-CLI inbound renders no surface, so its crate gets none.
     let hosting = model
         .services
         .iter()
@@ -69,6 +70,7 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
             model
                 .inbounds
                 .iter()
+                .filter(|inbound| inbound.transport == Transport::Cli)
                 .map(|inbound| inbound.crate_name.as_str()),
         );
     for crate_name in hosting {

@@ -73,13 +73,14 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .map(|service| render_service_trait(service, model))
         .collect();
     let requests = render_request_structs(&services, model);
-    // An inbound adapter hosted in this crate renders the command surface, request
-    // parsers, parsed invocation, and dispatch for the service it drives, even when
-    // that service lives in another crate. Only an inbound renders a surface.
+    // A CLI inbound adapter hosted in this crate renders the command surface,
+    // request parsers, parsed invocation, and dispatch for the service it drives,
+    // even when that service lives in another crate. A non-CLI inbound (an agent
+    // loop, an MCP server) runs in its own authored binary and renders no surface.
     let inbound_modules: Vec<TokenStream> = model
         .inbounds
         .iter()
-        .filter(|inbound| inbound.crate_name == crate_name)
+        .filter(|inbound| inbound.crate_name == crate_name && inbound.transport == Transport::Cli)
         .filter_map(|inbound| {
             model
                 .service_named(&inbound.service)

@@ -115,6 +115,9 @@ pub enum Transport {
     Cli,
     Http,
     Grpc,
+    /// An LLM-driven agent loop. The adapter runs the loop in its own binary, so
+    /// the model renders no command surface for it.
+    Agent,
 }
 
 /// One operation in a service's inbound surface.

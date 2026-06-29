@@ -90,6 +90,13 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// The working model, taken by value. An adapter that reconstructs a session
+    /// per call reads the model back here to carry accepted edits into the next
+    /// one.
+    pub fn into_model(self) -> Model {
+        self.model
+    }
+
     /// Run one tool against the working model and return its result as a JSON
     /// string. The tool surface is Theseus's own operations, so the session edits
     /// the model it inspects.

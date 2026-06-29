@@ -1,0 +1,19 @@
+[package]
+name = "theseus-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus MCP server — exposes Theseus's operations as tools to an external host"
+
+[[bin]]
+name = "theseus-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+rmcp = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+theseus = { path = "../theseus" }
+theseus-model = { path = "../model" }
+theseus-modeling = { path = "../modeling" }

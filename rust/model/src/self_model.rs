@@ -36,6 +36,12 @@ pub fn theseus_model() -> Model {
             4,
             &["theseus", "theseus-model", "theseus-modeling"],
         )
+        .crate_node(
+            "theseus-mcp",
+            "mcp",
+            4,
+            &["theseus", "theseus-model", "theseus-modeling"],
+        )
         .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
         .struct_type(
             "QueryRequest",
@@ -233,5 +239,6 @@ pub fn theseus_model() -> Model {
         )
         .inbound("theseus", Transport::Cli, "Theseus", "theseus-cli")
         .inbound("agent", Transport::Agent, "Theseus", "theseus-agent")
+        .inbound("mcp", Transport::Mcp, "Theseus", "theseus-mcp")
         .inbound("calculator", Transport::Cli, "Calculator", "theseus-calculator-cli")
 }

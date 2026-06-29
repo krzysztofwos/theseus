@@ -5,7 +5,7 @@ Adding an operation to Theseus requires two steps:
 1. Describe the operation in the model — `theseus patch` (or an edit to `self_model.rs`).
 2. Author its handler — `theseus implement` (or an edit to `service.rs`).
 
-All other elements are generated. The command surface, the request parser, the service-trait method, the `Invocation` variant, the dispatch, and the default presentation are all derived from the single model edit. `generated.rs` is never edited, and `main.rs` is edited only for non-default output, such as an exit code or a follow-up notice.
+All other elements are generated. The command surface, the request parser, the service-trait method, the `Invocation` variant, and the dispatch are all derived from the single model edit. `generated.rs` is never edited, and `main.rs` is edited only for non-default output, such as an exit code or a follow-up notice.
 
 The two steps are identical whether performed by a person through an editor or by an agent through the protocol. The protocol exists so that an agent, which lacks a general-purpose file editor, can perform the same edits as typed, hash-checked operations.
 
@@ -66,7 +66,7 @@ cargo build -p theseus-cli
 #   Finished `dev` profile ...
 ```
 
-The build succeeds as soon as the operation exists. The trait method defaults to an `unimplemented` error (no `E0046`), and the presenter is generated (no `E0004`), so the operation is callable immediately. It reports itself as unimplemented.
+The build succeeds as soon as the operation exists. The trait method defaults to an `unimplemented` error (no `E0046`), and the dispatch is generated (no `E0004`), so the operation is callable immediately. It reports itself as unimplemented.
 
 ### 3. Identify the gap
 
@@ -106,7 +106,7 @@ cargo run -q -p theseus-cli -- greet
 #   hello from Theseus
 ```
 
-The result is a `String`, so the generated presentation prints it as text. A structured (non-`String`) response is printed as pretty JSON.
+The result is a `String`, so the generated `dispatch` prints it as text. A structured (non-`String`) response is printed as pretty JSON.
 
 ### 6. Verify
 
@@ -116,6 +116,8 @@ theseus verify
 #   ✓ crate graph: required dependencies present
 #   ✓ crate graph: dependency direction (layering functor)
 #   ✓ types: every reference resolves to a definition
+#   ✓ ports: every service-targeting port resolves to a service
+#   ✓ inbounds: every inbound adapter drives a defined service
 #   ✓ generated code: in sync with model (drift gate)
 #   ✓ operations: every operation has an authored handler
 #   conformant: workspace matches its self-model
@@ -189,9 +191,9 @@ cargo run -q -p theseus-cli -- greet --name World
 
 Field types determine the flag shape: `bool` is a flag, `Vec<T>` a repeatable value, `Option<T>` an optional value, and any other type a required value.
 
-### With custom presentation
+### With custom output
 
-The generated presentation prints a `String` as text and any other type as pretty JSON. This covers most operations. When an operation requires an exit code, per-file lines, or a follow-up notice, add an arm to the exhaustive overrides in `run()` in `rust/cli/src/main.rs`, the only location in the composition root that is edited:
+The generated `dispatch` prints a `String` as text and any other type as pretty JSON. This covers most operations. When an operation requires an exit code, per-file lines, or a follow-up notice, add an arm to the overrides in `run()` in `rust/cli/src/main.rs`, the only location in the composition root that is edited:
 
 ```rust
 Invocation::Greet => {
@@ -200,7 +202,7 @@ Invocation::Greet => {
 }
 ```
 
-Every operation without such an arm falls through to `generated::present`, so an ordinary operation requires no change here.
+Every operation without such an arm falls through to `generated::dispatch`, so an ordinary operation requires no change here.
 
 ### Editing directly, without the protocol
 
@@ -218,10 +220,10 @@ The result and the gates are identical. The protocol is the editor-free path use
 
 | File                           | Owner                                  | Contents                                                                                                                |
 | ------------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `rust/cli/src/generated.rs`    | `generate` (`// @generated`)           | command surface, request structs, `TheseusService` trait, `Invocation`, dispatch, default `present`, port traits, `Ctx` |
+| `rust/cli/src/generated.rs`    | `generate` (`// @generated`)           | command surface, request structs, `TheseusService` trait, `Invocation`, dispatch, port traits, `Ctx` |
 | `rust/model/src/self_model.rs` | `generate` / `patch` (`// @generated`) | the model, projected to its builder form (the fixed point)                                                              |
 | `rust/cli/src/service.rs`      | authored / `implement`                 | the operation handlers (`impl TheseusService for Ctx`)                                                                  |
-| `rust/cli/src/main.rs`         | authored                               | composition root, filesystem adapter, presentation overrides                                                            |
+| `rust/cli/src/main.rs`         | authored                               | composition root, adapters, output overrides                                                            |
 
 ### Gates
 
@@ -230,7 +232,7 @@ The result and the gates are identical. The protocol is the editor-free path use
 | `--expect-model-hash` on `patch` / `implement` | the edit is computed against the model last observed. A concurrent change is refused with a coded diagnostic |
 | reference safety in `patch`                    | no operation references an undefined type, and no type is removed while referenced                           |
 | `coverage`                                     | the derived list of operations still on their `unimplemented` default                                        |
-| `verify`                                       | required dependencies, layering direction, type references, generated drift, implementation coverage         |
+| `verify`                                       | required dependencies, layering direction, type references, port targets, inbound services, generated drift, implementation coverage |
 
 ### The edit vocabulary
 
@@ -243,7 +245,7 @@ theseus patch --verb rename --target <handle> --to <name>
 theseus patch --verb set    --target <handle> --set k=v …
 ```
 
-Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, and `variant:theseus:<type>.<name>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, or `variant`.
+Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, `crate:theseus:<name>`, `service:theseus:<name>`, `inbound:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, `variant:theseus:<type>.<name>`, and `dep:theseus:<crate>.<dep>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, `variant`, `crate`, `dep`, `service`, or `inbound` — the crate-and-service kinds are exercised in [building a calculator](building-a-calculator.md).
 
 Type shapes (`--set shape=…`) are `newtype:Inner`, `foreign:Path`, `enum:A,B,C`, and `struct:field=Type,field=Type`. A struct field may carry its documentation inline as `field=Type:doc`, and a non-`String` field type is parsed and validated as that type on the command line.
 

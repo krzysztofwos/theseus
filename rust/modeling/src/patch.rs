@@ -1161,6 +1161,8 @@ fn parse_transport(text: &str) -> Result<Transport, String> {
         "Cli" => Ok(Transport::Cli),
         "Http" => Ok(Transport::Http),
         "Grpc" => Ok(Transport::Grpc),
+        "Agent" => Ok(Transport::Agent),
+        "Mcp" => Ok(Transport::Mcp),
         other => Err(format!("unknown transport `{other}`")),
     }
 }
@@ -1169,7 +1171,7 @@ fn transport_refused(message: String) -> Vec<Diagnostic> {
     vec![diagnostic(
         "PATCH013",
         message,
-        "transport is one of: Cli, Http, Grpc",
+        "transport is one of: Cli, Http, Grpc, Agent, Mcp",
     )]
 }
 

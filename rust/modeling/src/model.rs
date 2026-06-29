@@ -1,11 +1,13 @@
 //! The model types: Theseus's vocabulary for describing a tool's architecture.
 //!
 //! A [`Model`] describes a layered set of [`CrateNode`]s (so conformance has a
-//! dependency direction to check), the [`TypeDef`]s the system exchanges, and
-//! the [`Service`]s it runs. A service has one inbound [`Transport`], a set of
-//! [`Operation`]s, and outbound [`Port`]s naming its dependencies. Theseus is
-//! itself one such service — its inbound port is the CLI, and its outbound ports
-//! are the filesystem interactions of `generate` and `patch`.
+//! dependency direction to check), the [`TypeDef`]s the system exchanges, the
+//! [`Service`]s it runs, and the [`Inbound`] adapters that drive them. A service
+//! is a set of [`Operation`]s and outbound [`Port`]s naming its dependencies. An
+//! inbound binds a service to a [`Transport`], and a service may carry more than
+//! one. Theseus is itself one such service. Its outbound port is the filesystem
+//! that `generate` and `patch` write to, and it is driven inbound over the CLI
+//! and an agent loop.
 
 use serde::{Deserialize, Serialize};
 
@@ -118,6 +120,10 @@ pub enum Transport {
     /// An LLM-driven agent loop. The adapter runs the loop in its own binary, so
     /// the model renders no command surface for it.
     Agent,
+    /// A Model Context Protocol server, exposing the service's operations as tools
+    /// to an external host. The adapter serves them in its own binary, so the
+    /// model renders no command surface for it.
+    Mcp,
 }
 
 /// One operation in a service's inbound surface.

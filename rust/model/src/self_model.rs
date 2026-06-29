@@ -24,13 +24,7 @@ pub fn theseus_model() -> Model {
             3,
             &["theseus-model", "theseus-modeling", "theseus-calculator"],
         )
-        .struct_type(
-            "GeneratedFile",
-            &[
-                ("path", "String", "Workspace-relative path of the file."),
-                ("contents", "String", "The file's contents."),
-            ],
-        )
+        .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
         .struct_type(
             "QueryRequest",
             &[

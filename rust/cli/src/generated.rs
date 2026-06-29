@@ -196,29 +196,6 @@ pub fn command() -> Command {
                     "Write the skeleton of each library service crate that is missing it.",
                 ),
         )
-        .subcommand(
-            Command::new("chat")
-                .about(
-                    "Run the agent loop, the model driving Theseus's own operations as tools.",
-                )
-                .arg(
-                    Arg::new("message")
-                        .long("message")
-                        .action(ArgAction::Set)
-                        .required(true)
-                        .help(
-                            "The user's message that opens or continues the conversation.",
-                        ),
-                )
-                .arg(
-                    Arg::new("allow-writes")
-                        .long("allow-writes")
-                        .action(ArgAction::SetTrue)
-                        .help(
-                            "Permit the agent to call mutating tools that rewrite Theseus's own model.",
-                        ),
-                ),
-        )
 }
 
 fn parse_queryrequest(matches: &ArgMatches) -> theseus::QueryRequest {
@@ -277,14 +254,6 @@ fn parse_calcrequest(matches: &ArgMatches) -> theseus::CalcRequest {
     }
 }
 
-fn parse_chatrequest(matches: &ArgMatches) -> theseus::ChatRequest {
-    let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    theseus::ChatRequest {
-        message: arg("message").unwrap_or_default(),
-        allow_writes: matches.get_flag("allow-writes"),
-    }
-}
-
 pub enum Invocation {
     Model,
     Verify,
@@ -296,7 +265,6 @@ pub enum Invocation {
     Show(theseus::ShowRequest),
     Calc(theseus::CalcRequest),
     Scaffold,
-    Chat(theseus::ChatRequest),
 }
 
 impl Invocation {
@@ -315,7 +283,6 @@ impl Invocation {
             Some(("show", sub)) => Invocation::Show(parse_showrequest(sub)),
             Some(("calc", sub)) => Invocation::Calc(parse_calcrequest(sub)),
             Some(("scaffold", _)) => Invocation::Scaffold,
-            Some(("chat", sub)) => Invocation::Chat(parse_chatrequest(sub)),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }
@@ -351,7 +318,6 @@ pub fn dispatch(
         Invocation::Scaffold => {
             println!("{}", serde_json::to_string_pretty(& service.scaffold() ?) ?)
         }
-        Invocation::Chat(request) => println!("{}", service.chat(request) ?),
     }
     Ok(())
 }

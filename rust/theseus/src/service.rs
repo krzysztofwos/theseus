@@ -15,17 +15,12 @@ use theseus_modeling::{
 };
 
 use crate::generated::{
-    CalcRequest, ChatRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
-    TheseusService,
+    CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
 };
-use crate::session::{Session, persist};
+use crate::session::persist;
 use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
-    fn chat(&self, request: ChatRequest) -> anyhow::Result<String> {
-        run_agent(self, &request.message, request.allow_writes)
-    }
-
     fn model(&self) -> anyhow::Result<String> {
         Ok(describe(self.model))
     }
@@ -173,79 +168,6 @@ impl Ctx<'_> {
     }
 }
 
-// ============================================================================
-// The agent loop — the `chat` handler's behavior. The model drives a `Session`,
-// calling Theseus's own operations as tools, so the loop edits the model it
-// inspects. An external host over MCP drives the same `Session`.
-// ============================================================================
-
-/// The most model turns the loop runs before giving up, a guard against a model
-/// that never answers.
-const MAX_TURNS: usize = 8;
-
-/// The framing handed to the model: the tool surface and the reply protocol. The
-/// offline stub ignores it. A real model adapter relies on it.
-const SYSTEM: &str = "You are Theseus, inspecting and editing your own model by \
-calling tools. Reply with exactly one JSON object: {\"tool\": name, \"input\": {…}} \
-to call a tool, or {\"answer\": text} to finish. Tools: model (no input), query \
-(input: find, node, kind, each an optional string), verify (no input), coverage \
-(no input), patch (input: edit, a list of `verb|target|key=value` strings, and \
-write, a bool — applying a write needs the chat to permit it).";
-
-/// The model's next move, parsed from one completion.
-enum AgentAction {
-    /// Call a tool with a JSON input object.
-    Tool {
-        name: String,
-        input: serde_json::Value,
-    },
-    /// Finish, answering the user.
-    Answer(String),
-}
-
-/// Run the agent loop: the model drives Theseus's own operations as tools. The
-/// transcript opens with the framing and the user's message. Each turn the model
-/// either calls a tool, whose result is appended, or answers and ends. A mutating
-/// tool runs only when `allow_writes` permits it.
-fn run_agent(ctx: &Ctx<'_>, message: &str, allow_writes: bool) -> anyhow::Result<String> {
-    // The session holds a working copy of the model, so each edit the agent makes
-    // is visible to its own later turns. The MCP inbound drives the same session.
-    let mut session = Session::new(ctx.model.clone(), ctx.workspace, allow_writes);
-    let mut transcript = format!("{SYSTEM}\n\nUser: {message}\n");
-    for _ in 0..MAX_TURNS {
-        let reply = ctx.llm.complete(&transcript)?;
-        match parse_action(&reply)? {
-            AgentAction::Answer(answer) => return Ok(answer),
-            AgentAction::Tool { name, input } => {
-                let result = session.call(&name, &input)?;
-                transcript.push_str(&format!("Assistant: call {name}\nTool result: {result}\n"));
-            }
-        }
-    }
-    anyhow::bail!("the agent did not answer within {MAX_TURNS} turns")
-}
-
-/// Parse one completion into the next action. The model replies with a single
-/// JSON object: a tool call or an answer.
-fn parse_action(reply: &str) -> anyhow::Result<AgentAction> {
-    let value: serde_json::Value = serde_json::from_str(reply.trim())
-        .with_context(|| format!("the model reply was not JSON: {reply}"))?;
-    if let Some(answer) = value.get("answer").and_then(serde_json::Value::as_str) {
-        return Ok(AgentAction::Answer(answer.to_string()));
-    }
-    if let Some(name) = value.get("tool").and_then(serde_json::Value::as_str) {
-        let input = value
-            .get("input")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        return Ok(AgentAction::Tool {
-            name: name.to_string(),
-            input,
-        });
-    }
-    anyhow::bail!("the model reply was neither a tool call nor an answer: {reply}")
-}
-
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
 /// A crate added to the model is registered before its skeleton is written, so
 /// its generated code waits for `scaffold` rather than landing in a directory
@@ -364,44 +286,17 @@ fn parse_assignments(set: &[String]) -> anyhow::Result<Vec<(String, String)>> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-
-    use anyhow::Context;
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
-    use crate::generated::{ChatRequest, Ctx, Llm, TheseusService, Workspace};
+    use crate::generated::Workspace;
     use crate::session::{Session, WRITE_REFUSED};
 
     /// An edit that adds a throwaway type, for exercising the `patch` tool. The
     /// no-op workspace discards any reprojection, so a write touches no files.
     const PROBE_EDIT: &str = "add|model:theseus|kind=type|name=Probe|shape=foreign:String";
 
-    /// A model that replays a fixed script of completions, so the loop runs with
-    /// no network.
-    struct ScriptedLlm {
-        replies: RefCell<VecDeque<String>>,
-    }
-
-    impl ScriptedLlm {
-        fn new(replies: impl IntoIterator<Item = &'static str>) -> Self {
-            Self {
-                replies: RefCell::new(replies.into_iter().map(str::to_string).collect()),
-            }
-        }
-    }
-
-    impl Llm for ScriptedLlm {
-        fn complete(&self, _transcript: &str) -> anyhow::Result<String> {
-            self.replies
-                .borrow_mut()
-                .pop_front()
-                .context("the scripted model ran out of replies")
-        }
-    }
-
-    /// A workspace that writes nowhere. The loop's read-only tools never reach it.
+    /// A workspace that writes nowhere. A read-only tool never reaches it.
     struct NoopWorkspace;
 
     impl Workspace for NoopWorkspace {
@@ -411,37 +306,13 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_calls_a_tool_then_answers() {
-        let model = theseus_model();
-        let workspace = NoopWorkspace;
-        let calculator = theseus_calculator::Calculator;
-        let llm = ScriptedLlm::new([
-            r#"{"tool": "query", "input": {"kind": "operation"}}"#,
-            r#"{"answer": "Theseus exposes a chat operation."}"#,
-        ]);
-        let ctx = Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &calculator,
-            llm: &llm,
-        };
-        let reply = ctx
-            .chat(ChatRequest {
-                message: "What can you do?".to_string(),
-                allow_writes: false,
-            })
-            .expect("the loop answers");
-        assert_eq!(reply, "Theseus exposes a chat operation.");
-    }
-
-    #[test]
-    fn the_query_tool_finds_the_chat_operation() {
+    fn the_query_tool_finds_an_operation() {
         let result = Session::new(theseus_model(), &NoopWorkspace, false)
             .call("query", &serde_json::json!({ "kind": "operation" }))
             .expect("the query tool runs");
         assert!(
-            result.contains("chat"),
-            "the chat operation handle should appear: {result}"
+            result.contains("verify"),
+            "an operation handle should appear: {result}"
         );
     }
 

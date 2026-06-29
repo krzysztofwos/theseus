@@ -10,66 +10,24 @@
 
 mod generated;
 
-use std::path::PathBuf;
-
 use generated::Invocation;
-use theseus::{Ctx, Llm, TheseusService, Workspace, workspace_root};
+use theseus::{Ctx, FsWorkspace, TheseusService};
 use theseus_model::theseus_model;
-use theseus_modeling::GeneratedFile;
 
 fn main() -> anyhow::Result<()> {
     let model = theseus_model();
-    let workspace = FsWorkspace {
-        root: workspace_root(),
-    };
+    let workspace = FsWorkspace::at_repo_root();
     let calculator = theseus_calculator::Calculator;
-    let llm = OfflineLlm;
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
         calculator: &calculator,
-        llm: &llm,
     };
 
     // `arg_required_else_help(true)` in the generated surface means a bare
     // invocation prints help and exits, so there is always a subcommand to parse.
     let matches = generated::command().get_matches();
     run(&ctx, Invocation::from_matches(&matches))
-}
-
-// ============================================================================
-// Authored outbound adapters — the leaves that implement the generated ports.
-// ============================================================================
-
-/// Writes generated files relative to the workspace root.
-struct FsWorkspace {
-    root: PathBuf,
-}
-
-impl Workspace for FsWorkspace {
-    fn write_file(&self, request: &GeneratedFile) -> anyhow::Result<()> {
-        let path = self.root.join(&request.path);
-        // Scaffolding a new crate writes into a directory that does not exist yet.
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, &request.contents)?;
-        Ok(())
-    }
-}
-
-/// The offline model adapter: a stand-in with no model behind it, so the agent
-/// loop runs with no network. It answers at once rather than calling tools. A real
-/// model adapter implements the same port and speaks the same JSON protocol.
-struct OfflineLlm;
-
-impl Llm for OfflineLlm {
-    fn complete(&self, _transcript: &str) -> anyhow::Result<String> {
-        Ok(
-            r#"{"answer": "I am the offline model. Wire a real model adapter to use tools."}"#
-                .to_string(),
-        )
-    }
 }
 
 // ============================================================================

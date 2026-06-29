@@ -10,18 +10,11 @@ pub trait Workspace {
     ) -> anyhow::Result<()>;
 }
 
-/// Completes a conversation turn, optionally requesting a tool call.
-pub trait Llm {
-    /// Complete one turn, returning the model's next action as text.
-    fn complete(&self, request: &str) -> anyhow::Result<String>;
-}
-
 /// Composition root: the model plus the wired outbound ports.
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,
     pub workspace: &'a dyn Workspace,
     pub calculator: &'a dyn theseus_calculator::CalculatorService,
-    pub llm: &'a dyn Llm,
 }
 
 /// The `QueryRequest` request.
@@ -89,15 +82,6 @@ pub struct CalcRequest {
     pub b: f64,
 }
 
-/// The `ChatRequest` request.
-#[derive(Debug, Clone)]
-pub struct ChatRequest {
-    /// The user's message that opens or continues the conversation.
-    pub message: String,
-    /// Permit the agent to call mutating tools that rewrite Theseus's own model.
-    pub allow_writes: bool,
-}
-
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait TheseusService {
@@ -155,10 +139,5 @@ pub trait TheseusService {
     /// Write the skeleton of each library service crate that is missing it.
     fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         anyhow::bail!("unimplemented operation: scaffold")
-    }
-
-    /// Run the agent loop, the model driving Theseus's own operations as tools.
-    fn chat(&self, _request: ChatRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: chat")
     }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "theseus-agent"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus agent — an LLM drives Theseus's operations as tools"
+
+[[bin]]
+name = "theseus-agent"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+theseus = { path = "../theseus" }
+theseus-model = { path = "../model" }
+theseus-modeling = { path = "../modeling" }

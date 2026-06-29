@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use theseus_modeling::GeneratedFile;
+
 mod generated;
 mod service;
 mod session;
@@ -23,4 +25,31 @@ pub fn workspace_root() -> PathBuf {
         .nth(2)
         .expect("crate lives at <root>/rust/theseus")
         .to_path_buf()
+}
+
+/// A [`Workspace`] that writes generated files relative to a root directory. The
+/// shared filesystem adapter for the inbound binaries.
+pub struct FsWorkspace {
+    root: PathBuf,
+}
+
+impl FsWorkspace {
+    /// A workspace rooted at the repository root.
+    pub fn at_repo_root() -> Self {
+        Self {
+            root: workspace_root(),
+        }
+    }
+}
+
+impl Workspace for FsWorkspace {
+    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+        let path = self.root.join(&file.path);
+        // Scaffolding a new crate writes into a directory that does not exist yet.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, &file.contents)?;
+        Ok(())
+    }
 }

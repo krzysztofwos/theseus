@@ -6,7 +6,7 @@ This log records every command and every issue, including the points where the p
 
 ## Plan
 
-The harness is a second inbound projection over the one Theseus service, plus a `chat` operation that runs the loop and an `llm` outbound port the loop drives. Locked decisions: tool surface is the self-modeling operations only; the LLM provider is an offline scripted stub first; categorical depth (flow conformance) is deferred.
+The harness is a second inbound projection over the one Theseus service, plus a `chat` operation that runs the loop and an `llm` outbound port the loop drives. Locked decisions: tool surface is the self-modeling operations only. The LLM provider is an offline scripted stub first. Categorical depth (flow conformance) is deferred.
 
 Phase 1 — model the surface through the protocol, then stub the handler:
 
@@ -55,7 +55,7 @@ The protocol generated the `Llm` port trait and the `Ctx.llm` slot. Two authored
 - `OfflineLlm`, a stub adapter implementing `Llm` — the hexagonal seam the protocol never crosses.
 - one line wiring `llm: &llm` into the composition root.
 
-The `chat` handler was authored through the protocol itself: `theseus implement --method chat --body-file <body> --expect-model-hash <h>` spliced a passthrough body — open a transcript from the message, call `self.llm.complete`, return the reply — into `service.rs`. The signature came from the model; only the body was supplied.
+The `chat` handler was authored through the protocol itself: `theseus implement --method chat --body-file <body> --expect-model-hash <h>` spliced a passthrough body — open a transcript from the message, call `self.llm.complete`, return the reply — into `service.rs`. The signature came from the model. Only the body was supplied.
 
 `allow_writes` was dropped before authoring: it gates mutating tools, which the passthrough has none of, so it was a field ahead of its consumer — the same dead-weight lesson as the port. It returns when tool dispatch does.
 
@@ -73,7 +73,7 @@ Next: the tool-dispatch loop — the model calling Theseus's own operations as t
 
 The `chat` handler is now the agent loop. The model drives Theseus's own read-only operations as tools, so the loop closes onto the model it inspects.
 
-The reply protocol is one JSON object per turn: `{"tool": name, "input": {…}}` to call a tool, or `{"answer": text}` to finish. `run_agent` opens a transcript with the framing and the user's message, then each turn parses the completion: a tool call runs through `run_tool` (a dispatch over `self`'s own operations — `model`, `query`, `verify`, `coverage`) and its JSON result is appended to the transcript; an answer ends the loop. `MAX_TURNS` guards a model that never finishes. The handler is a single line, `run_agent(self, self.llm, &request.message)`; the loop is generic over `TheseusService` and `Llm`, so it tests with doubles.
+The reply protocol is one JSON object per turn: `{"tool": name, "input": {…}}` to call a tool, or `{"answer": text}` to finish. `run_agent` opens a transcript with the framing and the user's message, then each turn parses the completion: a tool call runs through `run_tool` (a dispatch over `self`'s own operations — `model`, `query`, `verify`, `coverage`) and its JSON result is appended to the transcript. An answer ends the loop. `MAX_TURNS` guards a model that never finishes. The handler is a single line, `run_agent(self, self.llm, &request.message)`. The loop is generic over `TheseusService` and `Llm`, so it tests with doubles.
 
 Two unit tests in `service.rs`, both offline: a `ScriptedLlm` replays a fixed list of completions, a `NoopWorkspace` stands in for the filesystem. One drives the whole loop — a `query` tool call, then an answer — and asserts the final text. The other calls `run_tool` directly and asserts the `query` result names the `chat` operation, proving the dispatch reaches a real operation and returns real data. No network, no writes.
 
@@ -93,7 +93,7 @@ A `patch` that writes is refused unless the chat permits it. `allow_writes` retu
 
 Two offline tests cover the gate, both driving `run_tool` directly with a `write: true` patch: refused without the flag (exact-matching the refusal text), applied with it. The applied case runs the real edit through a no-op workspace, which discards the reprojection — the test asserts the outcome is `ok` and the diff names the new type, and touches no files on disk.
 
-One in-process limit, noted not fixed: a write reprojects `self_model.rs` and `generated.rs` to disk, but the running agent's in-memory model is the fixed `theseus_model()` value, so later tool calls in the same session still see the pre-write model. The write persists; a rebuild loads it. Within one process the agent cannot see its own edits reflected.
+One in-process limit, noted not fixed: a write reprojects `self_model.rs` and `generated.rs` to disk, but the running agent's in-memory model is the fixed `theseus_model()` value, so later tool calls in the same session still see the pre-write model. The write persists. A rebuild loads it. Within one process the agent cannot see its own edits reflected.
 
 ### Result
 
@@ -103,12 +103,12 @@ The self-modification loop is closed and gated. Offline, the suite proves a scri
 
 The earlier limit — a write persisted to disk but the running agent kept reading the fixed `theseus_model()` value, so it could not see its own edits within a session — is now closed.
 
-The loop clones the model into a working copy at the start of the session and threads it through the tools. Every accepted `patch` updates the working model, so a `query`, `verify`, or `model` on a later turn sees the edit. The corrected model was never far away: `apply_edits` already returns it; the loop simply keeps it as the session's model rather than discarding it.
+The loop clones the model into a working copy at the start of the session and threads it through the tools. Every accepted `patch` updates the working model, so a `query`, `verify`, or `model` on a later turn sees the edit. The corrected model was never far away: `apply_edits` already returns it. The loop simply keeps it as the session's model rather than discarding it.
 
-This moves the tools off the fixed-model service methods. `run_tool` now calls the operation functions — `query`, `apply_edits`, `verify`, `coverage`, `describe` — against the working model directly. These are the same functions the CLI handlers wrap; the loop binds them to the session's mutable model rather than the composition root's fixed one. The agent's tools are still Theseus's own operations, now over a model that moves as the agent edits it.
+This moves the tools off the fixed-model service methods. `run_tool` now calls the operation functions — `query`, `apply_edits`, `verify`, `coverage`, `describe` — against the working model directly. These are the same functions the CLI handlers wrap. The loop binds them to the session's mutable model rather than the composition root's fixed one. The agent's tools are still Theseus's own operations, now over a model that moves as the agent edits it.
 
-The `write` flag keeps its meaning: persist to disk, gated by `allow_writes`. An in-memory edit always applies and is ephemeral — discarded when the process exits unless a write persists it. So an agent without the gate can still reason over hypothetical edits in memory; only persistence to its own source is gated.
+The `write` flag keeps its meaning: persist to disk, gated by `allow_writes`. An in-memory edit always applies and is ephemeral — discarded when the process exits unless a write persists it. So an agent without the gate can still reason over hypothetical edits in memory. Only persistence to its own source is gated.
 
 A `persist` helper now shares the reprojection between the loop and the CLI `patch` handler. The new test adds a type with no write, then queries it on a later call and finds it — the proof that the session sees its own edits.
 
-What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits; across a restart the rebuilt binary loads them.
+What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits. Across a restart the rebuilt binary loads them.

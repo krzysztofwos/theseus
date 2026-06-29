@@ -1,22 +1,19 @@
-//! Theseus's command-line interface (L3).
+//! Theseus's command-line interface (L4) — the Cli inbound adapter.
 //!
-//! This file is the composition root and the inbound adapters. The generated
-//! [`generated`] module supplies the command surface, the parsed
-//! [`Invocation`](generated::Invocation), the inbound
-//! [`TheseusService`](generated::TheseusService) contract, the outbound port
-//! traits, and the [`Ctx`](generated::Ctx) that carries the wired ports. Here we
-//! render bespoke output for the operations that need it — an exit code,
-//! per-file lines, a follow-up notice — and delegate the rest to the generated
-//! `dispatch`, then back the ports with real filesystem adapters. The operation
-//! handlers are the authored leaves in [`service`]. A new operation surfaces
-//! through the default, so adding one needs no change here.
+//! The `theseus` crate holds the service: the [`TheseusService`] contract, the
+//! request types, the outbound port traits, and the [`Ctx`] composition root. The
+//! generated [`generated`] module here supplies this inbound's surface — the
+//! command, the parsed [`Invocation`](generated::Invocation), and the `dispatch`.
+//! This entry point wires real adapters into `Ctx`, renders bespoke output for the
+//! operations that need it — an exit code, per-file lines, a follow-up notice —
+//! and delegates the rest to the generated `dispatch`.
 
 mod generated;
-mod service;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use generated::{Ctx, Invocation, Llm, TheseusService, Workspace};
+use generated::Invocation;
+use theseus::{Ctx, Llm, TheseusService, Workspace, workspace_root};
 use theseus_model::theseus_model;
 use theseus_modeling::GeneratedFile;
 
@@ -122,14 +119,4 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
         other => generated::dispatch(service, other)?,
     }
     Ok(())
-}
-
-/// The repository root (the directory containing `rust/`), derived from this
-/// crate's compile-time location at `<root>/rust/cli`.
-pub(crate) fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crate lives at <root>/rust/cli")
-        .to_path_buf()
 }

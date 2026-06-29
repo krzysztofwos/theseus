@@ -3,168 +3,6 @@
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-/// Writes generated files into the workspace.
-pub trait Workspace {
-    /// Write one generated file to disk.
-    fn write_file(
-        &self,
-        request: &theseus_modeling::GeneratedFile,
-    ) -> anyhow::Result<()>;
-}
-
-/// Completes a conversation turn, optionally requesting a tool call.
-pub trait Llm {
-    /// Complete one turn, returning the model's next action as text.
-    fn complete(&self, request: &str) -> anyhow::Result<String>;
-}
-
-/// Composition root: the model plus the wired outbound ports.
-pub struct Ctx<'a> {
-    pub model: &'a theseus_modeling::Model,
-    pub workspace: &'a dyn Workspace,
-    pub calculator: &'a dyn theseus_calculator::CalculatorService,
-    pub llm: &'a dyn Llm,
-}
-
-/// The `QueryRequest` request.
-#[derive(Debug, Clone)]
-pub struct QueryRequest {
-    /// Filter handles by a substring of handle, name, kind, or summary.
-    pub find: Option<String>,
-    /// Narrow to one element by its exact handle.
-    pub node: Option<String>,
-    /// Keep only handles of this element kind (operation, type, or port).
-    pub kind: Option<String>,
-}
-
-/// The `PatchRequest` request.
-#[derive(Debug, Clone)]
-pub struct PatchRequest {
-    /// The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.
-    pub verb: Option<String>,
-    /// Handle of the parent or node for a single edit. Omit when using `edit`.
-    pub target: Option<String>,
-    /// Node kind to add: operation, type, port, method, field, or variant.
-    pub kind: Option<String>,
-    /// Name of the node to add.
-    pub name: Option<String>,
-    /// New name, for rename.
-    pub to: Option<String>,
-    /// A `key=value` scalar assignment, repeatable, for add and set.
-    pub set: Vec<String>,
-    /// The model hash the edit was computed against.
-    pub expect_model_hash: String,
-    /// Apply the edit by reprojecting the model.
-    pub write: bool,
-    /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.
-    pub edit: Vec<String>,
-}
-
-/// The `ImplementRequest` request.
-#[derive(Debug, Clone)]
-pub struct ImplementRequest {
-    /// Name of the operation to implement.
-    pub method: String,
-    /// The handler body to splice into the impl.
-    pub body: Option<String>,
-    /// The model hash the edit was computed against.
-    pub expect_model_hash: String,
-    /// Read the body from this file, or from stdin when `-`. Overrides body.
-    pub body_file: Option<String>,
-}
-
-/// The `ShowRequest` request.
-#[derive(Debug, Clone)]
-pub struct ShowRequest {
-    /// Name of the operation whose handler to show.
-    pub method: String,
-}
-
-/// The `CalcRequest` request.
-#[derive(Debug, Clone)]
-pub struct CalcRequest {
-    /// The operator: add, subtract, multiply, or divide.
-    pub op: String,
-    /// Left operand.
-    pub a: f64,
-    /// Right operand.
-    pub b: f64,
-}
-
-/// The `ChatRequest` request.
-#[derive(Debug, Clone)]
-pub struct ChatRequest {
-    /// The user's message that opens or continues the conversation.
-    pub message: String,
-    /// Permit the agent to call mutating tools that rewrite Theseus's own model.
-    pub allow_writes: bool,
-}
-
-/// The inbound service contract: one method per operation, each defaulting
-/// to `unimplemented`. The authored impl overrides what it implements.
-pub trait TheseusService {
-    /// Print Theseus's model of itself as JSON.
-    fn model(&self) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: model")
-    }
-
-    /// Check that the workspace conforms to its self-model.
-    fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
-        anyhow::bail!("unimplemented operation: verify")
-    }
-
-    /// Regenerate model-derived code from the self-model.
-    fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
-        anyhow::bail!("unimplemented operation: generate")
-    }
-
-    /// Return a stable handle and model hash for a model element.
-    fn query(
-        &self,
-        _request: QueryRequest,
-    ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
-        anyhow::bail!("unimplemented operation: query")
-    }
-
-    /// Propose a hash-checked edit to the model.
-    fn patch(
-        &self,
-        _request: PatchRequest,
-    ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
-        anyhow::bail!("unimplemented operation: patch")
-    }
-
-    /// Report which operations have an authored handler.
-    fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
-        anyhow::bail!("unimplemented operation: coverage")
-    }
-
-    /// Splice an authored handler for an unimplemented operation.
-    fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: implement")
-    }
-
-    /// Show an operation's current handler source.
-    fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: show")
-    }
-
-    /// Evaluate an arithmetic expression through the calculator service.
-    fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: calc")
-    }
-
-    /// Write the skeleton of each library service crate that is missing it.
-    fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
-        anyhow::bail!("unimplemented operation: scaffold")
-    }
-
-    /// Run the agent loop, the model driving Theseus's own operations as tools.
-    fn chat(&self, _request: ChatRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: chat")
-    }
-}
-
 /// Build the command surface from the model.
 pub fn command() -> Command {
     Command::new("theseus")
@@ -383,18 +221,18 @@ pub fn command() -> Command {
         )
 }
 
-fn parse_queryrequest(matches: &ArgMatches) -> QueryRequest {
+fn parse_queryrequest(matches: &ArgMatches) -> theseus::QueryRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    QueryRequest {
+    theseus::QueryRequest {
         find: arg("find"),
         node: arg("node"),
         kind: arg("kind"),
     }
 }
 
-fn parse_patchrequest(matches: &ArgMatches) -> PatchRequest {
+fn parse_patchrequest(matches: &ArgMatches) -> theseus::PatchRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    PatchRequest {
+    theseus::PatchRequest {
         verb: arg("verb"),
         target: arg("target"),
         kind: arg("kind"),
@@ -413,9 +251,9 @@ fn parse_patchrequest(matches: &ArgMatches) -> PatchRequest {
     }
 }
 
-fn parse_implementrequest(matches: &ArgMatches) -> ImplementRequest {
+fn parse_implementrequest(matches: &ArgMatches) -> theseus::ImplementRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    ImplementRequest {
+    theseus::ImplementRequest {
         method: arg("method").unwrap_or_default(),
         body: arg("body"),
         expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
@@ -423,25 +261,25 @@ fn parse_implementrequest(matches: &ArgMatches) -> ImplementRequest {
     }
 }
 
-fn parse_showrequest(matches: &ArgMatches) -> ShowRequest {
+fn parse_showrequest(matches: &ArgMatches) -> theseus::ShowRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    ShowRequest {
+    theseus::ShowRequest {
         method: arg("method").unwrap_or_default(),
     }
 }
 
-fn parse_calcrequest(matches: &ArgMatches) -> CalcRequest {
+fn parse_calcrequest(matches: &ArgMatches) -> theseus::CalcRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    CalcRequest {
+    theseus::CalcRequest {
         op: arg("op").unwrap_or_default(),
         a: matches.get_one::<f64>("a").cloned().unwrap_or_default(),
         b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
     }
 }
 
-fn parse_chatrequest(matches: &ArgMatches) -> ChatRequest {
+fn parse_chatrequest(matches: &ArgMatches) -> theseus::ChatRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    ChatRequest {
+    theseus::ChatRequest {
         message: arg("message").unwrap_or_default(),
         allow_writes: matches.get_flag("allow-writes"),
     }
@@ -451,14 +289,14 @@ pub enum Invocation {
     Model,
     Verify,
     Generate,
-    Query(QueryRequest),
-    Patch(PatchRequest),
+    Query(theseus::QueryRequest),
+    Patch(theseus::PatchRequest),
     Coverage,
-    Implement(ImplementRequest),
-    Show(ShowRequest),
-    Calc(CalcRequest),
+    Implement(theseus::ImplementRequest),
+    Show(theseus::ShowRequest),
+    Calc(theseus::CalcRequest),
     Scaffold,
-    Chat(ChatRequest),
+    Chat(theseus::ChatRequest),
 }
 
 impl Invocation {
@@ -487,7 +325,7 @@ impl Invocation {
 /// text for a string, otherwise pretty JSON. The authored entry point
 /// overrides the operations that need bespoke output and delegates here.
 pub fn dispatch(
-    service: &impl TheseusService,
+    service: &impl theseus::TheseusService,
     invocation: Invocation,
 ) -> anyhow::Result<()> {
     match invocation {

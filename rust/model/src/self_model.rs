@@ -19,10 +19,16 @@ pub fn theseus_model() -> Model {
             &["theseus-calculator"],
         )
         .crate_node(
-            "theseus-cli",
-            "cli",
+            "theseus",
+            "theseus",
             3,
             &["theseus-model", "theseus-modeling", "theseus-calculator"],
+        )
+        .crate_node(
+            "theseus-cli",
+            "cli",
+            4,
+            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
         )
         .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
         .struct_type(
@@ -139,7 +145,7 @@ pub fn theseus_model() -> Model {
         .foreign_type("ChatReply", "String")
         .service(
             Service::new("Theseus")
-                .crate_name("theseus-cli")
+                .crate_name("theseus")
                 .operation(
                     "model",
                     "Print Theseus's model of itself as JSON.",

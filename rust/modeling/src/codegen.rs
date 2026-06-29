@@ -292,26 +292,44 @@ fn port_trait_path(port: &Port, model: &Model, current_crate: &str) -> TokenStre
     }
 }
 
-/// Render each distinct request struct the given services' operations use, as a
-/// plain record. The parser that builds it from a transport's input is the
-/// inbound adapter's wire-to-domain conversion, rendered with that adapter, so the
-/// struct itself stays transport-neutral.
+/// Render each distinct struct type the given services reference at their
+/// boundaries — operation requests and the requests and responses of their port
+/// methods — as a plain record. The parser that builds one from a transport's
+/// input is the inbound adapter's wire-to-domain conversion, rendered with that
+/// adapter, so the struct itself stays transport-neutral.
 fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
     let mut seen: Vec<&str> = Vec::new();
-    let structs: Vec<TokenStream> = services
-        .iter()
-        .flat_map(|service| service.operations.iter())
-        .filter_map(|op| request_type(op, model))
-        .filter(|def| {
-            let fresh = !seen.contains(&def.name.as_str());
-            if fresh {
-                seen.push(&def.name);
-            }
-            fresh
-        })
-        .map(render_request_struct)
-        .collect();
+    let mut structs: Vec<TokenStream> = Vec::new();
+    for label in referenced_labels(services) {
+        if seen.contains(&label) {
+            continue;
+        }
+        seen.push(label);
+        if let Some(def) = model.type_def(label)
+            && matches!(def.shape, TypeShape::Struct(_))
+        {
+            structs.push(render_request_struct(def));
+        }
+    }
     quote! { #(#structs)* }
+}
+
+/// Every type label a service references at its boundaries: each operation's
+/// request, and each port method's request and response.
+fn referenced_labels<'a>(services: &[&'a Service]) -> Vec<&'a str> {
+    let mut labels = Vec::new();
+    for service in services {
+        for op in &service.operations {
+            labels.push(op.request.as_str());
+        }
+        for port in &service.outbound {
+            for method in &port.methods {
+                labels.push(method.request.as_str());
+                labels.push(method.response.as_str());
+            }
+        }
+    }
+    labels
 }
 
 /// The request type an operation takes, if its request names a defined struct.
@@ -639,7 +657,9 @@ fn request_param(label: &str, model: &Model) -> TokenStream {
     }
 }
 
-/// The Rust type a model type label maps to, used for method responses.
+/// The Rust type a model type label maps to. A struct or enum resolves to its
+/// local name, rendered in the same module. A newtype or foreign type resolves to
+/// its target path, and `Empty` and `String` to the builtin.
 fn rust_type(label: &str, model: &Model) -> String {
     match label {
         "Empty" => "()".to_string(),
@@ -648,7 +668,7 @@ fn rust_type(label: &str, model: &Model) -> String {
             Some(def) => match &def.shape {
                 TypeShape::Newtype(inner) => inner.clone(),
                 TypeShape::Foreign(path) => path.clone(),
-                _ => format!("theseus_modeling::{other}"),
+                TypeShape::Struct(_) | TypeShape::Enum(_) => other.to_string(),
             },
             None => other.to_string(),
         },
@@ -735,6 +755,24 @@ mod tests {
         assert!(plain.contains("pub a: f64"));
         assert!(!plain.contains("parse_operands"));
         assert!(!plain.contains("use clap"));
+    }
+
+    #[test]
+    fn a_port_method_carries_a_model_defined_struct() {
+        let model = Model::new("App")
+            .struct_type("Payload", &[("body", "String", "The body.")])
+            .service(
+                Service::new("App").crate_name("app").port(
+                    Port::new("sink", "Receives a payload.")
+                        .method("send", "Send it.", "Payload", "Empty"),
+                ),
+            );
+        let rendered = render_module_for_crate(&model, "app");
+        // The struct renders locally, and the port trait names it directly rather
+        // than reaching for a twin in the engine crate.
+        assert!(rendered.contains("pub struct Payload"));
+        assert!(rendered.contains("fn send(&self, request: &Payload)"));
+        assert!(!rendered.contains("theseus_modeling::Payload"));
     }
 
     #[test]

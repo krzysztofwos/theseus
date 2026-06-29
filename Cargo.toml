@@ -19,6 +19,12 @@ serde_json = "1.0.149"
 # Async runtime (the agent and MCP inbound binaries; the core stays synchronous)
 tokio = { version = "1.52", features = ["rt", "macros"] }
 
+# HTTP client for the model adapter (rustls, no system OpenSSL)
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "json",
+] }
+
 # Code generation
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 quote = "1.0"

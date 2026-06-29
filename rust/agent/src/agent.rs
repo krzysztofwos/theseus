@@ -8,7 +8,7 @@
 
 use std::future::Future;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use theseus::Session;
 
 /// The most turns the loop runs before giving up.
@@ -79,59 +79,13 @@ pub trait Llm {
     ) -> impl Future<Output = anyhow::Result<Reply>>;
 }
 
-/// Theseus's tool catalog: its read and edit operations as JSON-schema tool
-/// definitions. Hand-written for now; a later step generates these from the model.
-fn tools() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "model",
-            "description": "Return Theseus's model of itself as JSON.",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "query",
-            "description": "List model element handles, optionally filtered by `find` (a substring), `node` (an exact handle), or `kind`.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "find": { "type": "string" },
-                    "node": { "type": "string" },
-                    "kind": { "type": "string" }
-                }
-            }
-        }),
-        json!({
-            "name": "verify",
-            "description": "Check that the workspace conforms to the model.",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "coverage",
-            "description": "Report which operations have no authored handler.",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
-            "name": "patch",
-            "description": "Edit the model. `edit` is a list of `verb|target|key=value` strings; `write` true reprojects to disk.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "edit": { "type": "array", "items": { "type": "string" } },
-                    "write": { "type": "boolean" }
-                },
-                "required": ["edit"]
-            }
-        }),
-    ]
-}
-
 /// Run the agent loop: the model calls tools against `session` until it answers.
 pub async fn run_agent(
     llm: &impl Llm,
     session: &mut Session<'_>,
     message: &str,
 ) -> anyhow::Result<String> {
-    let tools = tools();
+    let tools = theseus::tool_catalog();
     let mut messages = vec![Message {
         role: Role::User,
         blocks: vec![Block::Text(message.to_string())],

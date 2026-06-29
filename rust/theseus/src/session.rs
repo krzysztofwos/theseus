@@ -19,6 +19,57 @@ use crate::workspace_root;
 pub(crate) const WRITE_REFUSED: &str =
     "writes are not permitted; rerun with write permission to apply this edit";
 
+/// Theseus's tool catalog: the operations a [`Session`] dispatches, as tool-use
+/// definitions (name, description, JSON-schema input). It is a curated view of the
+/// service — the self-modeling operations, with simplified inputs — so it is
+/// hand-written here next to [`Session::call`], which it must agree with. Every
+/// inbound that drives an agent (the agent loop, the MCP server) serves it, so
+/// they expose one tool surface.
+pub fn tool_catalog() -> Vec<serde_json::Value> {
+    use serde_json::json;
+    vec![
+        json!({
+            "name": "model",
+            "description": "Return Theseus's model of itself as JSON.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "query",
+            "description": "List model element handles, optionally filtered by `find` (a substring), `node` (an exact handle), or `kind`.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "find": { "type": "string" },
+                    "node": { "type": "string" },
+                    "kind": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "verify",
+            "description": "Check that the workspace conforms to the model.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "coverage",
+            "description": "Report which operations have no authored handler.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "patch",
+            "description": "Edit the model. `edit` is a list of `verb|target|key=value` strings; `write` true reprojects to disk.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "edit": { "type": "array", "items": { "type": "string" } },
+                    "write": { "type": "boolean" }
+                },
+                "required": ["edit"]
+            }
+        }),
+    ]
+}
+
 /// A working model an agent edits by calling Theseus's own operations as tools.
 /// Each accepted edit updates the working model, so a later call sees it. A
 /// `patch` that writes reprojects to disk through the workspace port, gated by

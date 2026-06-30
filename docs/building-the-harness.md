@@ -111,6 +111,8 @@ The `write` flag keeps its meaning: persist to disk, gated by `allow_writes`. An
 
 A `persist` helper now shares the reprojection between the loop and the CLI `patch` handler. The new test adds a type with no write, then queries it on a later call and finds it — the proof that the session sees its own edits.
 
+What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits. Across a restart the rebuilt binary loads them.
+
 ### The pivot: chat is an inbound, not an operation
 
 Modeling `chat` as one of Theseus's operations was a category error. The operations are capabilities — what the tool can do. Chat is a driver — a way to invoke those capabilities, like the CLI. It sits at the same level as the command surface, not inside it. The tell was the urge to mark `chat` so the tool catalog would exclude it from itself. A flag that says "this operation is not really an operation" is the model asking to be corrected.
@@ -137,4 +139,14 @@ One wrinkle shaped the design. A `Session` borrows its workspace, so it cannot b
 
 Three inbounds now drive one service: the CLI, the in-process agent loop, and the MCP server. A stdio handshake against `mcp-server` — initialize, `tools/list`, `tools/call` — returns the five tools with their schemas and dispatches a `query` through the session, returning the model hash and the operation handles. The catalog the external host sees is the catalog the loop sends a model. Green: full suite, clippy, conformant. What remains is to run the comparison — register `mcp-server` with an external host and drive the same edits both ways.
 
-What remains is only the cross-process step: a write reprojects source that a rebuild compiles in. Within a process the agent now sees its edits. Across a restart the rebuilt binary loads them.
+### The comparison, run
+
+The comparison ran on one goal: add a newtype `Slug` over `String`, write it, and verify the workspace still conforms. The internal loop drew it first, with a real model behind the `Llm` port. The external arm drew it second — Claude Code driving `mcp-server` over the protocol. Same goal, same tools, same `Session`. The only difference is who picks the next tool.
+
+The first internal run failed — the model thrashed for sixteen turns and gave up. The loop is opaque from outside, so the next move was to make it speak: an `AGENT_TRACE` flag that streams each turn's tool calls and results to stderr. The trace showed three faults, and only one was the model's.
+
+It needed the model root as the parent to add a top-level type, but `query` never minted that handle — the one address it needed was the one the catalog hid. It needed the patch grammar, and the tool described itself as `verb|target|key=value` with no example, so it rediscovered from diagnostics that attributes are pipe-separated, that a newtype is a shape and not a kind, and that a shape reads `newtype:Inner` — a dozen turns on syntax alone. And when it finally added the type and verified it, the sixteen-turn budget had run out one turn before it could report success. The work had landed. The run still called itself a failure.
+
+Three fixes followed, two of them in the shared surface. `query` mints the model root. The patch tool carries a worked example. The turn budget is larger. Because both inbounds drive the engine's `query` and the shared `tool_catalog()`, fixing those fixed both arms at once — the external agent, run after, got the syntax right on its first patch and finished in two calls. Only the turn budget belonged to the loop alone.
+
+This is what the second inbound was for. A surface built by the person who modeled it reads as obvious to them. Put a cold agent in front of it — internal or external — and the gaps surface: the handle the lister omits, the grammar with no example. The comparison named no winner between the two agents. It used them as two probes of one surface, and the surface came out better for both.

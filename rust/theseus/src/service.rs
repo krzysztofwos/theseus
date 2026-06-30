@@ -288,7 +288,7 @@ mod tests {
     use theseus_modeling::GeneratedFile;
 
     use crate::generated::Workspace;
-    use crate::session::{Session, WRITE_REFUSED};
+    use crate::session::{Session, WRITE_REFUSED, tool_catalog};
 
     /// An edit that adds a throwaway type, for exercising the `patch` tool. The
     /// no-op workspace discards any reprojection, so a write touches no files.
@@ -391,5 +391,34 @@ mod tests {
             result.contains("wrote the handler for `verify`"),
             "the tool should report the write: {result}"
         );
+    }
+
+    #[test]
+    fn the_catalog_agrees_with_the_model_and_the_dispatch() {
+        let model = theseus_model();
+        let operations: Vec<&str> = model
+            .operations()
+            .iter()
+            .map(|op| op.name.as_str())
+            .collect();
+        for tool in tool_catalog() {
+            let name = tool["name"]
+                .as_str()
+                .expect("every catalog tool has a name");
+            // Every exposed tool is a real operation of the model.
+            assert!(
+                operations.contains(&name),
+                "catalog tool `{name}` is not a model operation"
+            );
+            // Every exposed tool has a dispatch arm: a bare call never falls
+            // through to the unknown-tool error, though it may fail on missing input.
+            let mut session = Session::new(theseus_model(), &NoopWorkspace, false);
+            if let Err(error) = session.call(name, &serde_json::json!({})) {
+                assert!(
+                    !error.to_string().contains("unknown tool"),
+                    "catalog tool `{name}` has no dispatch arm: {error}"
+                );
+            }
+        }
     }
 }

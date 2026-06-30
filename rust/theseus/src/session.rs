@@ -233,7 +233,7 @@ impl<'a> Session<'a> {
             contents: spliced,
         })?;
         Ok(format!(
-            "wrote the handler for `{method}` into {path}; rebuild to load it"
+            "wrote the handler for `{method}` into {path}. Rebuild to load it"
         ))
     }
 }

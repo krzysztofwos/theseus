@@ -39,7 +39,6 @@ fn render_imports(model: &Model) -> TokenStream {
     let mut names: Vec<&str> = vec!["Model"];
     if !model.services.is_empty() {
         names.push("Service");
-        names.push("Transport");
     }
     if !model.inbounds.is_empty() {
         names.push("Transport");

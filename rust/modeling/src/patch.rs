@@ -337,6 +337,21 @@ fn plan_set(
         )]);
     }
     allow_keys(attrs, settable)?;
+    // Validate the values, not just the keys, so an unparseable layer or
+    // transport is refused here instead of silently dropped by apply_set.
+    match &target {
+        Target::Crate(_) => {
+            if let Some(layer) = attr(attrs, "layer") {
+                parse_layer(layer).map_err(layer_refused)?;
+            }
+        }
+        Target::Inbound(_) => {
+            if let Some(transport) = attr(attrs, "transport") {
+                parse_transport(transport).map_err(transport_refused)?;
+            }
+        }
+        _ => {}
+    }
     Ok(Plan::Set {
         target,
         attrs: attrs.to_vec(),
@@ -1155,22 +1170,27 @@ enum ShapeError {
     Field,
 }
 
+/// Why an inbound transport name could not be parsed.
+#[derive(Debug, thiserror::Error)]
+#[error("unknown transport `{0}`")]
+struct TransportError(String);
+
 /// Parse an inbound transport name into a [`Transport`].
-fn parse_transport(text: &str) -> Result<Transport, String> {
+fn parse_transport(text: &str) -> Result<Transport, TransportError> {
     match text {
         "Cli" => Ok(Transport::Cli),
         "Http" => Ok(Transport::Http),
         "Grpc" => Ok(Transport::Grpc),
         "Agent" => Ok(Transport::Agent),
         "Mcp" => Ok(Transport::Mcp),
-        other => Err(format!("unknown transport `{other}`")),
+        other => Err(TransportError(other.to_string())),
     }
 }
 
-fn transport_refused(message: String) -> Vec<Diagnostic> {
+fn transport_refused(error: TransportError) -> Vec<Diagnostic> {
     vec![diagnostic(
         "PATCH013",
-        message,
+        error.to_string(),
         "transport is one of: Cli, Http, Grpc, Agent, Mcp",
     )]
 }
@@ -1217,16 +1237,20 @@ fn shape_refused(error: ShapeError) -> Vec<Diagnostic> {
     )]
 }
 
+/// Why a crate's architectural layer could not be parsed.
+#[derive(Debug, thiserror::Error)]
+#[error("layer must be a non-negative integer, not `{0}`")]
+struct LayerError(String);
+
 /// Parse a crate's architectural layer, a non-negative integer.
-fn parse_layer(text: &str) -> Result<u32, String> {
-    text.parse()
-        .map_err(|_| format!("layer must be a non-negative integer, not `{text}`"))
+fn parse_layer(text: &str) -> Result<u32, LayerError> {
+    text.parse().map_err(|_| LayerError(text.to_string()))
 }
 
-fn layer_refused(message: String) -> Vec<Diagnostic> {
+fn layer_refused(error: LayerError) -> Vec<Diagnostic> {
     vec![diagnostic(
         "PATCH014",
-        message,
+        error.to_string(),
         "pass --set layer=<integer>",
     )]
 }
@@ -1313,6 +1337,20 @@ mod tests {
             ),
         );
         assert_eq!(code(&outcome), "PATCH014");
+    }
+
+    #[test]
+    fn set_crate_rejects_a_non_integer_layer() {
+        let model = sample_model();
+        let (outcome, next) = edit(
+            &model,
+            Edit::Set {
+                target: "crate:sample:sample".to_string(),
+                attrs: vec![("layer".to_string(), "ground".to_string())],
+            },
+        );
+        assert_eq!(code(&outcome), "PATCH014");
+        assert!(next.is_none(), "a refused set must not mutate the model");
     }
 
     #[test]

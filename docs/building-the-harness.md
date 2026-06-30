@@ -150,3 +150,15 @@ It needed the model root as the parent to add a top-level type, but `query` neve
 Three fixes followed, two of them in the shared surface. `query` mints the model root. The patch tool carries a worked example. The turn budget is larger. Because both inbounds drive the engine's `query` and the shared `tool_catalog()`, fixing those fixed both arms at once — the external agent, run after, got the syntax right on its first patch and finished in two calls. Only the turn budget belonged to the loop alone.
 
 This is what the second inbound was for. A surface built by the person who modeled it reads as obvious to them. Put a cold agent in front of it — internal or external — and the gaps surface: the handle the lister omits, the grammar with no example. The comparison named no winner between the two agents. It used them as two probes of one surface, and the surface came out better for both.
+
+### Growing an operation
+
+The catalog could reshape the model but not the code beneath it. An agent could `patch` a new operation into the model, but the handler that operation needs is an authored leaf, and there was no tool to write it — so the workspace sat unimplemented and `verify` failed on the coverage gate. The agent reached the model and stopped at the source.
+
+Two tools closed that gap. `show` returns an operation's handler, and for one not yet written it returns the generated signature instead, so the agent can read the request and response types before authoring. `implement` writes a handler body into the service impl, gated by the same write permission as a patch. The body the agent supplies is only what goes inside the braces — the splice wraps it in the signature the model dictates.
+
+With both, the loop closes from the outside. The agent `patch`es an operation in, which reprojects the contract so the trait gains a method that defaults to unimplemented. It `show`s the operation to read the signature, `implement`s a body, and `verify`s. The model, the regenerated contract, and the new handler line up, and the workspace conforms.
+
+It runs. Asked to add a `greet` operation, the agent attached it to the service and watched the edit reproject the self-model, the trait contract, and the CLI command surface together. It read back `fn greet(&self) -> anyhow::Result<String>`, wrote a one-line body into the service impl, and verified: fifteen operations, all implemented. No one edited the code by hand.
+
+This is the plank replaced. The ship kept its shape — every check still passes — while a piece of it was taken out and put back by something other than the shipwright. The model describes the tool, the tool regenerates from the model, and an agent drives that loop from either side of one surface. Theseus extends itself.

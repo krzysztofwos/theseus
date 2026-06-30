@@ -1,4 +1,4 @@
-//! The `theseus-mcp` binary: a Model Context Protocol server exposing Theseus's
+//! The `mcp-server` binary: a Model Context Protocol server exposing Theseus's
 //! operations as tools to an external host over stdio.
 //!
 //! An external agent connects, lists the catalog, and calls tools by name. Each

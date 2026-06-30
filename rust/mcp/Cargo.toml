@@ -5,7 +5,7 @@ edition = "2024"
 description = "The Theseus MCP server — exposes Theseus's operations as tools to an external host"
 
 [[bin]]
-name = "theseus-mcp"
+name = "mcp-server"
 path = "src/main.rs"
 
 [dependencies]

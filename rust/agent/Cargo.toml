@@ -5,7 +5,7 @@ edition = "2024"
 description = "The Theseus agent — an LLM drives Theseus's operations as tools"
 
 [[bin]]
-name = "theseus-agent"
+name = "agent"
 path = "src/main.rs"
 
 [dependencies]

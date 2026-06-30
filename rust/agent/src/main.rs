@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parse `theseus-agent [--allow-writes] <message>`.
+/// Parse `agent [--allow-writes] <message>`.
 fn parse_args() -> anyhow::Result<(String, bool)> {
     let mut allow_writes = false;
     let mut message = None;
@@ -47,6 +47,6 @@ fn parse_args() -> anyhow::Result<(String, bool)> {
             _ => message = Some(arg),
         }
     }
-    let message = message.context("usage: theseus-agent [--allow-writes] <message>")?;
+    let message = message.context("usage: agent [--allow-writes] <message>")?;
     Ok((message, allow_writes))
 }

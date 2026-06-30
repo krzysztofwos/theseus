@@ -57,7 +57,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "patch",
-            "description": "Edit the model. `edit` is a list of `verb|target|key=value` strings; `write` true reprojects to disk.",
+            "description": "Edit the model. Each `edit` is `verb|target|attr=value|attr=value` — pipe-separated, one attr per segment. `target` is a handle from `query`. A new top-level node attaches to the model root, `model:<model>`. Example: `add|model:theseus|kind=type|name=Slug|shape=newtype:String`. `write` true reprojects to disk.",
             "input_schema": {
                 "type": "object",
                 "properties": {

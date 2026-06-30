@@ -66,10 +66,20 @@ fn field_summary(field: &Field) -> String {
     field.ty.clone()
 }
 
-/// Every handle the model exposes: each operation, type, port, and the fields,
-/// variants, and methods nested within them.
+/// Every handle the model exposes: the model root, each crate, service, inbound,
+/// operation, type, and port, and the dependencies, fields, variants, and methods
+/// nested within them.
 fn all_handles(model: &Model) -> Vec<Handle> {
     let mut handles = Vec::new();
+
+    // The model root: the parent every top-level addition attaches to. A patch
+    // that adds a crate, service, type, or inbound addresses it here.
+    handles.push(handle(
+        model,
+        Target::Model,
+        model.name.clone(),
+        "the model root".to_string(),
+    ));
 
     for node in &model.crates {
         let target = Target::Crate(node.name.clone());
@@ -248,11 +258,13 @@ mod tests {
         let outcome = query(&model, None, None).unwrap();
 
         let kinds: Vec<&str> = outcome.handles.iter().map(|h| h.kind.as_str()).collect();
+        assert!(kinds.contains(&"model"));
         assert!(kinds.contains(&"operation"));
         assert!(kinds.contains(&"type"));
         assert!(kinds.contains(&"port"));
 
-        let expected = model.crates.len()
+        let expected = 1 // the model root
+            + model.crates.len()
             + model
                 .crates
                 .iter()
@@ -276,6 +288,7 @@ mod tests {
         let model = model_with_types();
         let outcome = query(&model, None, None).unwrap();
         let handles: Vec<&str> = outcome.handles.iter().map(|h| h.handle.as_str()).collect();
+        assert!(handles.contains(&"model:sample"));
         assert!(handles.contains(&"op:sample:greet"));
         assert!(handles.contains(&"type:sample:Name"));
         assert!(handles.contains(&"port:sample:store"));

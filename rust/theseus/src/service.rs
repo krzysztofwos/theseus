@@ -10,8 +10,9 @@
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    CoverageReport, Edit, GeneratedFile, PatchOutcome, QueryOutcome, VerifyReport, apply_edit,
-    apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files, verify,
+    CoverageReport, Edit, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
+    apply_edit, apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files,
+    verify,
 };
 
 use crate::generated::{
@@ -80,7 +81,7 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        let path = self.handler_path(&request.method)?;
+        let path = handler_path(self.model, &request.method)?;
         let source = std::fs::read_to_string(workspace_root().join(&path))
             .with_context(|| format!("reading {path}"))?;
         Ok(handler_source(self.model, &source, &request.method)?)
@@ -111,7 +112,7 @@ impl TheseusService for Ctx<'_> {
             );
         }
         let body = resolve_body(&request)?;
-        let path = self.handler_path(&request.method)?;
+        let path = handler_path(self.model, &request.method)?;
         let source = std::fs::read_to_string(workspace_root().join(&path))
             .with_context(|| format!("reading {path}"))?;
         let spliced = theseus_modeling::implement(
@@ -156,16 +157,13 @@ impl TheseusService for Ctx<'_> {
     }
 }
 
-impl Ctx<'_> {
-    /// The authored impl file holding the handler for `method`: the `service.rs`
-    /// of the crate the method's service lives in.
-    fn handler_path(&self, method: &str) -> anyhow::Result<String> {
-        let service = self
-            .model
-            .service_of_operation(method)
-            .with_context(|| format!("no operation named `{method}`"))?;
-        Ok(authored_impl_path(self.model, service))
-    }
+/// The authored impl file holding the handler for `method`: the `service.rs` of
+/// the crate the method's service lives in.
+pub(crate) fn handler_path(model: &Model, method: &str) -> anyhow::Result<String> {
+    let service = model
+        .service_of_operation(method)
+        .with_context(|| format!("no operation named `{method}`"))?;
+    Ok(authored_impl_path(model, service))
 }
 
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
@@ -359,6 +357,39 @@ mod tests {
         assert!(
             result.contains("Probe"),
             "the diff should name the new type: {result}"
+        );
+    }
+
+    #[test]
+    fn the_show_tool_returns_a_handler() {
+        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+            .call("show", &serde_json::json!({ "method": "verify" }))
+            .expect("the show tool runs");
+        assert!(
+            result.contains("fn verify"),
+            "the handler source should appear: {result}"
+        );
+    }
+
+    #[test]
+    fn an_implement_is_refused_without_the_gate() {
+        let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
+        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+            .call("implement", &input)
+            .expect("the tool returns a result");
+        assert_eq!(result, WRITE_REFUSED);
+    }
+
+    #[test]
+    fn an_implement_is_allowed_with_the_gate() {
+        // The no-op workspace discards the spliced source, so this touches no files.
+        let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
+        let result = Session::new(theseus_model(), &NoopWorkspace, true)
+            .call("implement", &input)
+            .expect("the implement tool runs");
+        assert!(
+            result.contains("wrote the handler for `verify`"),
+            "the tool should report the write: {result}"
         );
     }
 }

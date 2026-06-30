@@ -9,10 +9,13 @@
 
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
-use theseus_modeling::{Model, apply_edits, coverage, describe, model_hash, query, verify};
+use theseus_modeling::{
+    GeneratedFile, Model, apply_edits, coverage, describe, handler_source, model_hash, query,
+    verify,
+};
 
 use crate::generated::Workspace;
-use crate::service::{crate_is_scaffolded, parse_edit_spec};
+use crate::service::{crate_is_scaffolded, handler_path, parse_edit_spec};
 use crate::workspace_root;
 
 /// The result fed back when a write tool runs without the permission gate.
@@ -65,6 +68,27 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
                     "write": { "type": "boolean" }
                 },
                 "required": ["edit"]
+            }
+        }),
+        json!({
+            "name": "show",
+            "description": "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "method": { "type": "string" } },
+                "required": ["method"]
+            }
+        }),
+        json!({
+            "name": "implement",
+            "description": "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "method": { "type": "string" },
+                    "body": { "type": "string" }
+                },
+                "required": ["method", "body"]
             }
         }),
     ]
@@ -131,8 +155,19 @@ impl<'a> Session<'a> {
                 Ok(serde_json::to_string(&outcome)?)
             }
             "patch" => self.patch(input),
+            "show" => {
+                let method = input
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .context("show needs a `method`, an operation name from query")?;
+                let path = handler_path(&self.model, method)?;
+                let source = std::fs::read_to_string(workspace_root().join(&path))
+                    .with_context(|| format!("reading {path}"))?;
+                Ok(handler_source(&self.model, &source, method)?)
+            }
+            "implement" => self.implement(input),
             other => anyhow::bail!(
-                "unknown tool `{other}`; tools are model, query, verify, coverage, patch"
+                "unknown tool `{other}`; tools are model, query, verify, coverage, patch, show, implement"
             ),
         }
     }
@@ -169,6 +204,37 @@ impl<'a> Session<'a> {
             self.model = proposed;
         }
         Ok(serde_json::to_string(&outcome)?)
+    }
+
+    /// Write an authored handler body for an operation into the service impl,
+    /// gated by `allow_writes`. The operation must exist in the working model, so
+    /// this follows a `patch` that adds it. The running binary still holds the old
+    /// code, hence the rebuild note, but `verify` reads the written source, so the
+    /// workspace conforms before the rebuild.
+    fn implement(&self, input: &serde_json::Value) -> anyhow::Result<String> {
+        let method = input
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .context("implement needs a `method`, an operation name")?;
+        let body = input
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .context("implement needs a `body`, the Rust handler body")?;
+        if !self.allow_writes {
+            return Ok(WRITE_REFUSED.to_string());
+        }
+        let path = handler_path(&self.model, method)?;
+        let source = std::fs::read_to_string(workspace_root().join(&path))
+            .with_context(|| format!("reading {path}"))?;
+        let spliced =
+            theseus_modeling::implement(&self.model, &source, method, body, "crate::generated::")?;
+        self.workspace.write_file(&GeneratedFile {
+            path: path.clone(),
+            contents: spliced,
+        })?;
+        Ok(format!(
+            "wrote the handler for `{method}` into {path}; rebuild to load it"
+        ))
     }
 }
 

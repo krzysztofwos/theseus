@@ -180,6 +180,7 @@ fn parse_kind(handle: &str, kind: &str, rest: &str) -> Result<Target, HandleErro
             Ok(Target::Dep { crate_name, dep })
         }
         "service" => Ok(Target::Service(rest.to_string())),
+        "inbound" => Ok(Target::Inbound(rest.to_string())),
         "op" => Ok(Target::Operation(rest.to_string())),
         "type" => Ok(Target::Type(rest.to_string())),
         "port" => Ok(Target::Port(rest.to_string())),
@@ -210,6 +211,15 @@ mod tests {
         let target = Target::parse(&model, "op:sample:greet").unwrap();
         assert_eq!(target, Target::Operation("greet".to_string()));
         assert_eq!(target.render(&model), "op:sample:greet");
+    }
+
+    #[test]
+    fn parses_and_renders_an_inbound_handle() {
+        let model = sample_model();
+        let inbound = Target::Inbound("agent".to_string());
+        let rendered = inbound.render(&model);
+        assert_eq!(rendered, "inbound:sample:agent");
+        assert_eq!(Target::parse(&model, &rendered).unwrap(), inbound);
     }
 
     #[test]

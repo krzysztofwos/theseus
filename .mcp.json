@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "theseus": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "github:krzysztofwos/reloaderoo",
+        "proxy",
+        "--",
+        "cargo",
+        "run",
+        "--bin",
+        "mcp-server",
+	"--",
+	"--allow-writes"
+      ],
+      "cwd": "."
+    }
+  }
+}

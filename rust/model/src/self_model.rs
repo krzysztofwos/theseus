@@ -111,12 +111,14 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "ModelDocument",
                 )
+                .tool("Return Theseus's model of itself as JSON.")
                 .operation(
                     "verify",
                     "Check that the workspace conforms to its self-model.",
                     "Empty",
                     "VerifyReport",
                 )
+                .tool("Check that the workspace conforms to the model.")
                 .operation(
                     "generate",
                     "Regenerate model-derived code from the self-model.",
@@ -129,11 +131,17 @@ pub fn theseus_model() -> Model {
                     "QueryRequest",
                     "QueryResult",
                 )
+                .tool(
+                    "List model element handles, optionally filtered by `find` (a substring), `node` (an exact handle), or `kind`.",
+                )
                 .operation(
                     "patch",
                     "Propose an edit to the model.",
                     "PatchRequest",
                     "PatchResult",
+                )
+                .tool(
+                    "Edit the model. Each `edit` is `verb|target|attr=value|attr=value` — pipe-separated, one attr per segment. `target` is a handle from `query`. A new top-level node attaches to the model root, `model:<model>`. Example: `add|model:theseus|kind=type|name=Slug|shape=newtype:String`. `write` true reprojects to disk.",
                 )
                 .operation(
                     "coverage",
@@ -141,17 +149,24 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CoverageReport",
                 )
+                .tool("Report which operations have no authored handler.")
                 .operation(
                     "implement",
                     "Splice an authored handler for an unimplemented operation.",
                     "ImplementRequest",
                     "ImplementResult",
                 )
+                .tool(
+                    "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+                )
                 .operation(
                     "show",
                     "Show an operation's current handler source.",
                     "ShowRequest",
                     "HandlerSource",
+                )
+                .tool(
+                    "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
                 )
                 .operation(
                     "calc",

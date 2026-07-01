@@ -228,8 +228,8 @@ mod tests {
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
-    use crate::generated::Workspace;
-    use crate::session::{Session, WRITE_REFUSED, tool_catalog};
+    use crate::generated::{Workspace, tool_catalog};
+    use crate::session::{Session, WRITE_REFUSED};
 
     /// An edit that adds a throwaway type, for exercising the `patch` tool. The
     /// no-op workspace discards any reprojection, so a write touches no files.

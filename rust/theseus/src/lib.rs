@@ -15,7 +15,7 @@ mod service;
 mod session;
 
 pub use generated::*;
-pub use session::{Session, tool_catalog};
+pub use session::Session;
 
 /// The repository root, the directory that holds `rust/`, derived from this
 /// crate's compile-time location at `<root>/rust/theseus`.

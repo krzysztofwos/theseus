@@ -132,7 +132,11 @@ fn render_operation(op: &Operation) -> TokenStream {
     let summary = &op.summary;
     let request = &op.request;
     let response = &op.response;
-    quote! { .operation(#name, #summary, #request, #response) }
+    let tool = match &op.tool {
+        Some(description) => quote! { .tool(#description) },
+        None => quote! {},
+    };
+    quote! { .operation(#name, #summary, #request, #response) #tool }
 }
 
 fn render_port(port: &Port) -> TokenStream {

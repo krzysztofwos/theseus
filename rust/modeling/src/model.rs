@@ -138,6 +138,10 @@ pub struct Operation {
     pub request: String,
     /// Response type label.
     pub response: String,
+    /// Agent-facing tool description. An operation with one is exposed on the
+    /// agent and MCP tool surface, its input schema rendered from its request
+    /// contract. `None` keeps it off that surface.
+    pub tool: Option<String>,
 }
 
 /// An outbound dependency of a service: a named set of methods the service

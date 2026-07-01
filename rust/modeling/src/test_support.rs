@@ -37,5 +37,6 @@ fn operation(name: &str, summary: &str) -> Operation {
         summary: summary.to_string(),
         request: "Empty".to_string(),
         response: "Empty".to_string(),
+        tool: None,
     }
 }

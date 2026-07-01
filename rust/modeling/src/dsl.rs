@@ -128,7 +128,17 @@ impl Service {
             summary: summary.to_string(),
             request: request.to_string(),
             response: response.to_string(),
+            tool: None,
         });
+        self
+    }
+
+    /// Expose the most recently added operation on the agent and MCP tool surface,
+    /// with `description` as its agent-facing tool description.
+    pub fn tool(mut self, description: &str) -> Self {
+        if let Some(operation) = self.operations.last_mut() {
+            operation.tool = Some(description.to_string());
+        }
         self
     }
 

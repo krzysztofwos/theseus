@@ -399,6 +399,9 @@ fn apply_add(
                 summary: attr(attrs, "summary").unwrap_or_default().to_string(),
                 request: attr(attrs, "request").unwrap_or("Empty").to_string(),
                 response: attr(attrs, "response").unwrap_or("Empty").to_string(),
+                // A patch-added operation is not a tool. The pipe-DSL cannot carry a
+                // description containing `|`, so tool exposure is authored in the model.
+                tool: None,
             });
         }
         NodeKind::Type => model.types.push(TypeDef {

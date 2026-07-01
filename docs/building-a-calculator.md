@@ -16,12 +16,10 @@ All commands assume this alias and the repository root as the working directory.
 
 ## 1. Model the calculator service
 
-The crate, the shared types, and the Calculator service with its four operations are declared in a single hash-checked `patch`. The crate is registered through the protocol with `kind=crate`, carrying its directory and layer. The service is placed in it with `crate=theseus-calculator` and an `InProcess` inbound transport, so it contributes a contract trait but no command surface:
+The crate, the shared types, and the Calculator service with its four operations are declared in a single `patch`. The crate is registered through the protocol with `kind=crate`, carrying its directory and layer. The service is placed in it with `crate=theseus-calculator` and an `InProcess` inbound transport, so it contributes a contract trait but no command surface:
 
 ```sh
-H=$(theseus query | grep -o '"model_hash": "[^"]*"' | head -1 | cut -d'"' -f4)
-
-theseus patch --write --expect-model-hash "$H" \
+theseus patch --write \
   --edit 'add|model:theseus|kind=crate|name=theseus-calculator|dir=calculator|layer=1' \
   --edit 'add|model:theseus|kind=type|name=Operands|shape=struct:a=f64:Left operand.,b=f64:Right operand.' \
   --edit 'add|model:theseus|kind=type|name=CalcResult|shape=foreign:String' \
@@ -69,11 +67,10 @@ sed -n '1,12p' rust/calculator/src/generated.rs
 The calculator's four operations begin on their `unimplemented` defaults. Each is authored with `implement`, which resolves the operation to its service and writes the handler into that service's crate — here `rust/calculator/src/service.rs`:
 
 ```sh
-H=$(theseus query | grep -o '"model_hash": "[^"]*"' | head -1 | cut -d'"' -f4)
-theseus implement --method add      --body 'Ok(format!("{}", request.a + request.b))' --expect-model-hash "$H"
-theseus implement --method subtract --body 'Ok(format!("{}", request.a - request.b))' --expect-model-hash "$H"
-theseus implement --method multiply --body 'Ok(format!("{}", request.a * request.b))' --expect-model-hash "$H"
-theseus implement --method divide   --body 'Ok(format!("{}", request.a / request.b))' --expect-model-hash "$H"
+theseus implement --method add      --body 'Ok(format!("{}", request.a + request.b))'
+theseus implement --method subtract --body 'Ok(format!("{}", request.a - request.b))'
+theseus implement --method multiply --body 'Ok(format!("{}", request.a * request.b))'
+theseus implement --method divide   --body 'Ok(format!("{}", request.a / request.b))'
 ```
 
 The calculator crate now compiles as a self-contained service:
@@ -91,8 +88,7 @@ theseus-calculator = { path = "../calculator" }
 ```
 
 ```sh
-H=$(theseus query | grep -o '"model_hash": "[^"]*"' | head -1 | cut -d'"' -f4)
-theseus patch --write --expect-model-hash "$H" \
+theseus patch --write \
   --edit 'add|crate:theseus:theseus-cli|kind=dep|name=theseus-calculator' \
   --edit 'add|model:theseus|kind=type|name=CalcRequest|shape=struct:op=String:The operator: add, subtract, multiply, or divide.,a=f64:Left operand.,b=f64:Right operand.' \
   --edit 'add|service:theseus:Theseus|kind=operation|name=calc|summary=Evaluate an arithmetic expression through the calculator service.|request=CalcRequest|response=CalcResult' \

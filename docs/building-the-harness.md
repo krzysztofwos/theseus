@@ -17,7 +17,7 @@ Phase 1 — model the surface through the protocol, then stub the handler:
 
 ## Protocol surface (from reading the engine)
 
-The batch edit grammar is `verb|target|kind=K|name=N|key=value|…`, repeatable under one hash check, applied in order.
+The batch edit grammar is `verb|target|kind=K|name=N|key=value|…`, repeatable, applied in order.
 
 - `add` kinds and keys: `type` (`shape=struct:f=Ty,…` | `foreign:Path` | `newtype:Ty` | `enum:A,B`), `operation`/`port` (attach to `model:<m>` or `service:<m>:<Name>`), `method` (under a `port:` handle), `field` (under a `type:` handle, `ty=`/`doc=`), `inbound`/`crate`/`dep`.
 - handles: `type:m:Name`, `field:m:Type.field`, `op:m:name`, `port:m:name`, `method:m:port.method`, `service:m:Name`.
@@ -27,7 +27,7 @@ The batch edit grammar is `verb|target|kind=K|name=N|key=value|…`, repeatable 
 
 ### Phase 1 — model the surface
 
-Dry-ran, then applied with `--write`, one hash-checked batch of ten edits (`patch --write --expect-model-hash <h> --edit … ×10`): the four types, the `chat` operation, the `llm` port, and the port's `complete` method. The protocol accepted all ten and reprojected `self_model.rs` and `generated.rs` together. So adding the operation, the port, the method, and the types is fully protocol-driven.
+Dry-ran, then applied with `--write`, one batch of ten edits (`patch --write --edit … ×10`): the four types, the `chat` operation, the `llm` port, and the port's `complete` method. The protocol accepted all ten and reprojected `self_model.rs` and `generated.rs` together. So adding the operation, the port, the method, and the types is fully protocol-driven.
 
 `cargo build` then surfaced two errors:
 
@@ -55,7 +55,7 @@ The protocol generated the `Llm` port trait and the `Ctx.llm` slot. Two authored
 - `OfflineLlm`, a stub adapter implementing `Llm` — the hexagonal seam the protocol never crosses.
 - one line wiring `llm: &llm` into the composition root.
 
-The `chat` handler was authored through the protocol itself: `theseus implement --method chat --body-file <body> --expect-model-hash <h>` spliced a passthrough body — open a transcript from the message, call `self.llm.complete`, return the reply — into `service.rs`. The signature came from the model. Only the body was supplied.
+The `chat` handler was authored through the protocol itself: `theseus implement --method chat --body <body>` spliced a passthrough body — open a transcript from the message, call `self.llm.complete`, return the reply — into `service.rs`. The signature came from the model. Only the body was supplied.
 
 `allow_writes` was dropped before authoring: it gates mutating tools, which the passthrough has none of, so it was a field ahead of its consumer — the same dead-weight lesson as the port. It returns when tool dispatch does.
 
@@ -87,7 +87,7 @@ The tool surface is read-only by choice. A write tool (`patch`/`generate`) close
 
 ### The write tool and the allow-writes gate
 
-The loop's tool surface was read-only. A `patch` tool now closes the self-modification loop: the model proposes edits as a list of `verb|target|key=value` strings — the same batch vocabulary `theseus patch --edit` takes — and the loop builds the request, stamping the current model hash so the model never tracks it. The agent edits the model it inspects.
+The loop's tool surface was read-only. A `patch` tool now closes the self-modification loop: the model proposes edits as a list of `verb|target|key=value` strings — the same batch vocabulary `theseus patch --edit` takes — and the loop builds the request. The agent edits the model it inspects.
 
 A `patch` that writes is refused unless the chat permits it. `allow_writes` returns to `ChatRequest` — added through the protocol, now with a consumer — and surfaces as the generated `--allow-writes` flag, default off. When a write tool runs without it, the loop feeds a refusal back to the model rather than failing, so the model can adapt. This is the one irreducible permission for an agent that can rewrite its own source.
 

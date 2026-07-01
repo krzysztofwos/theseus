@@ -7,7 +7,7 @@ Adding an operation to Theseus requires two steps:
 
 All other elements are generated. The command surface, the request parser, the service-trait method, the `Invocation` variant, and the dispatch are all derived from the single model edit. `generated.rs` is never edited, and `main.rs` is edited only for non-default output, such as an exit code or a follow-up notice.
 
-The two steps are identical whether performed by a person through an editor or by an agent through the protocol. The protocol exists so that an agent, which lacks a general-purpose file editor, can perform the same edits as typed, hash-checked operations.
+The two steps are identical whether performed by a person through an editor or by an agent through the protocol. The protocol exists so that an agent, which lacks a general-purpose file editor, can perform the same edits as typed operations.
 
 A larger example — a calculator built as a separate service in its own crate, with a shared request type and four operations, exposed through the CLI as a single `calc` operation — is given in [building a calculator](building-a-calculator.md).
 
@@ -27,37 +27,26 @@ This walkthrough adds a temporary `greet` operation that takes no request and re
 
 ### 1. Describe the operation in the model
 
-An operation references a request type and a response type, so any new type is added first. `greet` requires a response type. The example adds a foreign type backed by `String`. Each edit is checked against the model hash, so the current hash is read first.
+An operation references a request type and a response type, so any new type is added first. `greet` requires a response type. The example adds a foreign type backed by `String`.
 
-```sh
-theseus query | grep model_hash
-#   "model_hash": "8e13f194ff830a8f",
-```
-
-Add the response type, supplying that hash:
+Add the response type:
 
 ```sh
 theseus patch --write \
-  --verb add --target model:theseus --kind type --name Greeting \
-  --set 'shape=foreign:String' \
-  --expect-model-hash 8e13f194ff830a8f
+  --edit 'add|model:theseus|kind=type|name=Greeting|shape=foreign:String'
 #   "diff": [ "+ type Greeting (foreign:String)" ]
-#   applied `add` and reprojected. Rebuild, then `coverage` shows any handler left to author
+#   applied and reprojected. Rebuild, then `coverage` shows any handler left to author
 ```
 
-Each `--write` reprojects the model, changing the hash. After re-reading it, add the operation (the request defaults to `Empty`):
+Add the operation (the request defaults to `Empty`):
 
 ```sh
-theseus query | grep model_hash      # note the new hash, e.g. 3a9d4587db6d9e90
-
 theseus patch --write \
-  --verb add --target model:theseus --kind operation --name greet \
-  --set 'summary=Greet the user.' --set response=Greeting \
-  --expect-model-hash 3a9d4587db6d9e90
+  --edit 'add|model:theseus|kind=operation|name=greet|summary=Greet the user.|response=Greeting'
 #   "diff": [ "+ operation greet (Empty => Greeting)" ]
 ```
 
-`--target model:theseus` attaches the new node to the model root. `--kind` names the node to add. The same verb adds methods (`--target port:theseus:workspace --kind method`), fields, and variants. See [the edit vocabulary](#the-edit-vocabulary).
+The `model:theseus` target attaches the new node to the model root, and `kind=` names the node to add. The same verb adds methods (`add|port:theseus:workspace|kind=method|…`), fields, and variants. See [the edit vocabulary](#the-edit-vocabulary).
 
 ### 2. Build
 
@@ -86,18 +75,15 @@ theseus coverage
 
 ### 4. Author the handler
 
-`implement` renders the handler signature from the model and writes a method into `service.rs`. Only the body is supplied. The command is hash-checked, so the hash is read again.
+`implement` renders the handler signature from the model and writes a method into `service.rs`. Only the body is supplied.
 
 ```sh
-theseus query | grep model_hash      # note the hash
-
 theseus implement --method greet \
-  --body 'Ok("hello from Theseus".to_string())' \
-  --expect-model-hash <hash>
-#   wrote the handler for `greet` into rust/cli/src/service.rs. Rebuild to load it
+  --body 'Ok("hello from Theseus".to_string())'
+#   wrote the handler for `greet` into rust/theseus/src/service.rs. Rebuild to load it
 ```
 
-The body is plain Rust. It may use `self.model`, the wired ports (`self.workspace`), and any item `service.rs` imports. A request-taking operation receives `request` (see [variations](#with-arguments)). A body too long for a single shell string may be supplied through `--body-file -` (stdin, via a heredoc) or `--body-file <path>`.
+The body is plain Rust. It may use `self.model`, the wired ports (`self.workspace`), and any item `service.rs` imports. A request-taking operation receives `request` (see [variations](#with-arguments)). A body too long for a single shell string may be read from a file with `--body "$(cat handler.rs)"`.
 
 ### 5. Run the operation
 
@@ -128,12 +114,12 @@ theseus verify
 To retain `greet`, omit this step. To remove it, restore the model and handler, then reproject the generated code:
 
 ```sh
-git checkout HEAD -- rust/model/src/self_model.rs rust/cli/src/service.rs
+git checkout HEAD -- rust/model/src/self_model.rs rust/theseus/src/service.rs
 theseus generate
 theseus verify        # conformant
 ```
 
-`patch --verb remove --target op:theseus:greet` removes the operation from the model, but the orphaned handler in `service.rs` must be removed manually, because a trait implementation cannot contain a method the trait no longer declares.
+`patch --edit 'remove|op:theseus:greet'` removes the operation from the model, but the orphaned handler in `service.rs` must be removed manually, because a trait implementation cannot contain a method the trait no longer declares.
 
 ## Viewing and revising a handler
 
@@ -146,9 +132,8 @@ theseus show --method greet
 #   }
 
 theseus implement --method greet \
-  --body 'Ok(format!("hello, {} operations", self.model.operations().len()))' \
-  --expect-model-hash <hash>
-#   wrote the handler for `greet` into rust/cli/src/service.rs. Rebuild to load it
+  --body 'Ok(format!("hello, {} operations", self.model.operations().len()))'
+#   wrote the handler for `greet` into rust/theseus/src/service.rs. Rebuild to load it
 ```
 
 The rewrite is precise: `implement` locates the method by its exact source span and replaces only that method, leaving every other handler unchanged. For an operation still on its default, `show` returns the signature it would have, marked as falling through to the default — the information `coverage` reports, for a single operation.
@@ -161,29 +146,22 @@ The rewrite is precise: `implement` locates the method by its exact source span 
 
 ```sh
 theseus patch --write \
-  --verb add --target model:theseus --kind type --name GreetRequest \
-  --set 'shape=struct:name=String' \
-  --expect-model-hash <hash>
+  --edit 'add|model:theseus|kind=type|name=GreetRequest|shape=struct:name=String'
 
 # set the field's help text
 theseus patch --write \
-  --verb set --target field:theseus:GreetRequest.name \
-  --set 'doc=Who to greet.' \
-  --expect-model-hash <hash>
+  --edit 'set|field:theseus:GreetRequest.name|doc=Who to greet.'
 
 # the operation now takes the request
 theseus patch --write \
-  --verb add --target model:theseus --kind operation --name greet \
-  --set 'summary=Greet someone.' --set request=GreetRequest --set response=Greeting \
-  --expect-model-hash <hash>
+  --edit 'add|model:theseus|kind=operation|name=greet|summary=Greet someone.|request=GreetRequest|response=Greeting'
 ```
 
 `generate` renders a `--name` flag from the `name` field. The handler reads it:
 
 ```sh
 theseus implement --method greet \
-  --body 'Ok(format!("hello {}", request.name))' \
-  --expect-model-hash <hash>
+  --body 'Ok(format!("hello {}", request.name))'
 
 cargo run -q -p theseus-cli -- greet --name World
 #   hello World
@@ -210,7 +188,7 @@ The actions of `patch` and `implement` may also be performed directly:
 
 1. Edit `rust/model/src/self_model.rs` — add the `.foreign_type(...)` or `.struct_type(...)` call and the `.operation(...)` call. The file is plain Rust and may be edited directly.
 2. Run `theseus generate` to refresh `generated.rs` (omitting this fails the drift-gate test).
-3. Author the handler in `impl TheseusService for Ctx` in `rust/cli/src/service.rs`.
+3. Author the handler in `impl TheseusService for Ctx` in `rust/theseus/src/service.rs`.
 
 The result and the gates are identical. The protocol is the editor-free path used by an agent. The direct path performs the same two steps through a text editor.
 
@@ -218,41 +196,40 @@ The result and the gates are identical. The protocol is the editor-free path use
 
 ### Generated versus authored files
 
-| File                           | Owner                                  | Contents                                                                                                                |
-| ------------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `rust/cli/src/generated.rs`    | `generate` (`// @generated`)           | command surface, request structs, `TheseusService` trait, `Invocation`, dispatch, port traits, `Ctx` |
-| `rust/model/src/self_model.rs` | `generate` / `patch` (`// @generated`) | the model, projected to its builder form (the fixed point)                                                              |
-| `rust/cli/src/service.rs`      | authored / `implement`                 | the operation handlers (`impl TheseusService for Ctx`)                                                                  |
-| `rust/cli/src/main.rs`         | authored                               | composition root, adapters, output overrides                                                            |
+| File                           | Owner                                  | Contents                                                                              |
+| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------- |
+| `rust/theseus/src/generated.rs` | `generate` (`// @generated`)           | request structs, `TheseusService` trait, outbound port traits, `Ctx` composition root |
+| `rust/cli/src/generated.rs`    | `generate` (`// @generated`)           | command surface, request parsers, `Invocation`, dispatch                              |
+| `rust/model/src/self_model.rs` | `generate` / `patch` (`// @generated`) | the model, projected to its builder form (the fixed point)                            |
+| `rust/theseus/src/service.rs`  | authored / `implement`                 | the operation handlers (`impl TheseusService for Ctx`)                                |
+| `rust/cli/src/main.rs`         | authored                               | composition root, adapters, output overrides                                          |
 
 ### Gates
 
-| Gate                                           | Property enforced                                                                                            |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--expect-model-hash` on `patch` / `implement` | the edit is computed against the model last observed. A concurrent change is refused with a coded diagnostic |
-| reference safety in `patch`                    | no operation references an undefined type, and no type is removed while referenced                           |
-| `coverage`                                     | the derived list of operations still on their `unimplemented` default                                        |
-| `verify`                                       | required dependencies, layering direction, type references, port targets, inbound services, generated drift, implementation coverage |
+| Gate                        | Property enforced                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                   |
+| `coverage`                  | the derived list of operations still on their `unimplemented` default                                                               |
+| `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, generated drift, implementation coverage |
 
 ### The edit vocabulary
 
-`patch` provides four verbs over the handles `query` produces:
+`patch` provides four verbs over the handles `query` produces, each supplied as a pipe-separated `--edit` string:
 
 ```
-theseus patch --verb add    --target <parent-handle> --kind <kind> --name <name> [--set k=v …]
-theseus patch --verb remove --target <handle>
-theseus patch --verb rename --target <handle> --to <name>
-theseus patch --verb set    --target <handle> --set k=v …
+theseus patch --edit 'add|<parent-handle>|kind=<kind>|name=<name>|k=v|…'
+theseus patch --edit 'remove|<handle>'
+theseus patch --edit 'rename|<handle>|to=<name>'
+theseus patch --edit 'set|<handle>|k=v|…'
 ```
 
 Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, `crate:theseus:<name>`, `service:theseus:<name>`, `inbound:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, `variant:theseus:<type>.<name>`, and `dep:theseus:<crate>.<dep>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, `variant`, `crate`, `dep`, `service`, or `inbound` — the crate-and-service kinds are exercised in [building a calculator](building-a-calculator.md).
 
-Type shapes (`--set shape=…`) are `newtype:Inner`, `foreign:Path`, `enum:A,B,C`, and `struct:field=Type,field=Type`. A struct field may carry its documentation inline as `field=Type:doc`, and a non-`String` field type is parsed and validated as that type on the command line.
+Type shapes (`shape=…`) are `newtype:Inner`, `foreign:Path`, `enum:A,B,C`, and `struct:field=Type,field=Type`. A struct field may carry its documentation inline as `field=Type:doc`, and a non-`String` field type is parsed and validated as that type on the command line.
 
-Several edits apply under one hash check with a repeatable `--edit 'verb|target|key=value…'`, supplied in place of `--verb` and `--target`. The batch is atomic: it is refused as a whole if any edit is refused. A worked batch is given in [building a calculator](building-a-calculator.md).
+Multiple `--edit` flags apply in one atomic `patch`, in order — refused as a whole if any edit is refused. A worked batch is given in [building a calculator](building-a-calculator.md).
 
 ### Troubleshooting
 
-- `stale model hash` — read the current hash with `theseus query` and retry. A `--write` changes the hash, so re-read it between chained edits.
 - `no operation named …` or `already has a handler` from `implement` — the method must name a current operation that is unimplemented. Run `theseus coverage`.
 - drift-gate failure (`theseus_conforms_to_its_self_model`) — `self_model.rs` was edited without running `theseus generate`.

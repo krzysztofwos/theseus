@@ -87,12 +87,18 @@ pub async fn run_agent(
     message: &str,
 ) -> anyhow::Result<String> {
     let tools = theseus::tool_catalog();
+    // `AGENT_TRACE` set in the environment streams each turn's tool calls and
+    // results to stderr, so a run can be watched without touching the answer.
+    let trace = std::env::var("AGENT_TRACE").is_ok();
     let mut messages = vec![Message {
         role: Role::User,
         blocks: vec![Block::Text(message.to_string())],
     }];
-    for _ in 0..MAX_TURNS {
+    for turn in 1..=MAX_TURNS {
         let reply = llm.complete(SYSTEM, &messages, &tools).await?;
+        if trace && !reply.text.is_empty() {
+            eprintln!("[turn {turn}] say: {}", reply.text);
+        }
         if reply.tool_uses.is_empty() {
             return Ok(reply.text);
         }
@@ -113,11 +119,20 @@ pub async fn run_agent(
         let results = reply
             .tool_uses
             .iter()
-            .map(|tool| Block::ToolResult {
-                tool_use_id: tool.id.clone(),
-                content: session
+            .map(|tool| {
+                if trace {
+                    eprintln!("[turn {turn}] call {}({})", tool.name, tool.input);
+                }
+                let content = session
                     .call(&tool.name, &tool.input)
-                    .unwrap_or_else(|error| format!("error: {error}")),
+                    .unwrap_or_else(|error| format!("error: {error}"));
+                if trace {
+                    eprintln!("[turn {turn}]   -> {content}");
+                }
+                Block::ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    content,
+                }
             })
             .collect();
         messages.push(Message {

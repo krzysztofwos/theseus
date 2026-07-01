@@ -11,8 +11,9 @@ use std::future::Future;
 use serde_json::Value;
 use theseus::Session;
 
-/// The most turns the loop runs before giving up.
-const MAX_TURNS: usize = 16;
+/// The most turns the loop runs before giving up. Generous enough that a few
+/// exploratory tool calls do not exhaust the budget before the model can answer.
+const MAX_TURNS: usize = 32;
 
 /// The framing handed to the model.
 const SYSTEM: &str = "You are Theseus, a self-modeling tool. Inspect and edit your \

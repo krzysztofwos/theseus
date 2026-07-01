@@ -1,11 +1,10 @@
 //! The write side of the agent protocol.
 //!
-//! A patch is hash-checked: the caller passes the model hash it last saw, and the
-//! edit is refused unless that hash still matches the current model, turning a
-//! concurrent edit into a loud rejection. Every refusal carries a coded
-//! [`Diagnostic`] with a repair shape, so an agent knows what went wrong and what
-//! to do next. An accepted patch returns the edited model. The adapter reprojects
-//! it (the self-model source and the generated scaffolding) from there.
+//! A patch resolves and checks each edit against the current model, refusing an
+//! edit the model cannot accept. Every refusal carries a coded [`Diagnostic`]
+//! with a repair shape, so an agent knows what went wrong and what to do next. An
+//! accepted patch returns the edited model. The adapter reprojects it (the
+//! self-model source and the generated scaffolding) from there.
 //!
 //! [`apply_edit`] is the one entry point and [`Edit`] is the edit vocabulary: four
 //! verbs — add, remove, rename, set — over the handles
@@ -79,37 +78,19 @@ impl PatchOutcome {
     }
 }
 
-/// Attempt one edit, checking `expected_hash` against the current model first.
+/// Attempt one edit against the current model.
 ///
 /// On success, returns the accepted outcome and the edited model. On refusal,
 /// returns the outcome with diagnostics and no model.
-pub fn apply_edit(
-    current: &Model,
-    edit: &Edit,
-    expected_hash: &str,
-) -> (PatchOutcome, Option<Model>) {
-    apply_edits(current, std::slice::from_ref(edit), expected_hash)
+pub fn apply_edit(current: &Model, edit: &Edit) -> (PatchOutcome, Option<Model>) {
+    apply_edits(current, std::slice::from_ref(edit))
 }
 
-/// Attempt a sequence of edits, checking `expected_hash` once and then applying
-/// each to the running result. The first refusal stops the sequence and writes
-/// nothing. On success the accepted outcome carries every edit's diff, and the
-/// whole sequence costs one hash check.
-pub fn apply_edits(
-    current: &Model,
-    edits: &[Edit],
-    expected_hash: &str,
-) -> (PatchOutcome, Option<Model>) {
+/// Attempt a sequence of edits, applying each to the running result. The first
+/// refusal stops the sequence and writes nothing. On success the accepted outcome
+/// carries every edit's diff.
+pub fn apply_edits(current: &Model, edits: &[Edit]) -> (PatchOutcome, Option<Model>) {
     let base = model_hash(current);
-    if base != expected_hash {
-        let diagnostic = diagnostic(
-            "PATCH001",
-            format!("stale model hash: expected `{expected_hash}`, current is `{base}`"),
-            "run `theseus query` for the current hash, then retry with --expect-model-hash",
-        );
-        return (PatchOutcome::refused(base, vec![diagnostic]), None);
-    }
-
     let mut model = current.clone();
     let mut diff = Vec::new();
     for edit in edits {
@@ -1268,10 +1249,9 @@ mod tests {
     use super::*;
     use crate::test_support::sample_model;
 
-    /// Apply an edit against the current hash, returning the outcome and model.
+    /// Apply an edit, returning the outcome and model.
     fn edit(model: &Model, edit: Edit) -> (PatchOutcome, Option<Model>) {
-        let hash = model_hash(model);
-        apply_edit(model, &edit, &hash)
+        apply_edit(model, &edit)
     }
 
     /// Apply an edit and unwrap the accepted model.
@@ -1491,9 +1471,8 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_applies_every_edit_under_one_hash() {
+    fn a_batch_applies_every_edit_in_order() {
         let model = sample_model();
-        let hash = model_hash(&model);
         let edits = vec![
             add(
                 "model:sample",
@@ -1507,7 +1486,7 @@ mod tests {
                 to: "pong".to_string(),
             },
         ];
-        let (outcome, next) = apply_edits(&model, &edits, &hash);
+        let (outcome, next) = apply_edits(&model, &edits);
         assert!(outcome.ok, "batch refused: {:?}", outcome.diagnostics);
         assert_eq!(outcome.diff.len(), 3);
         // The rename sees the operation the earlier edit added.
@@ -1520,7 +1499,6 @@ mod tests {
     #[test]
     fn a_batch_is_atomic_on_failure() {
         let model = sample_model();
-        let hash = model_hash(&model);
         let edits = vec![
             add(
                 "model:sample",
@@ -1532,25 +1510,11 @@ mod tests {
                 target: "op:sample:nope".to_string(),
             },
         ];
-        let (outcome, next) = apply_edits(&model, &edits, &hash);
+        let (outcome, next) = apply_edits(&model, &edits);
         assert!(!outcome.ok);
         // The first edit's effect is discarded — nothing is written.
         assert!(next.is_none());
         assert_eq!(code(&outcome), "PATCH005");
-    }
-
-    #[test]
-    fn stale_hash_is_refused_with_repair() {
-        let model = sample_model();
-        let (outcome, next) = apply_edit(
-            &model,
-            &add("model:sample", "operation", "ping", &[]),
-            "deadbeef",
-        );
-        assert!(!outcome.ok);
-        assert!(next.is_none());
-        assert_eq!(code(&outcome), "PATCH001");
-        assert!(!outcome.diagnostics[0].repair.is_empty());
     }
 
     #[test]

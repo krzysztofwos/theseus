@@ -31,24 +31,10 @@ pub struct QueryRequest {
 /// The `PatchRequest` request.
 #[derive(Debug, Clone)]
 pub struct PatchRequest {
-    /// The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.
-    pub verb: Option<String>,
-    /// Handle of the parent or node for a single edit. Omit when using `edit`.
-    pub target: Option<String>,
-    /// Node kind to add: operation, type, port, method, field, or variant.
-    pub kind: Option<String>,
-    /// Name of the node to add.
-    pub name: Option<String>,
-    /// New name, for rename.
-    pub to: Option<String>,
-    /// A `key=value` scalar assignment, repeatable, for add and set.
-    pub set: Vec<String>,
-    /// The model hash the edit was computed against.
-    pub expect_model_hash: String,
+    /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.
+    pub edit: Vec<String>,
     /// Apply the edit by reprojecting the model.
     pub write: bool,
-    /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.
-    pub edit: Vec<String>,
 }
 
 /// The `ImplementRequest` request.
@@ -57,11 +43,7 @@ pub struct ImplementRequest {
     /// Name of the operation to implement.
     pub method: String,
     /// The handler body to splice into the impl.
-    pub body: Option<String>,
-    /// The model hash the edit was computed against.
-    pub expect_model_hash: String,
-    /// Read the body from this file, or from stdin when `-`. Overrides body.
-    pub body_file: Option<String>,
+    pub body: String,
 }
 
 /// The `ShowRequest` request.
@@ -108,7 +90,7 @@ pub trait TheseusService {
         anyhow::bail!("unimplemented operation: query")
     }
 
-    /// Propose a hash-checked edit to the model.
+    /// Propose an edit to the model.
     fn patch(
         &self,
         _request: PatchRequest,

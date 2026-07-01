@@ -11,8 +11,7 @@ use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
     CoverageReport, Edit, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
-    apply_edit, apply_edits, coverage, describe, handler_source, model_hash, query, scaffold_files,
-    verify,
+    apply_edits, coverage, describe, handler_source, query, scaffold_files, verify,
 };
 
 use crate::generated::{
@@ -104,14 +103,6 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
-        let base = model_hash(self.model);
-        if base != request.expect_model_hash {
-            anyhow::bail!(
-                "stale model hash: expected `{}`, current is `{base}`; run `theseus query`",
-                request.expect_model_hash
-            );
-        }
-        let body = resolve_body(&request)?;
         let path = handler_path(self.model, &request.method)?;
         let source = std::fs::read_to_string(workspace_root().join(&path))
             .with_context(|| format!("reading {path}"))?;
@@ -119,7 +110,7 @@ impl TheseusService for Ctx<'_> {
             self.model,
             &source,
             &request.method,
-            &body,
+            &request.body,
             "crate::generated::",
         )?;
         self.workspace.write_file(&GeneratedFile {
@@ -133,17 +124,15 @@ impl TheseusService for Ctx<'_> {
     }
 
     fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
-        let (outcome, proposed) = if request.edit.is_empty() {
-            let edit = build_edit(&request)?;
-            apply_edit(self.model, &edit, &request.expect_model_hash)
-        } else {
-            let edits = request
-                .edit
-                .iter()
-                .map(|spec| parse_edit_spec(spec))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            apply_edits(self.model, &edits, &request.expect_model_hash)
-        };
+        if request.edit.is_empty() {
+            anyhow::bail!("patch needs at least one `--edit verb|target|key=value…`");
+        }
+        let edits = request
+            .edit
+            .iter()
+            .map(|spec| parse_edit_spec(spec))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let (outcome, proposed) = apply_edits(self.model, &edits);
         if request.write
             && let Some(proposed) = proposed
         {
@@ -179,41 +168,6 @@ pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) 
         Some((dir, _)) => root.join("rust").join(dir).join("Cargo.toml").exists(),
         None => true,
     }
-}
-
-/// The handler body for an implement request: read from `--body-file` (or stdin
-/// when `-`) if given, otherwise the inline `--body`.
-fn resolve_body(request: &ImplementRequest) -> anyhow::Result<String> {
-    match &request.body_file {
-        Some(path) if path == "-" => {
-            std::io::read_to_string(std::io::stdin()).context("reading the body from stdin")
-        }
-        Some(path) => {
-            std::fs::read_to_string(path).with_context(|| format!("reading the body from {path}"))
-        }
-        None => request
-            .body
-            .clone()
-            .context("implement needs --body or --body-file"),
-    }
-}
-
-/// Build the structured [`Edit`] from a parsed patch request — the inbound
-/// adapter's wire-to-domain conversion for the verb vocabulary.
-fn build_edit(request: &PatchRequest) -> anyhow::Result<Edit> {
-    let verb = request
-        .verb
-        .as_deref()
-        .context("patch needs --verb or --edit")?;
-    let target = request.target.clone().context("patch needs --target")?;
-    make_edit(
-        verb,
-        target,
-        request.kind.clone(),
-        request.to.clone(),
-        request.name.clone(),
-        parse_assignments(&request.set)?,
-    )
 }
 
 /// Parse one batch edit spec, `verb|target|key=value|…`, into an [`Edit`]. The
@@ -267,19 +221,6 @@ fn make_edit(
         "set" => Ok(Edit::Set { target, attrs }),
         other => anyhow::bail!("unknown verb `{other}`; expected add, remove, rename, or set"),
     }
-}
-
-/// Parse `--set key=value` assignments into attribute pairs. The first `=`
-/// separates the key, so a value may itself contain `=`.
-fn parse_assignments(set: &[String]) -> anyhow::Result<Vec<(String, String)>> {
-    set.iter()
-        .map(|pair| {
-            let (key, value) = pair
-                .split_once('=')
-                .with_context(|| format!("assignment `{pair}` must be key=value"))?;
-            Ok((key.trim().to_string(), value.to_string()))
-        })
-        .collect()
 }
 
 #[cfg(test)]

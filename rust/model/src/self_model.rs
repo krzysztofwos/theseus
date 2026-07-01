@@ -63,38 +63,11 @@ pub fn theseus_model() -> Model {
             "PatchRequest",
             &[
                 (
-                    "verb",
-                    "Option<String>",
-                    "The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.",
-                ),
-                (
-                    "target",
-                    "Option<String>",
-                    "Handle of the parent or node for a single edit. Omit when using `edit`.",
-                ),
-                (
-                    "kind",
-                    "Option<String>",
-                    "Node kind to add: operation, type, port, method, field, or variant.",
-                ),
-                ("name", "Option<String>", "Name of the node to add."),
-                ("to", "Option<String>", "New name, for rename."),
-                (
-                    "set",
-                    "Vec<String>",
-                    "A `key=value` scalar assignment, repeatable, for add and set.",
-                ),
-                (
-                    "expect_model_hash",
-                    "String",
-                    "The model hash the edit was computed against.",
-                ),
-                ("write", "bool", "Apply the edit by reprojecting the model."),
-                (
                     "edit",
                     "Vec<String>",
-                    "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.",
+                    "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.",
                 ),
+                ("write", "bool", "Apply the edit by reprojecting the model."),
             ],
         )
         .foreign_type("ModelDocument", "String")
@@ -108,17 +81,7 @@ pub fn theseus_model() -> Model {
             "ImplementRequest",
             &[
                 ("method", "String", "Name of the operation to implement."),
-                ("body", "Option<String>", "The handler body to splice into the impl."),
-                (
-                    "expect_model_hash",
-                    "String",
-                    "The model hash the edit was computed against.",
-                ),
-                (
-                    "body_file",
-                    "Option<String>",
-                    "Read the body from this file, or from stdin when `-`. Overrides body.",
-                ),
+                ("body", "String", "The handler body to splice into the impl."),
             ],
         )
         .foreign_type("HandlerSource", "String")
@@ -168,7 +131,7 @@ pub fn theseus_model() -> Model {
                 )
                 .operation(
                     "patch",
-                    "Propose a hash-checked edit to the model.",
+                    "Propose an edit to the model.",
                     "PatchRequest",
                     "PatchResult",
                 )

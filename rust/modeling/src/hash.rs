@@ -1,10 +1,9 @@
 //! Stable content hashing of a [`Model`](crate::model::Model).
 //!
-//! The hash is the agent protocol's anchor: `query` reports it, `patch` checks
-//! it (`--expect-model-hash`) before mutating, so concurrent edits collide
-//! loudly. FNV-1a over the canonical JSON encoding gives a result that is
-//! deterministic across runs and platforms and changes whenever the model does,
-//! which is all the protocol needs.
+//! The hash is the model's content fingerprint: `query` reports it, and a `patch`
+//! records the model's hash before and after an edit. FNV-1a over the canonical
+//! JSON encoding gives a result that is deterministic across runs and platforms
+//! and changes whenever the model does.
 
 use crate::model::Model;
 

@@ -2,8 +2,8 @@
 //!
 //! An agent calls `query` to discover stable handles for the model's elements
 //! and the current model hash. A handle names an element independently of its
-//! position, and the hash anchors a subsequent [`patch`](crate::patch) so a
-//! stale edit is rejected.
+//! position, and a subsequent [`patch`](crate::patch) addresses the element by
+//! that handle.
 
 use serde::Serialize;
 

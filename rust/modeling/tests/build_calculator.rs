@@ -1,12 +1,12 @@
 //! An agent builds a Calculator service through the edit vocabulary.
 //!
 //! This drives the same [`apply_edit`] machinery the `theseus patch` command
-//! delegates to: a sequence of hash-checked edits, each addressed by a handle and
-//! accepted, ending in coherent rendered projections. It is the build-up an agent
-//! performs to develop a service from a bare seed.
+//! delegates to: a sequence of edits, each addressed by a handle and accepted,
+//! ending in coherent rendered projections. It is the build-up an agent performs
+//! to develop a service from a bare seed.
 
 use theseus_modeling::{
-    Edit, Model, Service, Transport, apply_edit, model_hash, render_cli_module, render_model_source,
+    Edit, Model, Service, Transport, apply_edit, render_cli_module, render_model_source,
 };
 
 /// A bare Calculator model: one crate, one service driven by a CLI inbound, no
@@ -18,11 +18,10 @@ fn seed() -> Model {
         .inbound("calculator", Transport::Cli, "Calculator", "calculator")
 }
 
-/// Apply an edit against the current hash, asserting acceptance, and return the
-/// edited model — the way an agent threads each accepted edit into the next.
+/// Apply an edit, asserting acceptance, and return the edited model — the way an
+/// agent threads each accepted edit into the next.
 fn accept(model: Model, edit: Edit) -> Model {
-    let hash = model_hash(&model);
-    let (outcome, next) = apply_edit(&model, &edit, &hash);
+    let (outcome, next) = apply_edit(&model, &edit);
     assert!(outcome.ok, "edit refused: {:?}", outcome.diagnostics);
     next.expect("an accepted edit yields a model")
 }
@@ -115,20 +114,10 @@ fn an_agent_builds_and_amends_a_calculator() {
 }
 
 #[test]
-fn a_stale_hash_is_rejected_mid_build() {
-    let model = seed();
-    let (outcome, next) = apply_edit(&model, &binary_op("add"), "deadbeef");
-    assert!(!outcome.ok);
-    assert!(next.is_none());
-    assert_eq!(outcome.diagnostics[0].code, "PATCH001");
-}
-
-#[test]
 fn a_duplicate_operation_is_rejected() {
     let op = add("model:calculator", "operation", "noop", &[]);
     let model = accept(seed(), op.clone());
-    let hash = model_hash(&model);
-    let (outcome, _) = apply_edit(&model, &op, &hash);
+    let (outcome, _) = apply_edit(&model, &op);
     assert!(!outcome.ok);
     assert_eq!(outcome.diagnostics[0].code, "PATCH007");
 }

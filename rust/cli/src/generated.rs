@@ -47,71 +47,20 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("patch")
-                .about("Propose a hash-checked edit to the model.")
+                .about("Propose an edit to the model.")
                 .arg(
-                    Arg::new("verb")
-                        .long("verb")
-                        .action(ArgAction::Set)
-                        .help(
-                            "The verb for a single edit: add, remove, rename, or set. Omit when using `edit`.",
-                        ),
-                )
-                .arg(
-                    Arg::new("target")
-                        .long("target")
-                        .action(ArgAction::Set)
-                        .help(
-                            "Handle of the parent or node for a single edit. Omit when using `edit`.",
-                        ),
-                )
-                .arg(
-                    Arg::new("kind")
-                        .long("kind")
-                        .action(ArgAction::Set)
-                        .help(
-                            "Node kind to add: operation, type, port, method, field, or variant.",
-                        ),
-                )
-                .arg(
-                    Arg::new("name")
-                        .long("name")
-                        .action(ArgAction::Set)
-                        .help("Name of the node to add."),
-                )
-                .arg(
-                    Arg::new("to")
-                        .long("to")
-                        .action(ArgAction::Set)
-                        .help("New name, for rename."),
-                )
-                .arg(
-                    Arg::new("set")
-                        .long("set")
+                    Arg::new("edit")
+                        .long("edit")
                         .action(ArgAction::Append)
                         .help(
-                            "A `key=value` scalar assignment, repeatable, for add and set.",
+                            "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.",
                         ),
-                )
-                .arg(
-                    Arg::new("expect-model-hash")
-                        .long("expect-model-hash")
-                        .action(ArgAction::Set)
-                        .required(true)
-                        .help("The model hash the edit was computed against."),
                 )
                 .arg(
                     Arg::new("write")
                         .long("write")
                         .action(ArgAction::SetTrue)
                         .help("Apply the edit by reprojecting the model."),
-                )
-                .arg(
-                    Arg::new("edit")
-                        .long("edit")
-                        .action(ArgAction::Append)
-                        .help(
-                            "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order under one hash check.",
-                        ),
                 ),
         )
         .subcommand(
@@ -132,22 +81,8 @@ pub fn command() -> Command {
                     Arg::new("body")
                         .long("body")
                         .action(ArgAction::Set)
-                        .help("The handler body to splice into the impl."),
-                )
-                .arg(
-                    Arg::new("expect-model-hash")
-                        .long("expect-model-hash")
-                        .action(ArgAction::Set)
                         .required(true)
-                        .help("The model hash the edit was computed against."),
-                )
-                .arg(
-                    Arg::new("body-file")
-                        .long("body-file")
-                        .action(ArgAction::Set)
-                        .help(
-                            "Read the body from this file, or from stdin when `-`. Overrides body.",
-                        ),
+                        .help("The handler body to splice into the impl."),
                 ),
         )
         .subcommand(
@@ -208,23 +143,12 @@ fn parse_queryrequest(matches: &ArgMatches) -> theseus::QueryRequest {
 }
 
 fn parse_patchrequest(matches: &ArgMatches) -> theseus::PatchRequest {
-    let arg = |name: &str| matches.get_one::<String>(name).cloned();
     theseus::PatchRequest {
-        verb: arg("verb"),
-        target: arg("target"),
-        kind: arg("kind"),
-        name: arg("name"),
-        to: arg("to"),
-        set: matches
-            .get_many::<String>("set")
-            .map(|values| values.cloned().collect())
-            .unwrap_or_default(),
-        expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
-        write: matches.get_flag("write"),
         edit: matches
             .get_many::<String>("edit")
             .map(|values| values.cloned().collect())
             .unwrap_or_default(),
+        write: matches.get_flag("write"),
     }
 }
 
@@ -232,9 +156,7 @@ fn parse_implementrequest(matches: &ArgMatches) -> theseus::ImplementRequest {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     theseus::ImplementRequest {
         method: arg("method").unwrap_or_default(),
-        body: arg("body"),
-        expect_model_hash: arg("expect-model-hash").unwrap_or_default(),
-        body_file: arg("body-file"),
+        body: arg("body").unwrap_or_default(),
     }
 }
 

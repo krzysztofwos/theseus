@@ -10,8 +10,7 @@
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    GeneratedFile, Model, apply_edits, coverage, describe, handler_source, model_hash, query,
-    verify,
+    GeneratedFile, Model, apply_edits, coverage, describe, handler_source, query, verify,
 };
 
 use crate::generated::Workspace;
@@ -193,7 +192,7 @@ impl<'a> Session<'a> {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        let (outcome, proposed) = apply_edits(&self.model, &edits, &model_hash(&self.model));
+        let (outcome, proposed) = apply_edits(&self.model, &edits);
         if let Some(proposed) = proposed {
             if write {
                 if !self.allow_writes {

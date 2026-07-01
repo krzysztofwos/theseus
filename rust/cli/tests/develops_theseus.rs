@@ -17,16 +17,6 @@ fn theseus(args: &[&str]) -> (String, bool) {
     )
 }
 
-/// The current model hash, read from `query`'s output.
-fn model_hash() -> String {
-    let (out, ok) = theseus(&["query"]);
-    assert!(ok, "query failed");
-    let key = "\"model_hash\": \"";
-    let start = out.find(key).expect("hash present") + key.len();
-    let end = out[start..].find('"').unwrap() + start;
-    out[start..end].to_string()
-}
-
 #[test]
 fn query_lists_operations_types_and_ports() {
     let (out, ok) = theseus(&["query"]);
@@ -41,7 +31,7 @@ fn query_emits_nested_handles() {
     let (out, ok) = theseus(&["query"]);
     assert!(ok);
     // A field of a struct type and a method of a port are addressable too.
-    assert!(out.contains("field:theseus:PatchRequest.verb"));
+    assert!(out.contains("field:theseus:PatchRequest.edit"));
     assert!(out.contains("method:theseus:workspace.write_file"));
 }
 
@@ -79,21 +69,10 @@ fn query_kind_keeps_one_element_kind() {
 
 #[test]
 fn patch_adds_an_operation() {
-    let hash = model_hash();
     let (out, ok) = theseus(&[
         "patch",
-        "--verb",
-        "add",
-        "--target",
-        "model:theseus",
-        "--kind",
-        "operation",
-        "--name",
-        "echo",
-        "--set",
-        "summary=Echo the input back.",
-        "--expect-model-hash",
-        &hash,
+        "--edit",
+        "add|model:theseus|kind=operation|name=echo|summary=Echo the input back.",
     ]);
     assert!(ok);
     assert!(out.contains("\"ok\": true"));
@@ -102,23 +81,10 @@ fn patch_adds_an_operation() {
 
 #[test]
 fn patch_adds_a_field_to_a_struct() {
-    let hash = model_hash();
     let (out, ok) = theseus(&[
         "patch",
-        "--verb",
-        "add",
-        "--target",
-        "type:theseus:QueryRequest",
-        "--kind",
-        "field",
-        "--name",
-        "limit",
-        "--set",
-        "ty=Option<String>",
-        "--set",
-        "doc=Cap the number of handles returned.",
-        "--expect-model-hash",
-        &hash,
+        "--edit",
+        "add|type:theseus:QueryRequest|kind=field|name=limit|ty=Option<String>|doc=Cap the number of handles returned.",
     ]);
     assert!(ok);
     assert!(out.contains("+ field QueryRequest.limit: Option<String>"));
@@ -126,53 +92,14 @@ fn patch_adds_a_field_to_a_struct() {
 
 #[test]
 fn patch_renames_an_operation() {
-    let hash = model_hash();
-    let (out, ok) = theseus(&[
-        "patch",
-        "--verb",
-        "rename",
-        "--target",
-        "op:theseus:query",
-        "--to",
-        "lookup",
-        "--expect-model-hash",
-        &hash,
-    ]);
+    let (out, ok) = theseus(&["patch", "--edit", "rename|op:theseus:query|to=lookup"]);
     assert!(ok);
     assert!(out.contains("~ operation query -> lookup"));
 }
 
 #[test]
-fn a_stale_patch_is_rejected() {
-    let (out, ok) = theseus(&[
-        "patch",
-        "--verb",
-        "add",
-        "--target",
-        "model:theseus",
-        "--kind",
-        "operation",
-        "--name",
-        "echo",
-        "--expect-model-hash",
-        "deadbeef",
-    ]);
-    assert!(!ok, "a stale patch must exit non-zero");
-    assert!(out.contains("PATCH001"));
-}
-
-#[test]
 fn removing_a_referenced_type_is_refused() {
-    let hash = model_hash();
-    let (out, ok) = theseus(&[
-        "patch",
-        "--verb",
-        "remove",
-        "--target",
-        "type:theseus:VerifyReport",
-        "--expect-model-hash",
-        &hash,
-    ]);
+    let (out, ok) = theseus(&["patch", "--edit", "remove|type:theseus:VerifyReport"]);
     assert!(!ok);
     assert!(out.contains("PATCH009"));
 }

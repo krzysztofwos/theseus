@@ -61,9 +61,9 @@ const SELF_MODEL_HEADER: &str = concat!(
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
-    // Every crate that hosts a service or a CLI, HTTP, or gRPC inbound gets a
-    // generated file. An agent or MCP inbound drives the tool surface rendered
-    // with its service's crate, so its own crate gets none.
+    // Every crate that hosts a service, a CLI, HTTP, or gRPC inbound, or a
+    // client adapter gets a generated file. An agent or MCP inbound drives the
+    // tool surface rendered with its service's crate, so its own crate gets none.
     let hosting = model
         .services
         .iter()
@@ -79,6 +79,12 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
                     )
                 })
                 .map(|inbound| inbound.crate_name.as_str()),
+        )
+        .chain(
+            model
+                .clients
+                .iter()
+                .map(|client| client.crate_name.as_str()),
         );
     for crate_name in hosting {
         if rendered.contains(&crate_name) {
@@ -94,16 +100,26 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
             contents: render_module_for_crate(model, crate_name),
         });
     }
-    // A gRPC inbound crate also carries its proto contract — the wire schema its
-    // build compiles — drift-gated like every generated file.
-    for inbound in &model.inbounds {
-        if inbound.transport == Transport::Grpc
-            && let Some(service) = model.service_named(&inbound.service)
-        {
+    // A gRPC inbound or client crate also carries its proto contract — the wire
+    // schema its build compiles — drift-gated like every generated file.
+    let grpc_hosts = model
+        .inbounds
+        .iter()
+        .filter(|inbound| inbound.transport == Transport::Grpc)
+        .map(|inbound| (inbound.crate_name.as_str(), inbound.service.as_str()))
+        .chain(
+            model
+                .clients
+                .iter()
+                .filter(|client| client.transport == Transport::Grpc)
+                .map(|client| (client.crate_name.as_str(), client.service.as_str())),
+        );
+    for (crate_name, service_name) in grpc_hosts {
+        if let Some(service) = model.service_named(service_name) {
             let dir = model
-                .crate_named(&inbound.crate_name)
+                .crate_named(crate_name)
                 .map(|node| node.dir.as_str())
-                .unwrap_or_else(|| panic!("crate `{}` is not modeled", inbound.crate_name));
+                .unwrap_or_else(|| panic!("crate `{crate_name}` is not modeled"));
             files.push(GeneratedFile {
                 path: format!("rust/{dir}/proto/{}.proto", service.name.to_lowercase()),
                 contents: render_proto(model, service),

@@ -27,7 +27,7 @@ cargo clippy                            # lint
 
 Linting is also driven by Trunk (`.trunk/trunk.yaml`): `trunk check` runs clippy, rustfmt, taplo, and security scanners. Trunk auto-formats on pre-commit and checks on pre-push.
 
-CLI subcommands (the self-referential operations): `model` (self-describe + model hash), `verify` (self-conformance), `generate` (regenerate code from the model), `coverage` (the unimplemented-handler worklist), `scaffold` (write the skeleton of each service crate that lacks one), `show` (an operation's current handler source), `implement` (write an operation's handler into `service.rs` — inserting it, or replacing it in place), `check` (compile-check the workspace through the toolchain port), `calc` (evaluate arithmetic through the calculator service), and the agent protocol `query` / `patch`.
+CLI subcommands (the self-referential operations): `model` (self-describe + model hash), `verify` (self-conformance), `generate` (regenerate code from the model), `coverage` (the unimplemented-handler worklist), `scaffold` (write the skeleton of each service crate that lacks one), `show` (an operation's current handler source), `implement` (write an operation's handler into `service.rs` — inserting it, or replacing it in place — and compile-check it), `check` (compile-check the workspace through the toolchain port), `calc` (evaluate arithmetic through the calculator service), and the agent protocol `query` / `patch`.
 
 The self-modifying agent loop is not a subcommand. It is a separate `agent` binary, one of the inbounds that drive the Theseus service over the same operations (see Architecture).
 

@@ -1,0 +1,21 @@
+[package]
+name = "theseus-http-client"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus HTTP client — the service contract carried over HTTP"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+theseus = { path = "../theseus" }
+theseus-modeling = { path = "../modeling" }
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+
+theseus-http = { path = "../http" }

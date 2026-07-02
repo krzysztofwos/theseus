@@ -1,0 +1,27 @@
+[package]
+name = "theseus-grpc-client"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus gRPC client — the service contract carried over gRPC"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+theseus = { path = "../theseus" }
+theseus-modeling = { path = "../modeling" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net"] }
+tokio-stream = { workspace = true }
+
+theseus-grpc = { path = "../grpc" }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

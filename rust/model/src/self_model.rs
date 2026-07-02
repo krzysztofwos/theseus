@@ -60,6 +60,18 @@ pub fn theseus_model() -> Model {
             4,
             &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
         )
+        .crate_node(
+            "theseus-http-client",
+            "http-client",
+            5,
+            &["theseus", "theseus-modeling"],
+        )
+        .crate_node(
+            "theseus-grpc-client",
+            "grpc-client",
+            5,
+            &["theseus", "theseus-modeling"],
+        )
         .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
         .struct_type(
             "QueryRequest",
@@ -316,4 +328,6 @@ pub fn theseus_model() -> Model {
             "Calculator",
             "theseus-calculator-grpc",
         )
+        .client("http-client", Transport::Http, "Theseus", "theseus-http-client")
+        .client("grpc-client", Transport::Grpc, "Theseus", "theseus-grpc-client")
 }

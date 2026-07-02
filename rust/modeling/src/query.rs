@@ -5,7 +5,7 @@
 //! position, and a subsequent [`patch`](crate::patch) addresses the element by
 //! that handle.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     hash::model_hash,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// A stable reference to one model element.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Handle {
     /// Position-independent handle, e.g. `op:theseus:verify`.
     pub handle: String,
@@ -27,7 +27,7 @@ pub struct Handle {
 }
 
 /// The result of a query: the model hash plus the matching handles.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryOutcome {
     pub model_hash: String,
     pub handles: Vec<Handle>,
@@ -118,6 +118,15 @@ fn all_handles(model: &Model) -> Vec<Handle> {
                 "{:?} inbound driving {}",
                 inbound.transport, inbound.service
             ),
+        ));
+    }
+    for client in &model.clients {
+        let target = Target::Client(client.name.clone());
+        handles.push(handle(
+            model,
+            target,
+            client.name.clone(),
+            format!("{:?} client reaching {}", client.transport, client.service),
         ));
     }
 
@@ -272,6 +281,7 @@ mod tests {
                 .sum::<usize>()
             + model.services.len()
             + model.inbounds.len()
+            + model.clients.len()
             + model.operations().len()
             + model.types.len()
             + model

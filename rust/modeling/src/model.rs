@@ -25,6 +25,9 @@ pub struct Model {
     pub services: Vec<Service>,
     /// The inbound adapters that drive services over a transport.
     pub inbounds: Vec<Inbound>,
+    /// The client adapters that reach services over a transport.
+    #[serde(default)]
+    pub clients: Vec<Client>,
 }
 
 /// An inbound adapter: a transport that drives a service from the outside. The
@@ -38,6 +41,22 @@ pub struct Inbound {
     /// The transport the adapter speaks.
     pub transport: Transport,
     /// The service the adapter drives.
+    pub service: String,
+    /// Cargo package name of the crate that hosts the adapter.
+    pub crate_name: String,
+}
+
+/// A client adapter: a transport that reaches a service from the outside — the
+/// mirror of an [`Inbound`]. It implements the target service's contract over
+/// the wire, so a composition root wires it where an in-process adapter would
+/// stand. It lives in its own crate, which any consumer depends on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Client {
+    /// Adapter name, e.g. `http-client`.
+    pub name: String,
+    /// The transport the adapter speaks.
+    pub transport: Transport,
+    /// The service the adapter reaches.
     pub service: String,
     /// Cargo package name of the crate that hosts the adapter.
     pub crate_name: String,

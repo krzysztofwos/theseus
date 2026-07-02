@@ -12,7 +12,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::model::{
-    CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef, TypeShape, Variant,
+    Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef, TypeShape,
+    Variant,
 };
 
 /// Render a model as the source of its authoring function.
@@ -40,7 +41,7 @@ fn render_imports(model: &Model) -> TokenStream {
     if !model.services.is_empty() {
         names.push("Service");
     }
-    if !model.inbounds.is_empty() {
+    if !model.inbounds.is_empty() || !model.clients.is_empty() {
         names.push("Transport");
     }
     if model.services.iter().any(|s| !s.outbound.is_empty()) {
@@ -66,12 +67,14 @@ fn render_model_chain(model: &Model) -> TokenStream {
     let types = model.types.iter().map(render_type_def);
     let services = model.services.iter().map(render_service);
     let inbounds = model.inbounds.iter().map(render_inbound);
+    let clients = model.clients.iter().map(render_client);
     quote! {
         Model::new(#name)
             #(#crates)*
             #(#types)*
             #(#services)*
             #(#inbounds)*
+            #(#clients)*
     }
 }
 
@@ -81,6 +84,14 @@ fn render_inbound(inbound: &Inbound) -> TokenStream {
     let service = &inbound.service;
     let crate_name = &inbound.crate_name;
     quote! { .inbound(#name, Transport::#transport, #service, #crate_name) }
+}
+
+fn render_client(client: &Client) -> TokenStream {
+    let name = &client.name;
+    let transport = format_ident!("{}", format!("{:?}", client.transport));
+    let service = &client.service;
+    let crate_name = &client.crate_name;
+    quote! { .client(#name, Transport::#transport, #service, #crate_name) }
 }
 
 fn render_crate_node(node: &CrateNode) -> TokenStream {

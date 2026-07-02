@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Seven checks, all derived from the same [`Model`]:
+//! Eight checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -15,8 +15,10 @@
 //!      model defines, so no port is bound to a phantom service.
 //!   5. **Inbound services** — every inbound adapter drives a service the model
 //!      defines, so no adapter is bound to a phantom service.
-//!   6. **Generated drift** — model-derived files on disk match a fresh render.
-//!   7. **Implementation coverage** — every operation has an authored handler.
+//!   6. **Client services** — every client adapter reaches a service the model
+//!      defines, the mirror of the inbound check.
+//!   7. **Generated drift** — model-derived files on disk match a fresh render.
+//!   8. **Implementation coverage** — every operation has an authored handler.
 //!      The service trait defaults each method to `unimplemented`, so this check
 //!      holds the gate the compiler once did.
 //!
@@ -30,7 +32,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use theseus_kernel::{Category, CategoryBuilder, FunctorBuilder};
 
 use crate::{
@@ -39,7 +41,7 @@ use crate::{
 };
 
 /// The outcome of one verification check.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
@@ -47,7 +49,7 @@ pub struct Check {
 }
 
 /// The full self-verification report.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyReport {
     pub checks: Vec<Check>,
     pub conformant: bool,
@@ -141,6 +143,11 @@ pub fn verify(
     );
 
     report.record(
+        "clients: every client adapter reaches a defined service",
+        check_client_services(model),
+    );
+
+    report.record(
         "generated code: in sync with model (drift gate)",
         check_generated_in_sync(generated, workspace_root),
     );
@@ -213,6 +220,24 @@ fn check_port_targets(model: &Model) -> Result<String, String> {
 /// Every inbound adapter must drive a service the model defines, so an adapter
 /// bound to a phantom service is caught before code generation reaches for its
 /// trait.
+fn check_client_services(model: &Model) -> Result<String, String> {
+    let services: Vec<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
+    for client in &model.clients {
+        if !services.contains(&client.service.as_str()) {
+            return Err(format!(
+                "client `{}` reaches service `{}`, which the model does not define",
+                client.name, client.service
+            ));
+        }
+    }
+    Ok(format!(
+        "{} client adapter(s) all reach a defined service",
+        model.clients.len()
+    ))
+}
+
+/// Every client adapter must reach a service the model defines — the mirror of
+/// the inbound check.
 fn check_inbound_services(model: &Model) -> Result<String, String> {
     let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
     for inbound in &model.inbounds {
@@ -551,6 +576,7 @@ mod tests {
             types: vec![],
             services: vec![],
             inbounds: vec![],
+            clients: vec![],
         }
     }
 

@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hash::model_hash,
     model::{
-        CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
-        TypeShape, Variant,
+        Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport,
+        TypeDef, TypeShape, Variant,
     },
     path::{NodeKind, Target},
 };
@@ -115,7 +115,7 @@ impl FromStr for Edit {
 }
 
 /// A coded reason a patch was refused, paired with a repair shape.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
     pub message: String,
@@ -123,7 +123,7 @@ pub struct Diagnostic {
 }
 
 /// The result of attempting a patch.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchOutcome {
     /// Whether the patch was accepted.
     pub ok: bool,
@@ -284,6 +284,14 @@ fn plan_add(
             required(attrs, "service")?;
             required(attrs, "crate")?;
         }
+        NodeKind::Client => {
+            under_root(&parent, kind)?;
+            free(client_exists(model, name), "client", name)?;
+            allow_keys(attrs, &["transport", "service", "crate"])?;
+            parse_transport(required(attrs, "transport")?).map_err(transport_refused)?;
+            required(attrs, "service")?;
+            required(attrs, "crate")?;
+        }
         NodeKind::Operation => {
             attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
@@ -397,7 +405,7 @@ fn plan_set(
                 parse_layer(layer).map_err(layer_refused)?;
             }
         }
-        Target::Inbound(_) => {
+        Target::Inbound(_) | Target::Client(_) => {
             if let Some(transport) = attr(attrs, "transport") {
                 parse_transport(transport).map_err(transport_refused)?;
             }
@@ -458,6 +466,13 @@ fn apply_add(
         NodeKind::Inbound => model.inbounds.push(Inbound {
             name: name.to_string(),
             transport: parse_transport(attr(attrs, "transport").unwrap_or("Cli"))
+                .expect("transport validated during planning"),
+            service: attr(attrs, "service").unwrap_or_default().to_string(),
+            crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
+        }),
+        NodeKind::Client => model.clients.push(Client {
+            name: name.to_string(),
+            transport: parse_transport(attr(attrs, "transport").unwrap_or("Http"))
                 .expect("transport validated during planning"),
             service: attr(attrs, "service").unwrap_or_default().to_string(),
             crate_name: attr(attrs, "crate").unwrap_or_default().to_string(),
@@ -531,6 +546,7 @@ fn apply_remove(model: &mut Model, target: &Target) {
         }
         Target::Service(name) => model.services.retain(|service| &service.name != name),
         Target::Inbound(name) => model.inbounds.retain(|inbound| &inbound.name != name),
+        Target::Client(name) => model.clients.retain(|client| &client.name != name),
         Target::Operation(name) => {
             for service in &mut model.services {
                 service.operations.retain(|op| &op.name != name);
@@ -586,6 +602,13 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
             for inbound in &mut model.inbounds {
                 if &inbound.name == name {
                     inbound.name = to.to_string();
+                }
+            }
+        }
+        Target::Client(name) => {
+            for client in &mut model.clients {
+                if &client.name == name {
+                    client.name = to.to_string();
                 }
             }
         }
@@ -722,6 +745,17 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String
                 }
             }
         }
+        Target::Client(name) => {
+            if let Some(client) = model.clients.iter_mut().find(|c| &c.name == name) {
+                set_if(attrs, "service", &mut client.service);
+                set_if(attrs, "crate", &mut client.crate_name);
+                if let Some(transport) =
+                    attr(attrs, "transport").and_then(|v| parse_transport(v).ok())
+                {
+                    client.transport = transport;
+                }
+            }
+        }
         Target::Dep { .. }
         | Target::Service(_)
         | Target::Type(_)
@@ -752,6 +786,12 @@ fn describe(plan: &Plan) -> Vec<String> {
                 }
                 NodeKind::Inbound => format!(
                     "+ inbound {at} ({} driving {} in {})",
+                    attr(attrs, "transport").unwrap_or(""),
+                    attr(attrs, "service").unwrap_or(""),
+                    attr(attrs, "crate").unwrap_or(""),
+                ),
+                NodeKind::Client => format!(
+                    "+ client {at} ({} reaching {} in {})",
                     attr(attrs, "transport").unwrap_or(""),
                     attr(attrs, "service").unwrap_or(""),
                     attr(attrs, "crate").unwrap_or(""),
@@ -789,6 +829,7 @@ fn address(target: &Target) -> String {
         Target::Crate(name)
         | Target::Service(name)
         | Target::Inbound(name)
+        | Target::Client(name)
         | Target::Operation(name)
         | Target::Type(name)
         | Target::Port(name) => name.clone(),
@@ -956,7 +997,7 @@ fn required<'a>(
 fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
         Target::Crate(_) => &["dir", "layer"],
-        Target::Inbound(_) => &["transport", "service", "crate"],
+        Target::Inbound(_) | Target::Client(_) => &["transport", "service", "crate"],
         Target::Operation(_) => &["summary", "request", "response", "tool"],
         Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
@@ -976,6 +1017,7 @@ fn sibling_taken(model: &Model, target: &Target, to: &str) -> bool {
         Target::Dep { crate_name, .. } => dep_exists(model, crate_name, to),
         Target::Service(_) => service_exists(model, to),
         Target::Inbound(_) => inbound_exists(model, to),
+        Target::Client(_) => client_exists(model, to),
         Target::Operation(_) => model.operation(to).is_some(),
         Target::Type(_) => model.type_def(to).is_some(),
         Target::Port(_) => port_exists(model, to),
@@ -993,6 +1035,7 @@ fn node_exists(model: &Model, target: &Target) -> bool {
         Target::Dep { crate_name, dep } => dep_exists(model, crate_name, dep),
         Target::Service(name) => service_exists(model, name),
         Target::Inbound(name) => inbound_exists(model, name),
+        Target::Client(name) => client_exists(model, name),
         Target::Operation(name) => model.operation(name).is_some(),
         Target::Type(name) => model.type_def(name).is_some(),
         Target::Port(name) => port_exists(model, name),
@@ -1029,6 +1072,10 @@ fn service_exists(model: &Model, name: &str) -> bool {
 
 fn inbound_exists(model: &Model, name: &str) -> bool {
     model.inbounds.iter().any(|inbound| inbound.name == name)
+}
+
+fn client_exists(model: &Model, name: &str) -> bool {
+    model.clients.iter().any(|client| client.name == name)
 }
 
 /// Whether `crate_name` already declares a dependency on `dep`.
@@ -1517,6 +1564,41 @@ mod tests {
         assert_eq!(inbound.service, "Sample");
         assert_eq!(inbound.crate_name, "sample");
         assert_eq!(inbound.transport, Transport::Cli);
+    }
+
+    #[test]
+    fn add_a_client_adapter() {
+        let model = sample_model();
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "client",
+                "http-client",
+                &[
+                    ("transport", "Http"),
+                    ("service", "Sample"),
+                    ("crate", "sample-http-client"),
+                ],
+            ),
+        );
+        let client = model
+            .clients
+            .iter()
+            .find(|c| c.name == "http-client")
+            .expect("the client was added");
+        assert_eq!(client.service, "Sample");
+        assert_eq!(client.transport, Transport::Http);
+
+        // The mirror of the inbound checks: rename and set work over the handle.
+        let model = accept(
+            &model,
+            Edit::Set {
+                target: "client:sample:http-client".to_string(),
+                attrs: [("transport".to_string(), "Grpc".to_string())].into(),
+            },
+        );
+        assert_eq!(model.clients[0].transport, Transport::Grpc);
     }
 
     #[test]

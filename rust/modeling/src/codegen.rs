@@ -16,7 +16,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Field, Inbound, Model, Operation, Port, Service, Transport, TypeDef, TypeShape, Variant,
@@ -24,7 +24,7 @@ use crate::model::{
 
 /// A file rendered from the model, addressed relative to the workspace root. An
 /// adopter sets the path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneratedFile {
     pub path: String,
     pub contents: String,

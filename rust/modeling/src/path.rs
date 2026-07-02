@@ -22,6 +22,8 @@ pub enum Target {
     Service(String),
     /// An inbound adapter, by name.
     Inbound(String),
+    /// A client adapter, by name.
+    Client(String),
     /// An operation, by name.
     Operation(String),
     /// A type, by name.
@@ -43,6 +45,7 @@ pub enum NodeKind {
     Dep,
     Service,
     Inbound,
+    Client,
     Operation,
     Type,
     Port,
@@ -93,6 +96,7 @@ impl Target {
             Target::Dep { crate_name, dep } => format!("dep:{m}:{crate_name}.{dep}"),
             Target::Service(name) => format!("service:{m}:{name}"),
             Target::Inbound(name) => format!("inbound:{m}:{name}"),
+            Target::Client(name) => format!("client:{m}:{name}"),
             Target::Operation(name) => format!("op:{m}:{name}"),
             Target::Type(name) => format!("type:{m}:{name}"),
             Target::Port(name) => format!("port:{m}:{name}"),
@@ -110,6 +114,7 @@ impl Target {
             Target::Dep { .. } => "dependency",
             Target::Service(_) => "service",
             Target::Inbound(_) => "inbound",
+            Target::Client(_) => "client",
             Target::Operation(_) => "operation",
             Target::Type(_) => "type",
             Target::Port(_) => "port",
@@ -128,6 +133,7 @@ impl NodeKind {
             "dep" => NodeKind::Dep,
             "service" => NodeKind::Service,
             "inbound" => NodeKind::Inbound,
+            "client" => NodeKind::Client,
             "operation" => NodeKind::Operation,
             "type" => NodeKind::Type,
             "port" => NodeKind::Port,
@@ -145,6 +151,7 @@ impl NodeKind {
             NodeKind::Dep => "dependency",
             NodeKind::Service => "service",
             NodeKind::Inbound => "inbound",
+            NodeKind::Client => "client",
             NodeKind::Operation => "operation",
             NodeKind::Type => "type",
             NodeKind::Port => "port",
@@ -181,6 +188,7 @@ fn parse_kind(handle: &str, kind: &str, rest: &str) -> Result<Target, HandleErro
         }
         "service" => Ok(Target::Service(rest.to_string())),
         "inbound" => Ok(Target::Inbound(rest.to_string())),
+        "client" => Ok(Target::Client(rest.to_string())),
         "op" => Ok(Target::Operation(rest.to_string())),
         "type" => Ok(Target::Type(rest.to_string())),
         "port" => Ok(Target::Port(rest.to_string())),

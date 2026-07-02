@@ -28,6 +28,7 @@ pub(crate) fn sample_model() -> Model {
             }],
         }],
         inbounds: vec![],
+        clients: vec![],
     }
 }
 

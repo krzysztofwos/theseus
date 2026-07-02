@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use syn::{ImplItem, Item};
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// The implementation status of a model's operations.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoverageReport {
     /// Total operations in the model.
     pub total: usize,
@@ -27,7 +27,7 @@ pub struct CoverageReport {
 }
 
 /// One operation lacking an authored handler, with the signature to fill.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationGap {
     pub name: String,
     pub summary: String,

@@ -8,6 +8,7 @@ mod self_model;
 pub use self_model::theseus_model;
 use theseus_modeling::{
     GeneratedFile, Model, Service, Transport, render_model_source, render_module_for_crate,
+    render_proto,
 };
 
 /// The self-model source file, relative to the workspace root. It is the model's
@@ -60,7 +61,7 @@ const SELF_MODEL_HEADER: &str = concat!(
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
-    // Every crate that hosts a service, a CLI inbound, or an HTTP inbound gets a
+    // Every crate that hosts a service or a CLI, HTTP, or gRPC inbound gets a
     // generated file. An agent or MCP inbound drives the tool surface rendered
     // with its service's crate, so its own crate gets none.
     let hosting = model
@@ -71,7 +72,12 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
             model
                 .inbounds
                 .iter()
-                .filter(|inbound| matches!(inbound.transport, Transport::Cli | Transport::Http))
+                .filter(|inbound| {
+                    matches!(
+                        inbound.transport,
+                        Transport::Cli | Transport::Http | Transport::Grpc
+                    )
+                })
                 .map(|inbound| inbound.crate_name.as_str()),
         );
     for crate_name in hosting {
@@ -87,6 +93,22 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
             path: format!("rust/{dir}/src/generated.rs"),
             contents: render_module_for_crate(model, crate_name),
         });
+    }
+    // A gRPC inbound crate also carries its proto contract — the wire schema its
+    // build compiles — drift-gated like every generated file.
+    for inbound in &model.inbounds {
+        if inbound.transport == Transport::Grpc
+            && let Some(service) = model.service_named(&inbound.service)
+        {
+            let dir = model
+                .crate_named(&inbound.crate_name)
+                .map(|node| node.dir.as_str())
+                .unwrap_or_else(|| panic!("crate `{}` is not modeled", inbound.crate_name));
+            files.push(GeneratedFile {
+                path: format!("rust/{dir}/proto/{}.proto", service.name.to_lowercase()),
+                contents: render_proto(model, service),
+            });
+        }
     }
     files.push(GeneratedFile {
         path: SELF_MODEL_PATH.to_string(),

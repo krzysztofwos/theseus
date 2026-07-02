@@ -1,0 +1,26 @@
+[package]
+name = "theseus-grpc"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus gRPC server — the operations over gRPC with a structural status map"
+
+[[bin]]
+name = "grpc-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+prost = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+theseus = { path = "../theseus" }
+theseus-calculator = { path = "../calculator" }
+theseus-model = { path = "../model" }
+theseus-modeling = { path = "../modeling" }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

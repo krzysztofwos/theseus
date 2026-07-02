@@ -22,6 +22,7 @@ cargo run -p theseus-cli -- verify      # run the `theseus` binary (subcommands 
 cargo run -p theseus-agent -- "<goal>"  # the `agent` binary: the internal agent loop
 cargo run -p theseus-mcp                # the `mcp-server` binary: MCP over stdio
 cargo run -p theseus-http               # the `http-server` binary: operations over HTTP
+cargo run -p theseus-grpc               # the `grpc-server` binary: operations over gRPC
 cargo run -p theseus-calculator-grpc    # the `calculator-grpc` binary: the calculator over gRPC
 cargo +nightly fmt                      # format (config in .trunk/configs/.rustfmt.toml)
 cargo clippy                            # lint
@@ -35,7 +36,7 @@ The self-modifying agent loop is not a subcommand. It is a separate `agent` bina
 
 ## Architecture
 
-Eleven crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
+Twelve crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
 
 - `theseus-kernel` (L0) — `rust/kernel/`. Finite categories, functors, and the one law: a functor sends every morphism to one with matching endpoints. The structural substrate for all conformance checks. Knows nothing about Theseus.
 - `theseus-modeling` (L1) — `rust/modeling/`. The general engine over _any_ model: the `Model` vocabulary + fluent-builder DSL (`dsl.rs`), stable hashing (`hash.rs`), `verify`, `codegen`, crate scaffolding (`scaffold.rs`), the agent `query`/`patch` surface, and source splicing (`source.rs`).
@@ -44,6 +45,7 @@ Eleven crates under `rust/`, layered. Each crate may depend only on strictly low
 - `theseus-cli` (L4) — `rust/cli/`. The `Cli` inbound, the binary `theseus`. `generated.rs` renders the command surface and dispatch. `main.rs` wires concrete adapters into `Ctx` and runs.
 - `theseus-agent` (L4) — `rust/agent/`. The `Agent` inbound, the binary `agent`. An LLM drives the service's operations as tools over a `Session` in a loop, behind an `Llm` port — an Anthropic adapter, or an offline stub. A loop-level `restart` tool rebuilds the workspace and re-enters the session in the new binary, over a transcript persisted to `.theseus/session.json` (resumed with `agent --resume`).
 - `theseus-mcp` (L4) — `rust/mcp/`. The `Mcp` inbound, the binary `mcp-server`. A Model Context Protocol server exposing the same `tool_catalog()` over the same `Session` to an external host over stdio.
+- `theseus-grpc` (L4) — `rust/grpc/`. The `Grpc` inbound, the binary `grpc-server`. The build compiles a model-rendered `proto/theseus.proto` — the `Edit` enum as a `oneof` over its verbs, attribute maps as proto maps, and each foreign-typed response as a message carrying its JSON rendering — and generated glue maps outcomes onto gRPC statuses (UNIMPLEMENTED, PERMISSION_DENIED, INTERNAL).
 - `theseus-http` (L4) — `rust/http/`. The `Http` inbound, the binary `http-server`. Every operation over `POST /{operation}` with a JSON body, through generated handlers whose status map derives from the outcome's structure: 200 a result, 400 a body that does not parse, 404 an unknown operation, 501 an operation on its trait default, 403 a write the gate refused, 500 anything else.
 - `theseus-calculator` (L1) — `rust/calculator/`. A second service, `Calculator` (four arithmetic operations over `Operands`), reached from Theseus through an in-process `calculator` port.
 - `theseus-calculator-cli` (L2) — `rust/calculator-cli/`. A standalone `calculator` binary driving that service through its own `Cli` inbound — the worked multi-service example (`docs/building-a-calculator.md`).

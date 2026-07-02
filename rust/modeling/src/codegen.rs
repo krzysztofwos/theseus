@@ -986,6 +986,38 @@ mod tests {
     }
 
     #[test]
+    fn a_patched_in_tool_exposure_reaches_the_rendered_catalog() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .service(
+                Service::new("App")
+                    .crate_name("app")
+                    .operation("greet", "Greet.", "Empty", "Empty")
+                    .tool("Say hello."),
+            )
+            .inbound("loop", Transport::Agent, "App", "app-agent");
+        let edit = crate::patch::Edit::Add {
+            parent: "service:app:App".to_string(),
+            kind: "operation".to_string(),
+            name: "ping".to_string(),
+            attrs: [
+                ("summary".to_string(), "Ping.".to_string()),
+                ("tool".to_string(), "Ping the service.".to_string()),
+            ]
+            .into(),
+        };
+        let (outcome, patched) = crate::patch::apply_edit(&model, &edit);
+        assert!(outcome.ok, "edit refused: {:?}", outcome.diagnostics);
+        let rendered = render_module_for_crate(&patched.unwrap(), "app");
+        // The patched-in operation joins the catalog beside the authored one.
+        assert!(rendered.contains("ping"), "catalog lacks ping: {rendered}");
+        assert!(
+            rendered.contains("Ping the service."),
+            "catalog lacks the tool description: {rendered}"
+        );
+    }
+
+    #[test]
     fn a_port_method_carries_a_model_defined_struct() {
         let model = Model::new("App")
             .struct_type("Payload", &[("body", "String", "The body.")])

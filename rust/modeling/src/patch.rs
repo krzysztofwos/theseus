@@ -11,8 +11,7 @@
 //! [`query`](crate::query) mints. A handle resolves to a typed
 //! [`Target`](crate::path::Target), and the edit acts on the node it names.
 
-use std::collections::BTreeMap;
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
@@ -288,7 +287,7 @@ fn plan_add(
         NodeKind::Operation => {
             attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
-            allow_keys(attrs, &["summary", "request", "response"])?;
+            allow_keys(attrs, &["summary", "request", "response", "tool"])?;
         }
         NodeKind::Type => {
             under_root(&parent, kind)?;
@@ -471,9 +470,7 @@ fn apply_add(
                 summary: attr(attrs, "summary").unwrap_or_default().to_string(),
                 request: attr(attrs, "request").unwrap_or("Empty").to_string(),
                 response: attr(attrs, "response").unwrap_or("Empty").to_string(),
-                // A patch-added operation is not a tool. The pipe-DSL cannot carry a
-                // description containing `|`, so tool exposure is authored in the model.
-                tool: None,
+                tool: attr(attrs, "tool").map(str::to_string),
             });
         }
         NodeKind::Type => model.types.push(TypeDef {
@@ -685,6 +682,11 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String
                 set_if(attrs, "summary", &mut op.summary);
                 set_if(attrs, "request", &mut op.request);
                 set_if(attrs, "response", &mut op.response);
+                // The `tool` attribute is the operation's agent tool description.
+                // Text exposes the operation in the catalog; empty withdraws it.
+                if let Some(tool) = attr(attrs, "tool") {
+                    op.tool = (!tool.is_empty()).then(|| tool.to_string());
+                }
             }
         }
         Target::Port(name) => {
@@ -955,7 +957,8 @@ fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
         Target::Crate(_) => &["dir", "layer"],
         Target::Inbound(_) => &["transport", "service", "crate"],
-        Target::Operation(_) | Target::Method { .. } => &["summary", "request", "response"],
+        Target::Operation(_) => &["summary", "request", "response", "tool"],
+        Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
         Target::Dep { .. }
@@ -1730,6 +1733,64 @@ mod tests {
             Edit::Set {
                 target: "op:sample:greet".to_string(),
                 attrs: [("color".to_string(), "blue".to_string())].into(),
+            },
+        );
+        assert_eq!(code(&outcome), "PATCH010");
+    }
+
+    #[test]
+    fn add_an_operation_with_a_tool_description() {
+        let model = accept(
+            &sample_model(),
+            add(
+                "model:sample",
+                "operation",
+                "ping",
+                &[("summary", "Ping."), ("tool", "Ping the service | fast.")],
+            ),
+        );
+        assert_eq!(
+            model.operation("ping").unwrap().tool.as_deref(),
+            Some("Ping the service | fast."),
+        );
+    }
+
+    #[test]
+    fn set_an_operations_tool_exposure_and_withdraw_it() {
+        let model = accept(
+            &sample_model(),
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("tool".to_string(), "Say hello.".to_string())].into(),
+            },
+        );
+        assert_eq!(
+            model.operation("greet").unwrap().tool.as_deref(),
+            Some("Say hello."),
+        );
+
+        // An empty `tool` withdraws the exposure.
+        let model = accept(
+            &model,
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("tool".to_string(), String::new())].into(),
+            },
+        );
+        assert_eq!(model.operation("greet").unwrap().tool, None);
+    }
+
+    #[test]
+    fn a_method_rejects_a_tool_attribute() {
+        let model = accept(
+            &sample_model(),
+            add("port:sample:store", "method", "read", &[]),
+        );
+        let (outcome, _) = edit(
+            &model,
+            Edit::Set {
+                target: "method:sample:store.read".to_string(),
+                attrs: [("tool".to_string(), "Read.".to_string())].into(),
             },
         );
         assert_eq!(code(&outcome), "PATCH010");

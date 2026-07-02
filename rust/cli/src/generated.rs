@@ -97,6 +97,10 @@ pub fn command() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("check")
+                .about("Compile-check the workspace and report the outcome."),
+        )
+        .subcommand(
             Command::new("calc")
                 .about(
                     "Evaluate an arithmetic expression through the calculator service.",
@@ -185,6 +189,7 @@ pub enum Invocation {
     Coverage,
     Implement(theseus::ImplementRequest),
     Show(theseus::ShowRequest),
+    Check,
     Calc(theseus::CalcRequest),
     Scaffold,
 }
@@ -203,6 +208,7 @@ impl Invocation {
                 Invocation::Implement(parse_implementrequest(sub))
             }
             Some(("show", sub)) => Invocation::Show(parse_showrequest(sub)),
+            Some(("check", _)) => Invocation::Check,
             Some(("calc", sub)) => Invocation::Calc(parse_calcrequest(sub)),
             Some(("scaffold", _)) => Invocation::Scaffold,
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
@@ -236,6 +242,7 @@ pub fn dispatch(
         }
         Invocation::Implement(request) => println!("{}", service.implement(request) ?),
         Invocation::Show(request) => println!("{}", service.show(request) ?),
+        Invocation::Check => println!("{}", service.check() ?),
         Invocation::Calc(request) => println!("{}", service.calc(request) ?),
         Invocation::Scaffold => {
             println!("{}", serde_json::to_string_pretty(& service.scaffold() ?) ?)

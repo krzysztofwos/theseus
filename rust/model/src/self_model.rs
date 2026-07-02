@@ -89,6 +89,7 @@ pub fn theseus_model() -> Model {
             "ShowRequest",
             &[("method", "String", "Name of the operation whose handler to show.")],
         )
+        .foreign_type("CheckReport", "String")
         .struct_type(
             "Operands",
             &[("a", "f64", "Left operand."), ("b", "f64", "Right operand.")],
@@ -169,6 +170,15 @@ pub fn theseus_model() -> Model {
                     "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
                 )
                 .operation(
+                    "check",
+                    "Compile-check the workspace and report the outcome.",
+                    "Empty",
+                    "CheckReport",
+                )
+                .tool(
+                    "Compile-check the workspace and report the outcome. Run it after `implement` writes a handler, so the authored code is proven to compile before a rebuild.",
+                )
+                .operation(
                     "calc",
                     "Evaluate an arithmetic expression through the calculator service.",
                     "CalcRequest",
@@ -195,6 +205,18 @@ pub fn theseus_model() -> Model {
                             "Evaluates arithmetic through the calculator service.",
                         )
                         .targeting("Calculator"),
+                )
+                .port(
+                    Port::new(
+                            "toolchain",
+                            "Compile-checks the workspace and reports the outcome.",
+                        )
+                        .method(
+                            "check",
+                            "Compile-check the workspace and report the outcome.",
+                            "Empty",
+                            "CheckReport",
+                        ),
                 ),
         )
         .service(

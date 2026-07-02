@@ -8,18 +8,18 @@
 mod agent;
 mod anthropic;
 
-use anyhow::Context;
-use theseus::{FsWorkspace, Session};
-use theseus_model::theseus_model;
-
 use agent::{OfflineLlm, Reply, run_agent};
 use anthropic::AnthropicLlm;
+use anyhow::Context;
+use theseus::{CargoToolchain, FsWorkspace, Session};
+use theseus_model::theseus_model;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let (message, allow_writes) = parse_args()?;
     let workspace = FsWorkspace::at_repo_root();
-    let mut session = Session::new(theseus_model(), &workspace, allow_writes);
+    let toolchain = CargoToolchain;
+    let mut session = Session::new(theseus_model(), &workspace, &toolchain, allow_writes);
 
     // A real model when the API key is set; the offline stub otherwise, so the
     // binary runs with no network and the no-key path is obvious.

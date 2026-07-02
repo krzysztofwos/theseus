@@ -7,14 +7,16 @@
 
 use std::sync::{Arc, Mutex};
 
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    },
+    service::RequestContext,
 };
-use rmcp::service::RequestContext;
-use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
-use theseus::{FsWorkspace, Session};
+use theseus::{CargoToolchain, FsWorkspace, Session};
 use theseus_modeling::Model;
 
 /// A Model Context Protocol server over Theseus's [`Session`]. It holds the working
@@ -23,6 +25,7 @@ use theseus_modeling::Model;
 pub struct TheseusMcp {
     model: Mutex<Model>,
     workspace: FsWorkspace,
+    toolchain: CargoToolchain,
     allow_writes: bool,
 }
 
@@ -33,6 +36,7 @@ impl TheseusMcp {
         Self {
             model: Mutex::new(model),
             workspace: FsWorkspace::at_repo_root(),
+            toolchain: CargoToolchain,
             allow_writes,
         }
     }
@@ -72,7 +76,12 @@ impl ServerHandler for TheseusMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let input = Value::Object(request.arguments.unwrap_or_default());
         let mut model = self.model.lock().expect("the session lock is not poisoned");
-        let mut session = Session::new(model.clone(), &self.workspace, self.allow_writes);
+        let mut session = Session::new(
+            model.clone(),
+            &self.workspace,
+            &self.toolchain,
+            self.allow_writes,
+        );
         let outcome = session.call(request.name.as_ref(), &input);
         *model = session.into_model();
         drop(model);

@@ -13,9 +13,11 @@ use theseus_modeling::{
     GeneratedFile, Model, apply_edits, coverage, describe, handler_source, query, verify,
 };
 
-use crate::generated::Workspace;
-use crate::service::{crate_is_scaffolded, handler_path, parse_edit_spec};
-use crate::workspace_root;
+use crate::{
+    generated::{Toolchain, Workspace},
+    service::{crate_is_scaffolded, handler_path, parse_edit_spec},
+    workspace_root,
+};
 
 /// The result fed back when a write tool runs without the permission gate.
 pub(crate) const WRITE_REFUSED: &str =
@@ -28,15 +30,22 @@ pub(crate) const WRITE_REFUSED: &str =
 pub struct Session<'a> {
     model: Model,
     workspace: &'a dyn Workspace,
+    toolchain: &'a dyn Toolchain,
     allow_writes: bool,
 }
 
 impl<'a> Session<'a> {
     /// Open a session over a working copy of `model`.
-    pub fn new(model: Model, workspace: &'a dyn Workspace, allow_writes: bool) -> Self {
+    pub fn new(
+        model: Model,
+        workspace: &'a dyn Workspace,
+        toolchain: &'a dyn Toolchain,
+        allow_writes: bool,
+    ) -> Self {
         Self {
             model,
             workspace,
+            toolchain,
             allow_writes,
         }
     }
@@ -93,8 +102,9 @@ impl<'a> Session<'a> {
                 Ok(handler_source(&self.model, &source, method)?)
             }
             "implement" => self.implement(input),
+            "check" => self.toolchain.check(),
             other => anyhow::bail!(
-                "unknown tool `{other}`; tools are model, query, verify, coverage, patch, show, implement"
+                "unknown tool `{other}`; tools are model, query, verify, coverage, patch, show, implement, check"
             ),
         }
     }

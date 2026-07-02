@@ -10,11 +10,18 @@ pub trait Workspace {
     ) -> anyhow::Result<()>;
 }
 
+/// Compile-checks the workspace and reports the outcome.
+pub trait Toolchain {
+    /// Compile-check the workspace and report the outcome.
+    fn check(&self) -> anyhow::Result<String>;
+}
+
 /// Composition root: the model plus the wired outbound ports.
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,
     pub workspace: &'a dyn Workspace,
     pub calculator: &'a dyn theseus_calculator::CalculatorService,
+    pub toolchain: &'a dyn Toolchain,
 }
 
 /// The `QueryRequest` request.
@@ -113,6 +120,11 @@ pub trait TheseusService {
         anyhow::bail!("unimplemented operation: show")
     }
 
+    /// Compile-check the workspace and report the outcome.
+    fn check(&self) -> anyhow::Result<String> {
+        anyhow::bail!("unimplemented operation: check")
+    }
+
     /// Evaluate an arithmetic expression through the calculator service.
     fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: calc")
@@ -151,6 +163,9 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         }), serde_json::json!({ "name" : "show", "description" :
         "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
-        "string" } }, "required" : ["method"] } })
+        "string" } }, "required" : ["method"] } }), serde_json::json!({ "name" : "check",
+        "description" :
+        "Compile-check the workspace and report the outcome. Run it after `implement` writes a handler, so the authored code is proven to compile before a rebuild.",
+        "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }

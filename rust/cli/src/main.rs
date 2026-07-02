@@ -11,17 +11,19 @@
 mod generated;
 
 use generated::Invocation;
-use theseus::{Ctx, FsWorkspace, TheseusService};
+use theseus::{CargoToolchain, Ctx, FsWorkspace, TheseusService};
 use theseus_model::theseus_model;
 
 fn main() -> anyhow::Result<()> {
     let model = theseus_model();
     let workspace = FsWorkspace::at_repo_root();
     let calculator = theseus_calculator::Calculator;
+    let toolchain = CargoToolchain;
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
         calculator: &calculator,
+        toolchain: &toolchain,
     };
 
     // `arg_required_else_help(true)` in the generated surface means a bare

@@ -175,7 +175,7 @@ impl Llm for OfflineLlm {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use theseus::{Session, Workspace};
+    use theseus::{Session, Toolchain, Workspace};
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
@@ -187,6 +187,16 @@ mod tests {
     impl Workspace for NoopWorkspace {
         fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
             Ok(())
+        }
+    }
+
+    /// A toolchain that reports success without running a build, so the loop's
+    /// tests stay in-process.
+    struct StubToolchain;
+
+    impl Toolchain for StubToolchain {
+        fn check(&self) -> anyhow::Result<String> {
+            Ok("the workspace compiles (stub)".to_string())
         }
     }
 
@@ -203,7 +213,7 @@ mod tests {
             },
             Reply::answer("Theseus exposes a verify operation."),
         ]);
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, false);
+        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
         let answer = run_agent(&llm, &mut session, "what can you do?")
             .await
             .expect("the loop answers");

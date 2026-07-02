@@ -14,11 +14,13 @@ use theseus_modeling::{
     apply_edits, coverage, describe, handler_source, query, scaffold_files, verify,
 };
 
-use crate::generated::{
-    CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+use crate::{
+    generated::{
+        CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+    },
+    session::persist,
+    workspace_root,
 };
-use crate::session::persist;
-use crate::workspace_root;
 
 impl TheseusService for Ctx<'_> {
     fn model(&self) -> anyhow::Result<String> {
@@ -84,6 +86,10 @@ impl TheseusService for Ctx<'_> {
         let source = std::fs::read_to_string(workspace_root().join(&path))
             .with_context(|| format!("reading {path}"))?;
         Ok(handler_source(self.model, &source, &request.method)?)
+    }
+
+    fn check(&self) -> anyhow::Result<String> {
+        self.toolchain.check()
     }
 
     fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
@@ -228,8 +234,10 @@ mod tests {
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
-    use crate::generated::{Workspace, tool_catalog};
-    use crate::session::{Session, WRITE_REFUSED};
+    use crate::{
+        generated::{Toolchain, Workspace, tool_catalog},
+        session::{Session, WRITE_REFUSED},
+    };
 
     /// An edit that adds a throwaway type, for exercising the `patch` tool. The
     /// no-op workspace discards any reprojection, so a write touches no files.
@@ -244,9 +252,19 @@ mod tests {
         }
     }
 
+    /// A toolchain that reports success without running a build, so a `check`
+    /// call stays in-process.
+    struct StubToolchain;
+
+    impl Toolchain for StubToolchain {
+        fn check(&self) -> anyhow::Result<String> {
+            Ok("the workspace compiles (stub)".to_string())
+        }
+    }
+
     #[test]
     fn the_query_tool_finds_an_operation() {
-        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("query", &serde_json::json!({ "kind": "operation" }))
             .expect("the query tool runs");
         assert!(
@@ -257,7 +275,7 @@ mod tests {
 
     #[test]
     fn the_session_sees_its_own_edit() {
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, false);
+        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
         // An in-memory edit, no write, updates the working model.
         session
             .call("patch", &serde_json::json!({ "edit": [PROBE_EDIT] }))
@@ -278,7 +296,7 @@ mod tests {
     #[test]
     fn a_write_is_refused_without_the_gate() {
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("patch", &input)
             .expect("the tool returns a result");
         assert_eq!(result, WRITE_REFUSED);
@@ -288,7 +306,7 @@ mod tests {
     fn a_write_is_allowed_with_the_gate() {
         // The no-op workspace discards the reprojection, so this touches no files.
         let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
-        let result = Session::new(theseus_model(), &NoopWorkspace, true)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, true)
             .call("patch", &input)
             .expect("the patch tool runs");
         assert!(
@@ -303,7 +321,7 @@ mod tests {
 
     #[test]
     fn the_show_tool_returns_a_handler() {
-        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("show", &serde_json::json!({ "method": "verify" }))
             .expect("the show tool runs");
         assert!(
@@ -315,7 +333,7 @@ mod tests {
     #[test]
     fn an_implement_is_refused_without_the_gate() {
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
-        let result = Session::new(theseus_model(), &NoopWorkspace, false)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("implement", &input)
             .expect("the tool returns a result");
         assert_eq!(result, WRITE_REFUSED);
@@ -325,13 +343,21 @@ mod tests {
     fn an_implement_is_allowed_with_the_gate() {
         // The no-op workspace discards the spliced source, so this touches no files.
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
-        let result = Session::new(theseus_model(), &NoopWorkspace, true)
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, true)
             .call("implement", &input)
             .expect("the implement tool runs");
         assert!(
             result.contains("wrote the handler for `verify`"),
             "the tool should report the write: {result}"
         );
+    }
+
+    #[test]
+    fn the_check_tool_reports_through_the_toolchain_port() {
+        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
+            .call("check", &serde_json::json!({}))
+            .expect("the check tool runs");
+        assert_eq!(result, "the workspace compiles (stub)");
     }
 
     #[test]
@@ -353,7 +379,7 @@ mod tests {
             );
             // Every exposed tool has a dispatch arm: a bare call never falls
             // through to the unknown-tool error, though it may fail on missing input.
-            let mut session = Session::new(theseus_model(), &NoopWorkspace, false);
+            let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
             if let Err(error) = session.call(name, &serde_json::json!({})) {
                 assert!(
                     !error.to_string().contains("unknown tool"),

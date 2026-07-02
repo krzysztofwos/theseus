@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use theseus_modeling::GeneratedFile;
 
 mod generated;
@@ -51,5 +52,49 @@ impl Workspace for FsWorkspace {
         }
         std::fs::write(&path, &file.contents)?;
         Ok(())
+    }
+}
+
+/// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
+/// at the repository root. The shared toolchain adapter for the inbound binaries.
+pub struct CargoToolchain;
+
+impl Toolchain for CargoToolchain {
+    fn check(&self) -> anyhow::Result<String> {
+        let output = std::process::Command::new("cargo")
+            .args(["check", "--workspace", "--quiet"])
+            .current_dir(workspace_root())
+            .output()
+            .context("running `cargo check --workspace`")?;
+        // With `--quiet` the diagnostic stream carries warnings and errors only.
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        Ok(if output.status.success() {
+            if diagnostics.is_empty() {
+                "the workspace compiles".to_string()
+            } else {
+                format!(
+                    "the workspace compiles, with warnings:\n{}",
+                    head(diagnostics)
+                )
+            }
+        } else {
+            format!("check failed:\n{}", head(diagnostics))
+        })
+    }
+}
+
+/// The head of a diagnostic stream, capped so the report stays readable as a
+/// tool result. The first diagnostics carry the signal, so the cap keeps the
+/// head and counts what it drops.
+fn head(diagnostics: &str) -> String {
+    const CAP: usize = 8_000;
+    match diagnostics.char_indices().nth(CAP) {
+        None => diagnostics.to_string(),
+        Some((byte, _)) => format!(
+            "{}\n… truncated ({} more bytes)",
+            &diagnostics[..byte],
+            diagnostics.len() - byte
+        ),
     }
 }

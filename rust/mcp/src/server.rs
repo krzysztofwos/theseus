@@ -5,7 +5,7 @@
 //! a copy of that model, runs the tool, and reads the model back, so an external
 //! host's edits accumulate across calls exactly as they do for the agent loop.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -18,6 +18,7 @@ use rmcp::{
 use serde_json::Value;
 use theseus::{CargoToolchain, FsWorkspace, Session};
 use theseus_modeling::Model;
+use tokio::sync::Mutex;
 
 /// A Model Context Protocol server over Theseus's [`Session`]. It holds the working
 /// model and the write gate. An external host lists the tool catalog and calls
@@ -75,14 +76,15 @@ impl ServerHandler for TheseusMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let input = Value::Object(request.arguments.unwrap_or_default());
-        let mut model = self.model.lock().expect("the session lock is not poisoned");
+        // The lock holds across the call, so concurrent hosts see edits in order.
+        let mut model = self.model.lock().await;
         let mut session = Session::new(
             model.clone(),
             &self.workspace,
             &self.toolchain,
             self.allow_writes,
         );
-        let outcome = session.call(request.name.as_ref(), &input);
+        let outcome = session.call(request.name.as_ref(), &input).await;
         *model = session.into_model();
         drop(model);
         Ok(match outcome {

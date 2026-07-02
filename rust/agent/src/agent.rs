@@ -176,31 +176,29 @@ pub async fn run_agent(
         // tool returns its error as the result, so the model can recover. A
         // restart beside other calls is refused the same way, so every call in
         // the turn carries a result before the next request.
-        let results = reply
-            .tool_uses
-            .iter()
-            .map(|tool| {
-                if trace {
-                    eprintln!("[turn {turn}] call {}({})", tool.name, tool.input);
-                }
-                let content = if tool.name == RESTART_TOOL {
-                    "restart must be the only tool call in its turn; finish the \
+        let mut results = Vec::new();
+        for tool in &reply.tool_uses {
+            if trace {
+                eprintln!("[turn {turn}] call {}({})", tool.name, tool.input);
+            }
+            let content = if tool.name == RESTART_TOOL {
+                "restart must be the only tool call in its turn; finish the \
 other calls, then call it alone"
-                        .to_string()
-                } else {
-                    session
-                        .call(&tool.name, &tool.input)
-                        .unwrap_or_else(|error| format!("error: {error}"))
-                };
-                if trace {
-                    eprintln!("[turn {turn}]   -> {content}");
-                }
-                Block::ToolResult {
-                    tool_use_id: tool.id.clone(),
-                    content,
-                }
-            })
-            .collect();
+                    .to_string()
+            } else {
+                session
+                    .call(&tool.name, &tool.input)
+                    .await
+                    .unwrap_or_else(|error| format!("error: {error}"))
+            };
+            if trace {
+                eprintln!("[turn {turn}]   -> {content}");
+            }
+            results.push(Block::ToolResult {
+                tool_use_id: tool.id.clone(),
+                content,
+            });
+        }
         messages.push(Message {
             role: Role::User,
             blocks: results,
@@ -290,8 +288,9 @@ mod tests {
     /// A workspace that writes nowhere. The loop's read-only tools never reach it.
     struct NoopWorkspace;
 
+    #[async_trait::async_trait]
     impl Workspace for NoopWorkspace {
-        fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
+        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -300,8 +299,9 @@ mod tests {
     /// tests stay in-process.
     struct StubToolchain;
 
+    #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
-        fn check(&self) -> anyhow::Result<String> {
+        async fn check(&self) -> anyhow::Result<String> {
             Ok("the workspace compiles (stub)".to_string())
         }
     }

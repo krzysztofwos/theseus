@@ -136,8 +136,8 @@ fn binary_main(service: &Service) -> String {
     )
 }
 
-/// Render the crate manifest: `anyhow` for the generated contract, then a path
-/// dependency for each modeled crate dependency.
+/// Render the crate manifest: `anyhow` and `async-trait` for the generated
+/// contract, then a path dependency for each modeled crate dependency.
 fn cargo_toml(node: &CrateNode, services: &[&Service], model: &Model) -> String {
     let mut paths: Vec<String> = node
         .depends_on
@@ -156,7 +156,7 @@ fn cargo_toml(node: &CrateNode, services: &[&Service], model: &Model) -> String 
     };
     format!(
         "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{}\"\n\n\
-         [dependencies]\nanyhow = {{ workspace = true }}\n{path_block}",
+         [dependencies]\nanyhow = {{ workspace = true }}\nasync-trait = {{ workspace = true }}\n{path_block}",
         node.name,
         description(services),
     )
@@ -184,7 +184,7 @@ fn service_rs(services: &[&Service]) -> String {
         .map(|s| {
             let adapter = adapter_name(s);
             format!(
-                "/// The {} adapter.\npub struct {adapter};\n\nimpl {} for {adapter} {{}}\n",
+                "/// The {} adapter.\npub struct {adapter};\n\n#[async_trait::async_trait]\nimpl {} for {adapter} {{}}\n",
                 s.name,
                 trait_name(s),
             )

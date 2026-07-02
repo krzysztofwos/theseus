@@ -46,6 +46,7 @@ mod tests {
         /// A service left entirely on its trait defaults.
         struct Bare;
 
+        #[async_trait::async_trait]
         impl theseus_calculator::CalculatorService for Bare {}
 
         let glue = GrpcCalculator(Bare);

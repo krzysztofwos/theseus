@@ -120,15 +120,19 @@ impl Invocation {
 /// Dispatch a parsed invocation to the service and render its result:
 /// text for a string, otherwise pretty JSON. The authored entry point
 /// overrides the operations that need bespoke output and delegates here.
-pub fn dispatch(
+pub async fn dispatch(
     service: &impl theseus_calculator::CalculatorService,
     invocation: Invocation,
 ) -> anyhow::Result<()> {
     match invocation {
-        Invocation::Add(request) => println!("{}", service.add(request) ?),
-        Invocation::Subtract(request) => println!("{}", service.subtract(request) ?),
-        Invocation::Multiply(request) => println!("{}", service.multiply(request) ?),
-        Invocation::Divide(request) => println!("{}", service.divide(request) ?),
+        Invocation::Add(request) => println!("{}", service.add(request). await ?),
+        Invocation::Subtract(request) => {
+            println!("{}", service.subtract(request). await ?)
+        }
+        Invocation::Multiply(request) => {
+            println!("{}", service.multiply(request). await ?)
+        }
+        Invocation::Divide(request) => println!("{}", service.divide(request). await ?),
     }
     Ok(())
 }

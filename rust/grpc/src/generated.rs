@@ -17,7 +17,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::ModelDocument>, tonic::Status> {
-        let outcome = self.0.model();
+        let outcome = self.0.model().await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::ModelDocument { value })),
             Err(error) => Err(status(&error)),
@@ -27,7 +27,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::VerifyReport>, tonic::Status> {
-        let outcome = self.0.verify();
+        let outcome = self.0.verify().await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {
@@ -42,7 +42,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::GeneratedFiles>, tonic::Status> {
-        let outcome = self.0.generate();
+        let outcome = self.0.generate().await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {
@@ -64,7 +64,8 @@ for GrpcTheseus<S> {
                 find: request.find,
                 node: request.node,
                 kind: request.kind,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {
@@ -89,7 +90,8 @@ for GrpcTheseus<S> {
                     .map(edit_from_proto)
                     .collect::<Result<Vec<_>, tonic::Status>>()?,
                 write: request.write,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {
@@ -104,7 +106,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::CoverageReport>, tonic::Status> {
-        let outcome = self.0.coverage();
+        let outcome = self.0.coverage().await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {
@@ -125,7 +127,8 @@ for GrpcTheseus<S> {
             .implement(theseus::ImplementRequest {
                 method: request.method,
                 body: request.body,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::ImplementResult { value })),
             Err(error) => Err(status(&error)),
@@ -140,7 +143,8 @@ for GrpcTheseus<S> {
             .0
             .show(theseus::ShowRequest {
                 method: request.method,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::HandlerSource { value })),
             Err(error) => Err(status(&error)),
@@ -150,7 +154,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::CheckReport>, tonic::Status> {
-        let outcome = self.0.check();
+        let outcome = self.0.check().await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CheckReport { value })),
             Err(error) => Err(status(&error)),
@@ -167,7 +171,8 @@ for GrpcTheseus<S> {
                 op: request.op,
                 a: request.a,
                 b: request.b,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CalcResult { value })),
             Err(error) => Err(status(&error)),
@@ -177,7 +182,7 @@ for GrpcTheseus<S> {
         &self,
         _request: tonic::Request<proto::Empty>,
     ) -> Result<tonic::Response<proto::GeneratedFiles>, tonic::Status> {
-        let outcome = self.0.scaffold();
+        let outcome = self.0.scaffold().await;
         match outcome {
             Ok(value) => {
                 match serde_json::to_string(&value) {

@@ -43,8 +43,9 @@ impl FsWorkspace {
     }
 }
 
+#[async_trait::async_trait]
 impl Workspace for FsWorkspace {
-    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         let path = self.root.join(&file.path);
         // Scaffolding a new crate writes into a directory that does not exist yet.
         if let Some(parent) = path.parent() {
@@ -65,25 +66,30 @@ pub struct GatedWorkspace<'a> {
     pub allow_writes: bool,
 }
 
+#[async_trait::async_trait]
 impl Workspace for GatedWorkspace<'_> {
-    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         if !self.allow_writes {
             return Err(theseus_modeling::Refused.into());
         }
-        self.workspace.write_file(file)
+        self.workspace.write_file(file).await
     }
 }
 
 /// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
 /// at the repository root. The shared toolchain adapter for the inbound binaries.
+/// The check runs as a managed child process, so a server inbound keeps serving
+/// while it compiles.
 pub struct CargoToolchain;
 
+#[async_trait::async_trait]
 impl Toolchain for CargoToolchain {
-    fn check(&self) -> anyhow::Result<String> {
-        let output = std::process::Command::new("cargo")
+    async fn check(&self) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("cargo")
             .args(["check", "--workspace", "--quiet"])
             .current_dir(workspace_root())
             .output()
+            .await
             .context("running `cargo check --workspace`")?;
         // With `--quiet` the diagnostic stream carries warnings and errors only.
         let diagnostics = String::from_utf8_lossy(&output.stderr);

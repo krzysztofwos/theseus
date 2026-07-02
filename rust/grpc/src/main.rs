@@ -43,65 +43,80 @@ impl App {
         }
     }
 
-    /// Run one call over a composition root built on the gated workspace.
-    fn with<T>(&self, run: impl FnOnce(&Ctx<'_>) -> T) -> T {
-        let workspace = GatedWorkspace {
+    /// The workspace port carrying this server's write permission.
+    fn gate(&self) -> GatedWorkspace<'_> {
+        GatedWorkspace {
             workspace: &self.workspace,
             allow_writes: self.allow_writes,
-        };
-        let ctx = Ctx {
+        }
+    }
+
+    /// The composition root one call runs over.
+    fn ctx<'a>(&'a self, workspace: &'a GatedWorkspace<'a>) -> Ctx<'a> {
+        Ctx {
             model: &self.model,
-            workspace: &workspace,
+            workspace,
             calculator: &self.calculator,
             toolchain: &self.toolchain,
-        };
-        run(&ctx)
+        }
     }
 }
 
+#[async_trait::async_trait]
 impl TheseusService for App {
-    fn model(&self) -> anyhow::Result<String> {
-        self.with(|ctx| ctx.model())
+    async fn model(&self) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).model().await
     }
 
-    fn verify(&self) -> anyhow::Result<VerifyReport> {
-        self.with(|ctx| ctx.verify())
+    async fn verify(&self) -> anyhow::Result<VerifyReport> {
+        let workspace = self.gate();
+        self.ctx(&workspace).verify().await
     }
 
-    fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        self.with(|ctx| ctx.generate())
+    async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+        let workspace = self.gate();
+        self.ctx(&workspace).generate().await
     }
 
-    fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
-        self.with(|ctx| ctx.query(request))
+    async fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
+        let workspace = self.gate();
+        self.ctx(&workspace).query(request).await
     }
 
-    fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
-        self.with(|ctx| ctx.patch(request))
+    async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
+        let workspace = self.gate();
+        self.ctx(&workspace).patch(request).await
     }
 
-    fn coverage(&self) -> anyhow::Result<CoverageReport> {
-        self.with(|ctx| ctx.coverage())
+    async fn coverage(&self) -> anyhow::Result<CoverageReport> {
+        let workspace = self.gate();
+        self.ctx(&workspace).coverage().await
     }
 
-    fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
-        self.with(|ctx| ctx.implement(request))
+    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).implement(request).await
     }
 
-    fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        self.with(|ctx| ctx.show(request))
+    async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).show(request).await
     }
 
-    fn check(&self) -> anyhow::Result<String> {
-        self.with(|ctx| ctx.check())
+    async fn check(&self) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).check().await
     }
 
-    fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
-        self.with(|ctx| ctx.calc(request))
+    async fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).calc(request).await
     }
 
-    fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        self.with(|ctx| ctx.scaffold())
+    async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+        let workspace = self.gate();
+        self.ctx(&workspace).scaffold().await
     }
 }
 
@@ -197,6 +212,7 @@ mod tests {
         /// A service left entirely on its trait defaults.
         struct Bare;
 
+        #[async_trait::async_trait]
         impl theseus::TheseusService for Bare {}
 
         let glue = GrpcTheseus(Bare);

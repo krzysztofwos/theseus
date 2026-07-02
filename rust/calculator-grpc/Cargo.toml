@@ -18,6 +18,9 @@ tonic-prost = { workspace = true }
 theseus-calculator = { path = "../calculator" }
 theseus-modeling = { path = "../modeling" }
 
+[dev-dependencies]
+async-trait = { workspace = true }
+
 [build-dependencies]
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }

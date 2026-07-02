@@ -9,20 +9,21 @@ use crate::generated::CalculatorService;
 /// The calculator adapter.
 pub struct Calculator;
 
+#[async_trait::async_trait]
 impl CalculatorService for Calculator {
-    fn divide(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
+    async fn divide(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
         Ok(format!("{}", request.a / request.b))
     }
 
-    fn multiply(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
+    async fn multiply(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
         Ok(format!("{}", request.a * request.b))
     }
 
-    fn subtract(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
+    async fn subtract(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
         Ok(format!("{}", request.a - request.b))
     }
 
-    fn add(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
+    async fn add(&self, request: crate::generated::Operands) -> anyhow::Result<String> {
         Ok(format!("{}", request.a + request.b))
     }
 }

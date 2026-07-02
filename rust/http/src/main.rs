@@ -56,8 +56,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Run one operation call: build the composition root over the gated workspace,
-/// hand the call to the generated handler, and write its reply out. The core is
-/// synchronous, so a long operation holds its connection open until it reports.
+/// hand the call to the generated handler, and write its reply out.
 async fn call(
     State(app): State<Arc<App>>,
     Path(operation): Path<String>,
@@ -76,7 +75,7 @@ async fn call(
         calculator: &app.calculator,
         toolchain: &app.toolchain,
     };
-    let reply = generated::handle(&ctx, &operation, &input);
+    let reply = generated::handle(&ctx, &operation, &input).await;
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, [(CONTENT_TYPE, reply.content_type)], reply.body).into_response()
 }
@@ -94,13 +93,15 @@ mod tests {
     /// typed unimplemented error.
     struct Bare;
 
+    #[async_trait::async_trait]
     impl TheseusService for Bare {}
 
     /// A workspace that writes nowhere.
     struct NoopWorkspace;
 
+    #[async_trait::async_trait]
     impl Workspace for NoopWorkspace {
-        fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
+        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -108,14 +109,15 @@ mod tests {
     /// A toolchain that reports success without running a build.
     struct StubToolchain;
 
+    #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
-        fn check(&self) -> anyhow::Result<String> {
+        async fn check(&self) -> anyhow::Result<String> {
             Ok("the workspace compiles (stub)".to_string())
         }
     }
 
-    #[test]
-    fn a_result_is_200() {
+    #[tokio::test]
+    async fn a_result_is_200() {
         let model = theseus_model();
         let workspace = GatedWorkspace {
             workspace: &NoopWorkspace,
@@ -127,34 +129,34 @@ mod tests {
             calculator: &theseus_calculator::Calculator,
             toolchain: &StubToolchain,
         };
-        let reply = handle(&ctx, "model", &json!({}));
+        let reply = handle(&ctx, "model", &json!({})).await;
         assert_eq!(reply.status, 200);
         assert!(reply.content_type.starts_with("text/plain"));
     }
 
-    #[test]
-    fn an_unknown_operation_is_404() {
-        let reply = handle(&Bare, "warp", &json!({}));
+    #[tokio::test]
+    async fn an_unknown_operation_is_404() {
+        let reply = handle(&Bare, "warp", &json!({})).await;
         assert_eq!(reply.status, 404);
         assert!(reply.body.contains("unknown operation"));
     }
 
-    #[test]
-    fn a_body_that_does_not_parse_is_400() {
-        let reply = handle(&Bare, "implement", &json!({}));
+    #[tokio::test]
+    async fn a_body_that_does_not_parse_is_400() {
+        let reply = handle(&Bare, "implement", &json!({})).await;
         assert_eq!(reply.status, 400);
         assert!(reply.body.contains("method"));
     }
 
-    #[test]
-    fn an_unimplemented_operation_is_501() {
-        let reply = handle(&Bare, "verify", &json!({}));
+    #[tokio::test]
+    async fn an_unimplemented_operation_is_501() {
+        let reply = handle(&Bare, "verify", &json!({})).await;
         assert_eq!(reply.status, 501);
         assert!(reply.body.contains("unimplemented operation"));
     }
 
-    #[test]
-    fn a_refused_write_is_403() {
+    #[tokio::test]
+    async fn a_refused_write_is_403() {
         let model = theseus_model();
         let workspace = GatedWorkspace {
             workspace: &NoopWorkspace,
@@ -170,7 +172,8 @@ mod tests {
             &ctx,
             "implement",
             &json!({ "method": "verify", "body": "todo!()" }),
-        );
+        )
+        .await;
         assert_eq!(reply.status, 403);
         assert!(reply.body.contains("not permitted"));
     }

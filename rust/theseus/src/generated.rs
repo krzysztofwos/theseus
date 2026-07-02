@@ -2,18 +2,20 @@
 //! Theseus's generated scaffolding: the request types and service contract, the outbound port traits and composition root, the agent tool catalog and dispatch.
 
 /// Writes generated files into the workspace.
-pub trait Workspace {
+#[async_trait::async_trait]
+pub trait Workspace: Send + Sync {
     /// Write one generated file to disk.
-    fn write_file(
+    async fn write_file(
         &self,
         request: &theseus_modeling::GeneratedFile,
     ) -> anyhow::Result<()>;
 }
 
 /// Compile-checks the workspace and reports the outcome.
-pub trait Toolchain {
+#[async_trait::async_trait]
+pub trait Toolchain: Send + Sync {
     /// Compile-check the workspace and report the outcome.
-    fn check(&self) -> anyhow::Result<String>;
+    async fn check(&self) -> anyhow::Result<String>;
 }
 
 /// Composition root: the model plus the wired outbound ports.
@@ -86,24 +88,25 @@ impl std::error::Error for Unimplemented {}
 
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
-pub trait TheseusService {
+#[async_trait::async_trait]
+pub trait TheseusService: Send + Sync {
     /// Print Theseus's model of itself as JSON.
-    fn model(&self) -> anyhow::Result<String> {
+    async fn model(&self) -> anyhow::Result<String> {
         Err(Unimplemented("model").into())
     }
 
     /// Check that the workspace conforms to its self-model.
-    fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
+    async fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
         Err(Unimplemented("verify").into())
     }
 
     /// Regenerate model-derived code from the self-model.
-    fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+    async fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         Err(Unimplemented("generate").into())
     }
 
     /// Return a stable handle and model hash for a model element.
-    fn query(
+    async fn query(
         &self,
         _request: QueryRequest,
     ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
@@ -111,7 +114,7 @@ pub trait TheseusService {
     }
 
     /// Propose an edit to the model.
-    fn patch(
+    async fn patch(
         &self,
         _request: PatchRequest,
     ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
@@ -119,32 +122,32 @@ pub trait TheseusService {
     }
 
     /// Report which operations have an authored handler.
-    fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
+    async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         Err(Unimplemented("coverage").into())
     }
 
     /// Splice an authored handler for an operation and compile-check it.
-    fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
+    async fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
         Err(Unimplemented("implement").into())
     }
 
     /// Show an operation's current handler source.
-    fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
+    async fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
         Err(Unimplemented("show").into())
     }
 
     /// Compile-check the workspace and report the outcome.
-    fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<String> {
         Err(Unimplemented("check").into())
     }
 
     /// Evaluate an arithmetic expression through the calculator service.
-    fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
+    async fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
         Err(Unimplemented("calc").into())
     }
 
     /// Write the skeleton of each library service crate that is missing it.
-    fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+    async fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         Err(Unimplemented("scaffold").into())
     }
 }
@@ -260,24 +263,32 @@ fn parse_showrequest_input(input: &serde_json::Value) -> anyhow::Result<ShowRequ
 /// call's JSON input, run the operation, and render the result — text
 /// for a string, otherwise JSON. The catalog and this dispatch render
 /// from the same contract, so every catalog entry has an arm here.
-pub fn dispatch_tool(
+pub async fn dispatch_tool(
     service: &impl TheseusService,
     name: &str,
     input: &serde_json::Value,
 ) -> anyhow::Result<String> {
     match name {
-        "model" => Ok(service.model()?),
-        "verify" => Ok(serde_json::to_string(&service.verify()?)?),
+        "model" => Ok(service.model().await?),
+        "verify" => Ok(serde_json::to_string(&service.verify().await?)?),
         "query" => {
-            Ok(serde_json::to_string(&service.query(parse_queryrequest_input(input)?)?)?)
+            Ok(
+                serde_json::to_string(
+                    &service.query(parse_queryrequest_input(input)?).await?,
+                )?,
+            )
         }
         "patch" => {
-            Ok(serde_json::to_string(&service.patch(parse_patchrequest_input(input)?)?)?)
+            Ok(
+                serde_json::to_string(
+                    &service.patch(parse_patchrequest_input(input)?).await?,
+                )?,
+            )
         }
-        "coverage" => Ok(serde_json::to_string(&service.coverage()?)?),
-        "implement" => Ok(service.implement(parse_implementrequest_input(input)?)?),
-        "show" => Ok(service.show(parse_showrequest_input(input)?)?),
-        "check" => Ok(service.check()?),
+        "coverage" => Ok(serde_json::to_string(&service.coverage().await?)?),
+        "implement" => Ok(service.implement(parse_implementrequest_input(input)?).await?),
+        "show" => Ok(service.show(parse_showrequest_input(input)?).await?),
+        "check" => Ok(service.check().await?),
         other => {
             anyhow::bail!(
                 "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check"

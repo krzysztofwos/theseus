@@ -25,24 +25,25 @@ impl std::error::Error for Unimplemented {}
 
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
-pub trait CalculatorService {
+#[async_trait::async_trait]
+pub trait CalculatorService: Send + Sync {
     /// Add the operands.
-    fn add(&self, _request: Operands) -> anyhow::Result<String> {
+    async fn add(&self, _request: Operands) -> anyhow::Result<String> {
         Err(Unimplemented("add").into())
     }
 
     /// Subtract the operands.
-    fn subtract(&self, _request: Operands) -> anyhow::Result<String> {
+    async fn subtract(&self, _request: Operands) -> anyhow::Result<String> {
         Err(Unimplemented("subtract").into())
     }
 
     /// Multiply the operands.
-    fn multiply(&self, _request: Operands) -> anyhow::Result<String> {
+    async fn multiply(&self, _request: Operands) -> anyhow::Result<String> {
         Err(Unimplemented("multiply").into())
     }
 
     /// Divide the operands.
-    fn divide(&self, _request: Operands) -> anyhow::Result<String> {
+    async fn divide(&self, _request: Operands) -> anyhow::Result<String> {
         Err(Unimplemented("divide").into())
     }
 }

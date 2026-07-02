@@ -6,8 +6,9 @@
 
 mod generated;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let calculator = theseus_calculator::Calculator;
     let matches = generated::command().get_matches();
-    generated::dispatch(&calculator, generated::Invocation::from_matches(&matches)?)
+    generated::dispatch(&calculator, generated::Invocation::from_matches(&matches)?).await
 }

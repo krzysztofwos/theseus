@@ -228,33 +228,39 @@ impl Invocation {
 /// Dispatch a parsed invocation to the service and render its result:
 /// text for a string, otherwise pretty JSON. The authored entry point
 /// overrides the operations that need bespoke output and delegates here.
-pub fn dispatch(
+pub async fn dispatch(
     service: &impl theseus::TheseusService,
     invocation: Invocation,
 ) -> anyhow::Result<()> {
     match invocation {
-        Invocation::Model => println!("{}", service.model() ?),
+        Invocation::Model => println!("{}", service.model(). await ?),
         Invocation::Verify => {
-            println!("{}", serde_json::to_string_pretty(& service.verify() ?) ?)
+            println!("{}", serde_json::to_string_pretty(& service.verify(). await ?) ?)
         }
         Invocation::Generate => {
-            println!("{}", serde_json::to_string_pretty(& service.generate() ?) ?)
+            println!("{}", serde_json::to_string_pretty(& service.generate(). await ?) ?)
         }
         Invocation::Query(request) => {
-            println!("{}", serde_json::to_string_pretty(& service.query(request) ?) ?)
+            println!(
+                "{}", serde_json::to_string_pretty(& service.query(request). await ?) ?
+            )
         }
         Invocation::Patch(request) => {
-            println!("{}", serde_json::to_string_pretty(& service.patch(request) ?) ?)
+            println!(
+                "{}", serde_json::to_string_pretty(& service.patch(request). await ?) ?
+            )
         }
         Invocation::Coverage => {
-            println!("{}", serde_json::to_string_pretty(& service.coverage() ?) ?)
+            println!("{}", serde_json::to_string_pretty(& service.coverage(). await ?) ?)
         }
-        Invocation::Implement(request) => println!("{}", service.implement(request) ?),
-        Invocation::Show(request) => println!("{}", service.show(request) ?),
-        Invocation::Check => println!("{}", service.check() ?),
-        Invocation::Calc(request) => println!("{}", service.calc(request) ?),
+        Invocation::Implement(request) => {
+            println!("{}", service.implement(request). await ?)
+        }
+        Invocation::Show(request) => println!("{}", service.show(request). await ?),
+        Invocation::Check => println!("{}", service.check(). await ?),
+        Invocation::Calc(request) => println!("{}", service.calc(request). await ?),
         Invocation::Scaffold => {
-            println!("{}", serde_json::to_string_pretty(& service.scaffold() ?) ?)
+            println!("{}", serde_json::to_string_pretty(& service.scaffold(). await ?) ?)
         }
     }
     Ok(())

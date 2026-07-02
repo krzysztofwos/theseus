@@ -6,3 +6,4 @@ description = "A calculator service Theseus exposes through its CLI"
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }

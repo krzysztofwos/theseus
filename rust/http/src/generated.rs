@@ -101,48 +101,48 @@ fn parse_calcrequest_http(
 /// outcome's structure: 200 a result, 400 a request that does not parse,
 /// 404 an unknown operation, 501 an operation with no authored handler,
 /// 403 a refused write, and 500 any other error.
-pub fn handle(
+pub async fn handle(
     service: &impl theseus::TheseusService,
     name: &str,
     input: &serde_json::Value,
 ) -> HttpReply {
     match name {
-        "model" => reply_text(service.model()),
-        "verify" => reply_json(service.verify()),
-        "generate" => reply_json(service.generate()),
+        "model" => reply_text(service.model().await),
+        "verify" => reply_json(service.verify().await),
+        "generate" => reply_json(service.generate().await),
         "query" => {
             match parse_queryrequest_http(input) {
-                Ok(request) => reply_json(service.query(request)),
+                Ok(request) => reply_json(service.query(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "patch" => {
             match parse_patchrequest_http(input) {
-                Ok(request) => reply_json(service.patch(request)),
+                Ok(request) => reply_json(service.patch(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
-        "coverage" => reply_json(service.coverage()),
+        "coverage" => reply_json(service.coverage().await),
         "implement" => {
             match parse_implementrequest_http(input) {
-                Ok(request) => reply_text(service.implement(request)),
+                Ok(request) => reply_text(service.implement(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "show" => {
             match parse_showrequest_http(input) {
-                Ok(request) => reply_text(service.show(request)),
+                Ok(request) => reply_text(service.show(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
-        "check" => reply_text(service.check()),
+        "check" => reply_text(service.check().await),
         "calc" => {
             match parse_calcrequest_http(input) {
-                Ok(request) => reply_text(service.calc(request)),
+                Ok(request) => reply_text(service.calc(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
-        "scaffold" => reply_json(service.scaffold()),
+        "scaffold" => reply_json(service.scaffold().await),
         other => {
             HttpReply {
                 status: 404,

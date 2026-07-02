@@ -19,3 +19,6 @@ theseus = { path = "../theseus" }
 theseus-calculator = { path = "../calculator" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }
+
+[dev-dependencies]
+async-trait = { workspace = true }

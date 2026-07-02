@@ -57,11 +57,11 @@ impl<'a> Session<'a> {
     /// Run one tool against the working model and return its result as a JSON
     /// string. The tool surface is Theseus's own operations, so the session edits
     /// the model it inspects.
-    pub fn call(&mut self, name: &str, input: &serde_json::Value) -> anyhow::Result<String> {
+    pub async fn call(&mut self, name: &str, input: &serde_json::Value) -> anyhow::Result<String> {
         // `patch` mutates the session — an accepted edit updates the working
         // model — so the session answers it and shadows the generated arm.
         if name == "patch" {
-            return self.patch(input);
+            return self.patch(input).await;
         }
         let workspace = self.gate();
         let calculator = theseus_calculator::Calculator;
@@ -71,13 +71,13 @@ impl<'a> Session<'a> {
             calculator: &calculator,
             toolchain: self.toolchain,
         };
-        dispatch_tool(&ctx, name, input)
+        dispatch_tool(&ctx, name, input).await
     }
 
     /// Apply a `patch` tool call to the working model. Every accepted edit updates
     /// it, so a later call sees it. A `write` reprojects to disk through the gated
     /// workspace port.
-    fn patch(&mut self, input: &serde_json::Value) -> anyhow::Result<String> {
+    async fn patch(&mut self, input: &serde_json::Value) -> anyhow::Result<String> {
         let edits: Vec<Edit> =
             serde_json::from_value(input.get("edit").cloned().unwrap_or_default())
                 .context("patch `edit` must be a list of edits")?;
@@ -92,7 +92,7 @@ impl<'a> Session<'a> {
         let (outcome, proposed) = apply_edits(&self.model, &edits);
         if let Some(proposed) = proposed {
             if write {
-                persist(&proposed, &self.gate())?;
+                persist(&proposed, &self.gate()).await?;
             }
             self.model = proposed;
         }
@@ -110,11 +110,11 @@ impl<'a> Session<'a> {
 
 /// Reproject a model to disk through the workspace port, writing each generated
 /// file whose crate is scaffolded.
-pub(crate) fn persist(model: &Model, workspace: &dyn Workspace) -> anyhow::Result<()> {
+pub(crate) async fn persist(model: &Model, workspace: &dyn Workspace) -> anyhow::Result<()> {
     let root = workspace_root();
     for file in generated_files(model) {
         if crate_is_scaffolded(&root, &file) {
-            workspace.write_file(&file)?;
+            workspace.write_file(&file).await?;
         }
     }
     Ok(())

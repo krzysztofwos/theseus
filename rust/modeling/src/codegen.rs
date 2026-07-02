@@ -332,13 +332,14 @@ fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
             let response = response_type(&method.response, model);
             quote! {
                 #method_doc
-                fn #method_name(&self #param) -> anyhow::Result<#response>;
+                async fn #method_name(&self #param) -> anyhow::Result<#response>;
             }
         })
         .collect();
     quote! {
         #trait_doc
-        pub trait #trait_name {
+        #[async_trait::async_trait]
+        pub trait #trait_name: Send + Sync {
             #(#methods)*
         }
     }
@@ -555,9 +556,9 @@ fn render_tool_dispatch(
             let call = match request_type(op, model) {
                 Some(def) => {
                     let parser = format_ident!("parse_{}_input", def.name.to_lowercase());
-                    quote! { service.#method(#parser(input)?)? }
+                    quote! { service.#method(#parser(input)?).await? }
                 }
-                None => quote! { service.#method()? },
+                None => quote! { service.#method().await? },
             };
             let render = if rust_type(&op.response, model) == "String" {
                 quote! { Ok(#call) }
@@ -591,7 +592,7 @@ fn render_tool_dispatch(
         #doc_b
         #doc_c
         #doc_d
-        pub fn dispatch_tool(
+        pub async fn dispatch_tool(
             service: &impl #trait_name,
             name: &str,
             #input: &serde_json::Value,
@@ -732,12 +733,12 @@ fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> To
                     let parser = format_ident!("parse_{}_http", def.name.to_lowercase());
                     quote! {
                         #name => match #parser(input) {
-                            Ok(request) => #render(service.#method(request)),
+                            Ok(request) => #render(service.#method(request).await),
                             Err(error) => error_body(400, &error),
                         },
                     }
                 }
-                None => quote! { #name => #render(service.#method()), },
+                None => quote! { #name => #render(service.#method().await), },
             }
         })
         .collect();
@@ -772,7 +773,7 @@ fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> To
         #doc_c
         #doc_d
         #doc_e
-        pub fn handle(
+        pub async fn handle(
             service: &impl #trait_path,
             name: &str,
             #input: &serde_json::Value,
@@ -1130,10 +1131,10 @@ fn render_grpc_module(inbound: &Inbound, service: &Service, model: &Model) -> To
                         .collect();
                     quote! {
                         let request = request.into_inner();
-                        let outcome = self.0.#method(#ty { #(#inits),* });
+                        let outcome = self.0.#method(#ty { #(#inits),* }).await;
                     }
                 }
-                None => quote! { let outcome = self.0.#method(); },
+                None => quote! { let outcome = self.0.#method().await; },
             };
             let request_param = match request_type(op, model) {
                 Some(_) => format_ident!("request"),
@@ -1454,7 +1455,7 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
             let name = op.name.as_str();
             quote! {
                 #method_doc
-                fn #method_name(&self #param) -> anyhow::Result<#response> {
+                async fn #method_name(&self #param) -> anyhow::Result<#response> {
                     Err(Unimplemented(#name).into())
                 }
             }
@@ -1463,7 +1464,8 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
     quote! {
         #doc_a
         #doc_b
-        pub trait #trait_name {
+        #[async_trait::async_trait]
+        pub trait #trait_name: Send + Sync {
             #(#methods)*
         }
     }
@@ -1592,11 +1594,11 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
             let (pattern, call) = match request_type(op, model) {
                 Some(_) => (
                     quote! { Invocation::#variant(request) },
-                    quote! { service.#method(request)? },
+                    quote! { service.#method(request).await? },
                 ),
                 None => (
                     quote! { Invocation::#variant },
-                    quote! { service.#method()? },
+                    quote! { service.#method().await? },
                 ),
             };
             let render = if rust_type(&op.response, model) == "String" {
@@ -1611,7 +1613,7 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
         #[doc = " Dispatch a parsed invocation to the service and render its result:"]
         #[doc = " text for a string, otherwise pretty JSON. The authored entry point"]
         #[doc = " overrides the operations that need bespoke output and delegates here."]
-        pub fn dispatch(service: &impl #trait_path, invocation: Invocation) -> anyhow::Result<()> {
+        pub async fn dispatch(service: &impl #trait_path, invocation: Invocation) -> anyhow::Result<()> {
             match invocation {
                 #(#dispatch_arms)*
             }
@@ -1692,7 +1694,10 @@ pub(crate) fn handler_signature(op: &Operation, model: &Model, request_path: &st
         None => String::new(),
     };
     let response = rust_type(&op.response, model);
-    format!("fn {}(&self{param}) -> anyhow::Result<{response}>", op.name)
+    format!(
+        "async fn {}(&self{param}) -> anyhow::Result<{response}>",
+        op.name
+    )
 }
 
 /// The `, request: &T` fragment for a method, or empty for an `Empty` request.
@@ -1878,7 +1883,10 @@ mod tests {
             )
             .inbound("loop", Transport::Agent, "App", "app-agent");
         let rendered = render_module_for_crate(&model, "app");
-        assert!(rendered.contains("pub fn dispatch_tool"), "{rendered}");
+        assert!(
+            rendered.contains("pub async fn dispatch_tool"),
+            "{rendered}"
+        );
         assert!(rendered.contains(r#""greet" =>"#));
         assert!(rendered.contains(r#""send" =>"#));
         assert!(
@@ -1905,7 +1913,7 @@ mod tests {
             )
             .inbound("http", Transport::Http, "App", "app-http");
         let rendered = render_module_for_crate(&model, "app-http");
-        assert!(rendered.contains("pub fn handle"), "{rendered}");
+        assert!(rendered.contains("pub async fn handle"), "{rendered}");
         assert!(rendered.contains(r#""greet" =>"#));
         assert!(rendered.contains("fn parse_payload_http"));
         assert!(
@@ -2030,7 +2038,7 @@ mod tests {
         // The struct renders locally, and the port trait names it directly rather
         // than reaching for a twin in the engine crate.
         assert!(rendered.contains("pub struct Payload"));
-        assert!(rendered.contains("fn send(&self, request: &Payload)"));
+        assert!(rendered.contains("async fn send(&self, request: &Payload)"));
         assert!(!rendered.contains("theseus_modeling::Payload"));
     }
 

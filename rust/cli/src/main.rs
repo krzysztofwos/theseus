@@ -14,7 +14,8 @@ use generated::Invocation;
 use theseus::{CargoToolchain, Ctx, FsWorkspace, TheseusService};
 use theseus_model::theseus_model;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let model = theseus_model();
     let workspace = FsWorkspace::at_repo_root();
     let calculator = theseus_calculator::Calculator;
@@ -29,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     // `arg_required_else_help(true)` in the generated surface means a bare
     // invocation prints help and exits, so there is always a subcommand to parse.
     let matches = generated::command().get_matches();
-    run(&ctx, Invocation::from_matches(&matches)?)
+    run(&ctx, Invocation::from_matches(&matches)?).await
 }
 
 // ============================================================================
@@ -40,22 +41,22 @@ fn main() -> anyhow::Result<()> {
 // ============================================================================
 
 /// Run a parsed invocation against the service and write the result.
-fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<()> {
+async fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<()> {
     match invocation {
         Invocation::Verify => {
-            let report = service.verify()?;
+            let report = service.verify().await?;
             println!("{}", report.render());
             if !report.conformant {
                 std::process::exit(1);
             }
         }
         Invocation::Generate => {
-            for file in service.generate()? {
+            for file in service.generate().await? {
                 println!("wrote {}", file.path);
             }
         }
         Invocation::Scaffold => {
-            let written = service.scaffold()?;
+            let written = service.scaffold().await?;
             if written.is_empty() {
                 println!("every library service crate is already scaffolded");
             }
@@ -65,7 +66,7 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
         }
         Invocation::Patch(request) => {
             let writing = request.write;
-            let outcome = service.patch(request)?;
+            let outcome = service.patch(request).await?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
             if writing && outcome.ok {
                 println!(
@@ -76,7 +77,7 @@ fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::Result<
                 std::process::exit(1);
             }
         }
-        other => generated::dispatch(service, other)?,
+        other => generated::dispatch(service, other).await?,
     }
     Ok(())
 }

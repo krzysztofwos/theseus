@@ -24,7 +24,8 @@ impl<
             .add(theseus_calculator::Operands {
                 a: request.a,
                 b: request.b,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CalcResult { value })),
             Err(error) => Err(status(&error)),
@@ -40,7 +41,8 @@ impl<
             .subtract(theseus_calculator::Operands {
                 a: request.a,
                 b: request.b,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CalcResult { value })),
             Err(error) => Err(status(&error)),
@@ -56,7 +58,8 @@ impl<
             .multiply(theseus_calculator::Operands {
                 a: request.a,
                 b: request.b,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CalcResult { value })),
             Err(error) => Err(status(&error)),
@@ -72,7 +75,8 @@ impl<
             .divide(theseus_calculator::Operands {
                 a: request.a,
                 b: request.b,
-            });
+            })
+            .await;
         match outcome {
             Ok(value) => Ok(tonic::Response::new(proto::CalcResult { value })),
             Err(error) => Err(status(&error)),

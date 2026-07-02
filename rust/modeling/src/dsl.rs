@@ -6,7 +6,7 @@
 
 use crate::model::{
     CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
-    TypeShape,
+    TypeShape, Variant,
 };
 
 impl Model {
@@ -87,11 +87,28 @@ impl Model {
         self
     }
 
-    /// Add an enum type from its variant names.
+    /// Add an enum type the model owns and renders, from its unit variant names.
     pub fn enum_type(mut self, name: &str, variants: &[&str]) -> Self {
         self.types.push(TypeDef {
             name: name.to_string(),
-            shape: TypeShape::Enum(variants.iter().map(|v| v.to_string()).collect()),
+            shape: TypeShape::Enum {
+                variants: variants.iter().map(|v| Variant::unit(v)).collect(),
+                rust: None,
+            },
+        });
+        self
+    }
+
+    /// Add an enum type standing for the existing Rust type at `rust`, describing
+    /// its variants for a tool schema. Code generation resolves references to
+    /// `rust` rather than emitting the type.
+    pub fn foreign_enum(mut self, name: &str, rust: &str, variants: &[Variant]) -> Self {
+        self.types.push(TypeDef {
+            name: name.to_string(),
+            shape: TypeShape::Enum {
+                variants: variants.to_vec(),
+                rust: Some(rust.to_string()),
+            },
         });
         self
     }
@@ -100,6 +117,31 @@ impl Model {
     pub fn service(mut self, service: Service) -> Self {
         self.services.push(service);
         self
+    }
+}
+
+impl Variant {
+    /// A unit variant: a name with no fields.
+    pub fn unit(name: &str) -> Self {
+        Variant {
+            name: name.to_string(),
+            fields: Vec::new(),
+        }
+    }
+
+    /// A data variant: a name and its `(field, type, doc)` fields.
+    pub fn data(name: &str, fields: &[(&str, &str, &str)]) -> Self {
+        Variant {
+            name: name.to_string(),
+            fields: fields
+                .iter()
+                .map(|(field, ty, doc)| Field {
+                    name: field.to_string(),
+                    ty: ty.to_string(),
+                    doc: doc.to_string(),
+                })
+                .collect(),
+        }
     }
 }
 

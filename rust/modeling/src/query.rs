@@ -56,7 +56,7 @@ fn type_summary(def: &TypeDef) -> String {
     match &def.shape {
         TypeShape::Struct(_) => "struct".to_string(),
         TypeShape::Newtype(inner) => format!("newtype {inner}"),
-        TypeShape::Enum(_) => "enum".to_string(),
+        TypeShape::Enum { .. } => "enum".to_string(),
         TypeShape::Foreign(path) => format!("foreign {path}"),
     }
 }
@@ -144,13 +144,13 @@ fn all_handles(model: &Model) -> Vec<Handle> {
                     ));
                 }
             }
-            TypeShape::Enum(variants) => {
+            TypeShape::Enum { variants, .. } => {
                 for variant in variants {
                     let target = Target::Variant {
                         ty: def.name.clone(),
-                        name: variant.clone(),
+                        name: variant.name.clone(),
                     };
-                    handles.push(handle(model, target, variant.clone(), String::new()));
+                    handles.push(handle(model, target, variant.name.clone(), String::new()));
                 }
             }
             TypeShape::Newtype(_) | TypeShape::Foreign(_) => {}

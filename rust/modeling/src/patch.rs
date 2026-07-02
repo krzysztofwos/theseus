@@ -17,7 +17,7 @@ use crate::{
     hash::model_hash,
     model::{
         CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
-        TypeShape,
+        TypeShape, Variant,
     },
     path::{NodeKind, Target},
 };
@@ -446,7 +446,7 @@ fn apply_add(
             if let Target::Type(ty) = parent
                 && let Some(variants) = enum_variants_mut(model, ty)
             {
-                variants.push(name.to_string());
+                variants.push(Variant::unit(name));
             }
         }
     }
@@ -485,7 +485,7 @@ fn apply_remove(model: &mut Model, target: &Target) {
         }
         Target::Variant { ty, name } => {
             if let Some(variants) = enum_variants_mut(model, ty) {
-                variants.retain(|variant| variant != name);
+                variants.retain(|variant| variant.name != *name);
             }
         }
         Target::Model => {}
@@ -585,8 +585,8 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
         Target::Variant { ty, name } => {
             if let Some(variants) = enum_variants_mut(model, ty) {
                 for variant in variants {
-                    if variant == name {
-                        *variant = to.to_string();
+                    if variant.name == *name {
+                        variant.name = to.to_string();
                     }
                 }
             }
@@ -823,7 +823,7 @@ fn parent_struct<'a>(model: &Model, parent: &'a Target) -> Result<&'a str, Vec<D
 /// The parent of a variant, resolved to the name of an existing enum type.
 fn parent_enum<'a>(model: &Model, parent: &'a Target) -> Result<&'a str, Vec<Diagnostic>> {
     match parent {
-        Target::Type(ty) if matches!(shape_of(model, ty), Some(TypeShape::Enum(_))) => Ok(ty),
+        Target::Type(ty) if matches!(shape_of(model, ty), Some(TypeShape::Enum { .. })) => Ok(ty),
         _ => Err(vec![diagnostic(
             "PATCH006",
             "a variant attaches to an existing enum type",
@@ -1023,7 +1023,7 @@ fn field_of<'a>(model: &'a Model, ty: &str, name: &str) -> Option<&'a Field> {
 }
 
 fn variant_exists(model: &Model, ty: &str, name: &str) -> bool {
-    matches!(shape_of(model, ty), Some(TypeShape::Enum(variants)) if variants.iter().any(|v| v == name))
+    matches!(shape_of(model, ty), Some(TypeShape::Enum { variants, .. }) if variants.iter().any(|v| v.name == name))
 }
 
 fn operations_mut(model: &mut Model) -> impl Iterator<Item = &mut Operation> {
@@ -1054,10 +1054,10 @@ fn struct_fields_mut<'a>(model: &'a mut Model, ty: &str) -> Option<&'a mut Vec<F
     }
 }
 
-fn enum_variants_mut<'a>(model: &'a mut Model, ty: &str) -> Option<&'a mut Vec<String>> {
+fn enum_variants_mut<'a>(model: &'a mut Model, ty: &str) -> Option<&'a mut Vec<Variant>> {
     match model.types.iter_mut().find(|t| t.name == ty) {
         Some(TypeDef {
-            shape: TypeShape::Enum(variants),
+            shape: TypeShape::Enum { variants, .. },
             ..
         }) => Some(variants),
         _ => None,
@@ -1187,9 +1187,10 @@ fn parse_shape(spec: &str) -> Result<TypeShape, ShapeError> {
     match kind {
         "newtype" => Ok(TypeShape::Newtype(value.to_string())),
         "foreign" => Ok(TypeShape::Foreign(value.to_string())),
-        "enum" => Ok(TypeShape::Enum(
-            value.split(',').map(|v| v.trim().to_string()).collect(),
-        )),
+        "enum" => Ok(TypeShape::Enum {
+            variants: value.split(',').map(|v| Variant::unit(v.trim())).collect(),
+            rust: None,
+        }),
         "struct" => {
             let fields = value
                 .split(',')
@@ -1573,7 +1574,10 @@ mod tests {
         );
         let model = accept(&model, add("type:sample:Status", "variant", "Busy", &[]));
         match &model.type_def("Status").unwrap().shape {
-            TypeShape::Enum(variants) => assert_eq!(variants, &["Ready", "Busy"]),
+            TypeShape::Enum { variants, .. } => {
+                let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+                assert_eq!(names, ["Ready", "Busy"]);
+            }
             other => panic!("expected an enum, found {other:?}"),
         }
     }

@@ -254,7 +254,7 @@ fn check_type_references(model: &Model) -> Result<String, String> {
                 referenced.extend(fields.iter().map(|field| field.ty.as_str()))
             }
             TypeShape::Newtype(inner) => referenced.push(inner),
-            TypeShape::Enum(_) | TypeShape::Foreign(_) => {}
+            TypeShape::Enum { .. } | TypeShape::Foreign(_) => {}
         }
     }
 

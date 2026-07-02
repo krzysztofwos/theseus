@@ -12,7 +12,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::model::{
-    CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef, TypeShape,
+    CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef, TypeShape, Variant,
 };
 
 /// Render a model as the source of its authoring function.
@@ -45,6 +45,13 @@ fn render_imports(model: &Model) -> TokenStream {
     }
     if model.services.iter().any(|s| !s.outbound.is_empty()) {
         names.push("Port");
+    }
+    let has_foreign_enum = model
+        .types
+        .iter()
+        .any(|def| matches!(&def.shape, TypeShape::Enum { rust: Some(_), .. }));
+    if has_foreign_enum {
+        names.push("Variant");
     }
     names.sort_unstable();
     names.dedup();
@@ -93,10 +100,32 @@ fn render_type_def(def: &TypeDef) -> TokenStream {
             let entries = fields.iter().map(render_field);
             quote! { .struct_type(#name, &[#(#entries),*]) }
         }
-        TypeShape::Enum(variants) => {
-            let variants = variants.iter();
-            quote! { .enum_type(#name, &[#(#variants),*]) }
+        TypeShape::Enum {
+            variants,
+            rust: Some(path),
+        } => {
+            let variants = variants.iter().map(render_variant);
+            quote! { .foreign_enum(#name, #path, &[#(#variants),*]) }
         }
+        TypeShape::Enum {
+            variants,
+            rust: None,
+        } => {
+            let names = variants.iter().map(|variant| &variant.name);
+            quote! { .enum_type(#name, &[#(#names),*]) }
+        }
+    }
+}
+
+/// Render one enum variant as its builder call: a unit variant as `Variant::unit`,
+/// a data variant as `Variant::data` with its `(field, type, doc)` fields.
+fn render_variant(variant: &Variant) -> TokenStream {
+    let name = &variant.name;
+    if variant.fields.is_empty() {
+        quote! { Variant::unit(#name) }
+    } else {
+        let fields = variant.fields.iter().map(render_field);
+        quote! { Variant::data(#name, &[#(#fields),*]) }
     }
 }
 

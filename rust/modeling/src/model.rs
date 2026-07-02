@@ -190,11 +190,26 @@ pub enum TypeShape {
     Struct(Vec<Field>),
     /// A validated wrapper around one inner type.
     Newtype(String),
-    /// A closed set of variant names.
-    Enum(Vec<String>),
+    /// A closed set of variants, each a name and, for a data-carrying variant, its
+    /// fields. `rust` names an existing Rust type the enum stands for: code
+    /// generation resolves references to that path rather than emitting the type,
+    /// and still describes the variants for a tool schema. `None` is an enum the
+    /// model owns and renders.
+    Enum {
+        variants: Vec<Variant>,
+        rust: Option<String>,
+    },
     /// A type provided outside the model, named by its Rust path. Operations and
     /// ports may reference it. Code generation names it rather than emitting it.
     Foreign(String),
+}
+
+/// One variant of an [`enum`](TypeShape::Enum) type: a name and, for a
+/// data-carrying variant, its fields. A unit variant has no fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Vec<Field>,
 }
 
 /// One field of a struct [`TypeDef`].

@@ -19,7 +19,7 @@ use quote::{format_ident, quote};
 use serde::Serialize;
 
 use crate::model::{
-    Field, Inbound, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
+    Field, Inbound, Model, Operation, Port, Service, Transport, TypeDef, TypeShape, Variant,
 };
 
 /// A file rendered from the model, addressed relative to the workspace root. An
@@ -357,7 +357,7 @@ fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
         if let Some(def) = model.type_def(label)
             && matches!(def.shape, TypeShape::Struct(_))
         {
-            structs.push(render_request_struct(def));
+            structs.push(render_request_struct(def, model));
         }
     }
     quote! { #(#structs)* }
@@ -393,7 +393,7 @@ fn request_type<'a>(op: &Operation, model: &'a Model) -> Option<&'a TypeDef> {
 }
 
 /// Render a request struct as a plain record.
-fn render_request_struct(def: &TypeDef) -> TokenStream {
+fn render_request_struct(def: &TypeDef, model: &Model) -> TokenStream {
     let TypeShape::Struct(fields) = &def.shape else {
         return quote! {};
     };
@@ -405,7 +405,7 @@ fn render_request_struct(def: &TypeDef) -> TokenStream {
         .map(|field| {
             let field_doc = doc(&field.doc);
             let field_name = format_ident!("{}", field.name);
-            let field_type = syn_type(&field.ty);
+            let field_type = syn_type(&resolve_field_type(&field.ty, model));
             quote! {
                 #field_doc
                 pub #field_name: #field_type,
@@ -482,7 +482,17 @@ fn render_tool_catalog(operations: &[&Operation], model: &Model) -> TokenStream 
 /// type, and a field required unless it is a `bool` or an `Option`.
 fn render_tool_schema(op: &Operation, model: &Model) -> TokenStream {
     let fields = request_fields(op, model);
-    let properties: Vec<TokenStream> = fields.iter().map(render_schema_property).collect();
+    let object = render_object_schema(fields, model);
+    quote! { #object }
+}
+
+/// Render an object schema from a set of fields: a property per field, and a
+/// `required` list of the fields that are neither `Option` nor `bool`.
+fn render_object_schema(fields: &[Field], model: &Model) -> TokenStream {
+    let properties: Vec<TokenStream> = fields
+        .iter()
+        .map(|field| render_schema_property(field, model))
+        .collect();
     let required: Vec<&str> = fields
         .iter()
         .filter(|field| schema_required(&field.ty))
@@ -496,21 +506,71 @@ fn render_tool_schema(op: &Operation, model: &Model) -> TokenStream {
     quote! { { "type": "object", "properties": { #(#properties),* } #required_entry } }
 }
 
-/// Render one request field as a JSON-schema property. A `Vec<T>` is an array of
-/// its element type, and any other type maps to its scalar schema type.
-fn render_schema_property(field: &Field) -> TokenStream {
+/// Render one field as a `"name": <schema>` property.
+fn render_schema_property(field: &Field, model: &Model) -> TokenStream {
     let key = field.name.as_str();
-    if let Some(inner) = field
-        .ty
+    let schema = render_type_schema(&field.ty, model);
+    quote! { #key: #schema }
+}
+
+/// The JSON schema for a contract type label. A `Vec<T>` is an array of its
+/// element schema, a `BTreeMap<_, V>` an object of `V`-typed properties, an enum a
+/// `oneOf` over its variants, and anything else its scalar type. `Option<T>` has
+/// `T`'s schema — optionality is carried by the enclosing `required` list.
+fn render_type_schema(label: &str, model: &Model) -> TokenStream {
+    let label = optional_inner(label).unwrap_or(label);
+    if let Some(inner) = label
         .strip_prefix("Vec<")
         .and_then(|ty| ty.strip_suffix('>'))
     {
-        let item_type = json_schema_type(inner);
-        quote! { #key: { "type": "array", "items": { "type": #item_type } } }
-    } else {
-        let ty = json_schema_type(optional_inner(&field.ty).unwrap_or(&field.ty));
-        quote! { #key: { "type": #ty } }
+        let items = render_type_schema(inner, model);
+        return quote! { { "type": "array", "items": #items } };
     }
+    if let Some(value) = map_value_type(label) {
+        let value_schema = render_type_schema(value, model);
+        return quote! { { "type": "object", "additionalProperties": #value_schema } };
+    }
+    if let Some(TypeShape::Enum { variants, .. }) = model.type_def(label).map(|def| &def.shape) {
+        let branches = variants
+            .iter()
+            .map(|variant| render_variant_schema(variant, model));
+        return quote! { { "oneOf": [#(#branches),*] } };
+    }
+    let ty = json_schema_type(label);
+    quote! { { "type": #ty } }
+}
+
+/// One `oneOf` branch for an enum variant: the `verb` tag pinned to the variant's
+/// name, then the variant's fields as properties.
+fn render_variant_schema(variant: &Variant, model: &Model) -> TokenStream {
+    let verb = variant.name.as_str();
+    let properties: Vec<TokenStream> = variant
+        .fields
+        .iter()
+        .map(|field| render_schema_property(field, model))
+        .collect();
+    let mut required: Vec<&str> = vec!["verb"];
+    required.extend(
+        variant
+            .fields
+            .iter()
+            .filter(|field| schema_required(&field.ty))
+            .map(|field| field.name.as_str()),
+    );
+    quote! {
+        {
+            "type": "object",
+            "properties": { "verb": { "const": #verb } #(, #properties)* },
+            "required": [#(#required),*]
+        }
+    }
+}
+
+/// The value type of a `BTreeMap<K, V>` label, when the label is one. Keys are
+/// strings, so only the value type shapes the schema.
+fn map_value_type(label: &str) -> Option<&str> {
+    let inner = label.strip_prefix("BTreeMap<")?.strip_suffix('>')?;
+    inner.split_once(',').map(|(_, value)| value.trim())
 }
 
 /// The JSON-schema type for a contract type label.
@@ -799,11 +859,31 @@ fn rust_type(label: &str, model: &Model) -> String {
             Some(def) => match &def.shape {
                 TypeShape::Newtype(inner) => inner.clone(),
                 TypeShape::Foreign(path) => path.clone(),
-                TypeShape::Struct(_) | TypeShape::Enum(_) => other.to_string(),
+                // An enum standing for an existing Rust type resolves to that path.
+                TypeShape::Enum {
+                    rust: Some(path), ..
+                } => path.clone(),
+                TypeShape::Struct(_) | TypeShape::Enum { .. } => other.to_string(),
             },
             None => other.to_string(),
         },
     }
+}
+
+/// Resolve a field type label to its Rust type, resolving the element of a
+/// `Vec<…>` or `Option<…>` through [`rust_type`] so a model type inside a
+/// container names its real path.
+fn resolve_field_type(label: &str, model: &Model) -> String {
+    if let Some(inner) = label
+        .strip_prefix("Vec<")
+        .and_then(|ty| ty.strip_suffix('>'))
+    {
+        return format!("Vec<{}>", resolve_field_type(inner, model));
+    }
+    if let Some(inner) = optional_inner(label) {
+        return format!("Option<{}>", resolve_field_type(inner, model));
+    }
+    rust_type(label, model)
 }
 
 /// Parse a rendered type string into a token type, e.g. `()` or `Option<String>`.

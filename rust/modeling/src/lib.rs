@@ -26,6 +26,7 @@ pub use hash::model_hash;
 pub use implement::{ImplementError, handler_source, implement};
 pub use model::{
     CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
+    Variant,
 };
 pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};
 pub use query::{Handle, QueryError, QueryOutcome, query};

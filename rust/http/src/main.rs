@@ -3,34 +3,15 @@
 //!
 //! One route serves every operation, `POST /{operation}` with a JSON body. The
 //! generated handlers parse the body into the operation's request, run it against
-//! the composition root, and map the outcome onto the status line: 200 a result,
-//! 400 a body that does not parse, 404 an unknown operation, 501 an operation
-//! with no authored handler, 403 a write the gate refused, 500 any other error.
-//! Writes are refused unless the server is launched with `--allow-writes`.
-
-mod generated;
+//! the standalone composition root, and map the outcome onto the status line:
+//! 200 a result, 400 a body that does not parse, 404 an unknown operation, 501
+//! an operation with no authored handler, 403 a write the gate refused, 500 any
+//! other error. Writes are refused unless the server is launched with
+//! `--allow-writes`.
 
 use std::sync::Arc;
 
-use axum::{
-    Router,
-    extract::{Json, Path, State},
-    http::{StatusCode, header::CONTENT_TYPE},
-    response::{IntoResponse, Response},
-    routing::post,
-};
-use theseus::{CargoToolchain, Ctx, FsWorkspace, GatedWorkspace};
-use theseus_model::theseus_model;
-use theseus_modeling::Model;
-
-/// The owned adapters each request's composition root borrows.
-struct App {
-    model: Model,
-    workspace: FsWorkspace,
-    toolchain: CargoToolchain,
-    calculator: theseus_calculator::Calculator,
-    allow_writes: bool,
-}
+use theseus::Standalone;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -39,142 +20,9 @@ async fn main() -> anyhow::Result<()> {
         .skip(1)
         .find(|arg| arg != "--allow-writes")
         .unwrap_or_else(|| "127.0.0.1:4870".to_string());
-    let app = Arc::new(App {
-        model: theseus_model(),
-        workspace: FsWorkspace::at_repo_root(),
-        toolchain: CargoToolchain,
-        calculator: theseus_calculator::Calculator,
-        allow_writes,
-    });
-    let router = Router::new()
-        .route("/{operation}", post(call))
-        .with_state(app);
+    let router = theseus_http::router(Arc::new(Standalone::new(allow_writes)));
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     eprintln!("listening on http://{listen}");
     axum::serve(listener, router).await?;
     Ok(())
-}
-
-/// Run one operation call: build the composition root over the gated workspace,
-/// hand the call to the generated handler, and write its reply out.
-async fn call(
-    State(app): State<Arc<App>>,
-    Path(operation): Path<String>,
-    body: Option<Json<serde_json::Value>>,
-) -> Response {
-    let input = body
-        .map(|Json(value)| value)
-        .unwrap_or_else(|| serde_json::json!({}));
-    let workspace = GatedWorkspace {
-        workspace: &app.workspace,
-        allow_writes: app.allow_writes,
-    };
-    let ctx = Ctx {
-        model: &app.model,
-        workspace: &workspace,
-        calculator: &app.calculator,
-        toolchain: &app.toolchain,
-    };
-    let reply = generated::handle(&ctx, &operation, &input).await;
-    let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, [(CONTENT_TYPE, reply.content_type)], reply.body).into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-    use theseus::{GatedWorkspace, TheseusService, Toolchain, Workspace};
-    use theseus_model::theseus_model;
-    use theseus_modeling::GeneratedFile;
-
-    use crate::generated::handle;
-
-    /// A service left entirely on its trait defaults, so every call reports the
-    /// typed unimplemented error.
-    struct Bare;
-
-    #[async_trait::async_trait]
-    impl TheseusService for Bare {}
-
-    /// A workspace that writes nowhere.
-    struct NoopWorkspace;
-
-    #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {
-        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// A toolchain that reports success without running a build.
-    struct StubToolchain;
-
-    #[async_trait::async_trait]
-    impl Toolchain for StubToolchain {
-        async fn check(&self) -> anyhow::Result<String> {
-            Ok("the workspace compiles (stub)".to_string())
-        }
-    }
-
-    #[tokio::test]
-    async fn a_result_is_200() {
-        let model = theseus_model();
-        let workspace = GatedWorkspace {
-            workspace: &NoopWorkspace,
-            allow_writes: false,
-        };
-        let ctx = theseus::Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &theseus_calculator::Calculator,
-            toolchain: &StubToolchain,
-        };
-        let reply = handle(&ctx, "model", &json!({})).await;
-        assert_eq!(reply.status, 200);
-        assert!(reply.content_type.starts_with("text/plain"));
-    }
-
-    #[tokio::test]
-    async fn an_unknown_operation_is_404() {
-        let reply = handle(&Bare, "warp", &json!({})).await;
-        assert_eq!(reply.status, 404);
-        assert!(reply.body.contains("unknown operation"));
-    }
-
-    #[tokio::test]
-    async fn a_body_that_does_not_parse_is_400() {
-        let reply = handle(&Bare, "implement", &json!({})).await;
-        assert_eq!(reply.status, 400);
-        assert!(reply.body.contains("method"));
-    }
-
-    #[tokio::test]
-    async fn an_unimplemented_operation_is_501() {
-        let reply = handle(&Bare, "verify", &json!({})).await;
-        assert_eq!(reply.status, 501);
-        assert!(reply.body.contains("unimplemented operation"));
-    }
-
-    #[tokio::test]
-    async fn a_refused_write_is_403() {
-        let model = theseus_model();
-        let workspace = GatedWorkspace {
-            workspace: &NoopWorkspace,
-            allow_writes: false,
-        };
-        let ctx = theseus::Ctx {
-            model: &model,
-            workspace: &workspace,
-            calculator: &theseus_calculator::Calculator,
-            toolchain: &StubToolchain,
-        };
-        let reply = handle(
-            &ctx,
-            "implement",
-            &json!({ "method": "verify", "body": "todo!()" }),
-        )
-        .await;
-        assert_eq!(reply.status, 403);
-        assert!(reply.body.contains("not permitted"));
-    }
 }

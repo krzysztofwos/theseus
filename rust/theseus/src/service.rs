@@ -245,10 +245,10 @@ mod tests {
     #[test]
     fn a_write_is_refused_without_the_gate() {
         let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
+        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("patch", &input)
-            .expect("the tool returns a result");
-        assert_eq!(result, WRITE_REFUSED);
+            .expect_err("the gate refuses the write");
+        assert_eq!(error.to_string(), WRITE_REFUSED);
     }
 
     #[test]
@@ -282,10 +282,10 @@ mod tests {
     #[test]
     fn an_implement_is_refused_without_the_gate() {
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
+        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("implement", &input)
-            .expect("the tool returns a result");
-        assert_eq!(result, WRITE_REFUSED);
+            .expect_err("the gate refuses the write");
+        assert_eq!(error.to_string(), WRITE_REFUSED);
     }
 
     #[test]
@@ -311,6 +311,17 @@ mod tests {
             .call("check", &serde_json::json!({}))
             .expect("the check tool runs");
         assert_eq!(result, "the workspace compiles (stub)");
+    }
+
+    #[test]
+    fn an_unexposed_operation_is_not_a_tool() {
+        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
+            .call("generate", &serde_json::json!({}))
+            .expect_err("an unexposed operation has no dispatch arm");
+        assert!(
+            error.to_string().contains("unknown tool"),
+            "the dispatch should refuse it: {error}"
+        );
     }
 
     #[test]

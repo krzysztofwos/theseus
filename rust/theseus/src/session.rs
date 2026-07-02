@@ -1,21 +1,22 @@
 //! The session: a working model an agent edits by calling Theseus's operations.
 //!
-//! A [`Session`] holds a working copy of the model, the workspace port that
-//! persists writes, and the write permission. [`call`](Session::call) runs one
-//! tool — one of Theseus's operations — against the working model: a read reports,
-//! a `patch` edits the working model and, when permitted, reprojects to disk. Both
-//! the agent loop and an external host over MCP drive the same `Session`, so they
-//! see one tool surface with one set of semantics.
+//! A [`Session`] holds a working copy of the model, the ports that reach the
+//! world, and the write permission. [`call`](Session::call) answers `patch`
+//! itself — the one tool that mutates session state, adopting each accepted
+//! edit into the working model — and hands every other tool to the generated
+//! dispatch over a composition root built on that model, so the trait handlers
+//! see the session's edits. Writes reach disk through a gated workspace port,
+//! so every operation that writes — present, or patched in later — is permitted
+//! the same way. Both the agent loop and an external host over MCP drive the
+//! same `Session`, so they see one tool surface with one set of semantics.
 
 use anyhow::Context;
-use theseus_model::{authored_impl_path, authored_impls, generated_files};
-use theseus_modeling::{
-    Edit, GeneratedFile, Model, apply_edits, coverage, describe, handler_source, query, verify,
-};
+use theseus_model::generated_files;
+use theseus_modeling::{Edit, GeneratedFile, Model, apply_edits};
 
 use crate::{
-    generated::{Toolchain, Workspace},
-    service::{crate_is_scaffolded, handler_path},
+    generated::{Ctx, Toolchain, Workspace, dispatch_tool},
+    service::crate_is_scaffolded,
     workspace_root,
 };
 
@@ -24,9 +25,8 @@ pub(crate) const WRITE_REFUSED: &str =
     "writes are not permitted; rerun with write permission to apply this edit";
 
 /// A working model an agent edits by calling Theseus's own operations as tools.
-/// Each accepted edit updates the working model, so a later call sees it. A
-/// `patch` that writes reprojects to disk through the workspace port, gated by
-/// `allow_writes`.
+/// Each accepted edit updates the working model, so a later call sees it. Disk
+/// writes pass through the gated workspace port, permitted by `allow_writes`.
 pub struct Session<'a> {
     model: Model,
     workspace: &'a dyn Workspace,
@@ -61,57 +61,25 @@ impl<'a> Session<'a> {
     /// string. The tool surface is Theseus's own operations, so the session edits
     /// the model it inspects.
     pub fn call(&mut self, name: &str, input: &serde_json::Value) -> anyhow::Result<String> {
-        match name {
-            "model" => Ok(describe(&self.model)),
-            "verify" => {
-                let root = workspace_root();
-                let report = verify(
-                    &self.model,
-                    &root,
-                    &generated_files(&self.model),
-                    &authored_impls(&self.model),
-                );
-                Ok(serde_json::to_string(&report)?)
-            }
-            "coverage" => {
-                let root = workspace_root();
-                let report = coverage(&self.model, |service| -> anyhow::Result<String> {
-                    let path = authored_impl_path(&self.model, service);
-                    std::fs::read_to_string(root.join(&path))
-                        .with_context(|| format!("reading {path}"))
-                })?;
-                Ok(serde_json::to_string(&report)?)
-            }
-            "query" => {
-                let text = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
-                let mut outcome = query(&self.model, text("find"), text("node"))?;
-                if let Some(kind) = text("kind") {
-                    outcome.handles.retain(|handle| handle.kind == kind);
-                }
-                Ok(serde_json::to_string(&outcome)?)
-            }
-            "patch" => self.patch(input),
-            "show" => {
-                let method = input
-                    .get("method")
-                    .and_then(serde_json::Value::as_str)
-                    .context("show needs a `method`, an operation name from query")?;
-                let path = handler_path(&self.model, method)?;
-                let source = std::fs::read_to_string(workspace_root().join(&path))
-                    .with_context(|| format!("reading {path}"))?;
-                Ok(handler_source(&self.model, &source, method)?)
-            }
-            "implement" => self.implement(input),
-            "check" => self.toolchain.check(),
-            other => anyhow::bail!(
-                "unknown tool `{other}`; tools are model, query, verify, coverage, patch, show, implement, check"
-            ),
+        // `patch` mutates the session — an accepted edit updates the working
+        // model — so the session answers it and shadows the generated arm.
+        if name == "patch" {
+            return self.patch(input);
         }
+        let workspace = self.gate();
+        let calculator = theseus_calculator::Calculator;
+        let ctx = Ctx {
+            model: &self.model,
+            workspace: &workspace,
+            calculator: &calculator,
+            toolchain: self.toolchain,
+        };
+        dispatch_tool(&ctx, name, input)
     }
 
     /// Apply a `patch` tool call to the working model. Every accepted edit updates
-    /// it, so a later call sees it. A `write` reprojects to disk, refused without
-    /// `allow_writes`.
+    /// it, so a later call sees it. A `write` reprojects to disk through the gated
+    /// workspace port.
     fn patch(&mut self, input: &serde_json::Value) -> anyhow::Result<String> {
         let edits: Vec<Edit> =
             serde_json::from_value(input.get("edit").cloned().unwrap_or_default())
@@ -127,48 +95,36 @@ impl<'a> Session<'a> {
         let (outcome, proposed) = apply_edits(&self.model, &edits);
         if let Some(proposed) = proposed {
             if write {
-                if !self.allow_writes {
-                    return Ok(WRITE_REFUSED.to_string());
-                }
-                persist(&proposed, self.workspace)?;
+                persist(&proposed, &self.gate())?;
             }
             self.model = proposed;
         }
         Ok(serde_json::to_string(&outcome)?)
     }
 
-    /// Write an authored handler body for an operation into the service impl,
-    /// gated by `allow_writes`, then compile-check the workspace, so the result
-    /// carries the compiler's verdict on the authored code. The operation must
-    /// exist in the working model, so this follows a `patch` that adds it. The
-    /// running binary still holds the old code, hence the rebuild note, but
-    /// `verify` reads the written source, so the workspace conforms before the
-    /// rebuild.
-    fn implement(&self, input: &serde_json::Value) -> anyhow::Result<String> {
-        let method = input
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .context("implement needs a `method`, an operation name")?;
-        let body = input
-            .get("body")
-            .and_then(serde_json::Value::as_str)
-            .context("implement needs a `body`, the Rust handler body")?;
-        if !self.allow_writes {
-            return Ok(WRITE_REFUSED.to_string());
+    /// The workspace port carrying this session's write permission.
+    fn gate(&self) -> GatedWorkspace<'a> {
+        GatedWorkspace {
+            workspace: self.workspace,
+            allow_writes: self.allow_writes,
         }
-        let path = handler_path(&self.model, method)?;
-        let source = std::fs::read_to_string(workspace_root().join(&path))
-            .with_context(|| format!("reading {path}"))?;
-        let spliced =
-            theseus_modeling::implement(&self.model, &source, method, body, "crate::generated::")?;
-        self.workspace.write_file(&GeneratedFile {
-            path: path.clone(),
-            contents: spliced,
-        })?;
-        let outcome = self.toolchain.check()?;
-        Ok(format!(
-            "wrote the handler for `{method}` into {path}. Rebuild to load it.\n{outcome}"
-        ))
+    }
+}
+
+/// A workspace port carrying the session's write permission. A permitted write
+/// passes through and a refused one reports the gate, so every operation that
+/// reaches disk through the port is gated the same way.
+struct GatedWorkspace<'a> {
+    workspace: &'a dyn Workspace,
+    allow_writes: bool,
+}
+
+impl Workspace for GatedWorkspace<'_> {
+    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+        if !self.allow_writes {
+            anyhow::bail!(WRITE_REFUSED);
+        }
+        self.workspace.write_file(file)
     }
 }
 

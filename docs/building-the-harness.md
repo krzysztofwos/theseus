@@ -87,7 +87,7 @@ The tool surface is read-only by choice. A write tool (`patch`/`generate`) close
 
 ### The write tool and the allow-writes gate
 
-The loop's tool surface was read-only. A `patch` tool now closes the self-modification loop: the model proposes edits as a list of `verb|target|key=value` strings — the same batch vocabulary `theseus patch --edit` takes — and the loop builds the request. The agent edits the model it inspects.
+The loop's tool surface was read-only. A `patch` tool now closes the self-modification loop: the model proposes a list of edits and the loop applies them. The agent edits the model it inspects. (The edits later became structured objects the tool schema describes precisely, one `oneOf` branch per verb; the CLI keeps the compact `verb|target|key=value` form, decoded at its adapter.)
 
 A `patch` that writes is refused unless the chat permits it. `allow_writes` returns to `ChatRequest` — added through the protocol, now with a consumer — and surfaces as the generated `--allow-writes` flag, default off. When a write tool runs without it, the loop feeds a refusal back to the model rather than failing, so the model can adapt. This is the one irreducible permission for an agent that can rewrite its own source.
 

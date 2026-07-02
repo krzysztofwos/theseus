@@ -53,7 +53,7 @@ pub fn command() -> Command {
                         .long("edit")
                         .action(ArgAction::Append)
                         .help(
-                            "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.",
+                            "The edits to apply in order, each a verb over a handle from `query`.",
                         ),
                 )
                 .arg(
@@ -139,47 +139,54 @@ pub fn command() -> Command {
         )
 }
 
-fn parse_queryrequest(matches: &ArgMatches) -> theseus::QueryRequest {
+fn parse_queryrequest(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    theseus::QueryRequest {
+    Ok(theseus::QueryRequest {
         find: arg("find"),
         node: arg("node"),
         kind: arg("kind"),
-    }
+    })
 }
 
-fn parse_patchrequest(matches: &ArgMatches) -> theseus::PatchRequest {
-    theseus::PatchRequest {
+fn parse_patchrequest(matches: &ArgMatches) -> anyhow::Result<theseus::PatchRequest> {
+    Ok(theseus::PatchRequest {
         edit: matches
             .get_many::<String>("edit")
-            .map(|values| values.cloned().collect())
+            .map(|values| {
+                values
+                    .map(|value| value.parse::<theseus_modeling::Edit>())
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
             .unwrap_or_default(),
         write: matches.get_flag("write"),
-    }
+    })
 }
 
-fn parse_implementrequest(matches: &ArgMatches) -> theseus::ImplementRequest {
+fn parse_implementrequest(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::ImplementRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    theseus::ImplementRequest {
+    Ok(theseus::ImplementRequest {
         method: arg("method").unwrap_or_default(),
         body: arg("body").unwrap_or_default(),
-    }
+    })
 }
 
-fn parse_showrequest(matches: &ArgMatches) -> theseus::ShowRequest {
+fn parse_showrequest(matches: &ArgMatches) -> anyhow::Result<theseus::ShowRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    theseus::ShowRequest {
+    Ok(theseus::ShowRequest {
         method: arg("method").unwrap_or_default(),
-    }
+    })
 }
 
-fn parse_calcrequest(matches: &ArgMatches) -> theseus::CalcRequest {
+fn parse_calcrequest(matches: &ArgMatches) -> anyhow::Result<theseus::CalcRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    theseus::CalcRequest {
+    Ok(theseus::CalcRequest {
         op: arg("op").unwrap_or_default(),
         a: matches.get_one::<f64>("a").cloned().unwrap_or_default(),
         b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
-    }
+    })
 }
 
 pub enum Invocation {
@@ -198,21 +205,21 @@ pub enum Invocation {
 
 impl Invocation {
     /// Parse the invocation from the matched command line.
-    pub fn from_matches(matches: &ArgMatches) -> Self {
+    pub fn from_matches(matches: &ArgMatches) -> anyhow::Result<Self> {
         match matches.subcommand() {
-            Some(("model", _)) => Invocation::Model,
-            Some(("verify", _)) => Invocation::Verify,
-            Some(("generate", _)) => Invocation::Generate,
-            Some(("query", sub)) => Invocation::Query(parse_queryrequest(sub)),
-            Some(("patch", sub)) => Invocation::Patch(parse_patchrequest(sub)),
-            Some(("coverage", _)) => Invocation::Coverage,
+            Some(("model", _)) => Ok(Invocation::Model),
+            Some(("verify", _)) => Ok(Invocation::Verify),
+            Some(("generate", _)) => Ok(Invocation::Generate),
+            Some(("query", sub)) => Ok(Invocation::Query(parse_queryrequest(sub)?)),
+            Some(("patch", sub)) => Ok(Invocation::Patch(parse_patchrequest(sub)?)),
+            Some(("coverage", _)) => Ok(Invocation::Coverage),
             Some(("implement", sub)) => {
-                Invocation::Implement(parse_implementrequest(sub))
+                Ok(Invocation::Implement(parse_implementrequest(sub)?))
             }
-            Some(("show", sub)) => Invocation::Show(parse_showrequest(sub)),
-            Some(("check", _)) => Invocation::Check,
-            Some(("calc", sub)) => Invocation::Calc(parse_calcrequest(sub)),
-            Some(("scaffold", _)) => Invocation::Scaffold,
+            Some(("show", sub)) => Ok(Invocation::Show(parse_showrequest(sub)?)),
+            Some(("check", _)) => Ok(Invocation::Check),
+            Some(("calc", sub)) => Ok(Invocation::Calc(parse_calcrequest(sub)?)),
+            Some(("scaffold", _)) => Ok(Invocation::Scaffold),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }

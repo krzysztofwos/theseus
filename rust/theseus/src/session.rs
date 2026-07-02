@@ -10,12 +10,12 @@
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    GeneratedFile, Model, apply_edits, coverage, describe, handler_source, query, verify,
+    Edit, GeneratedFile, Model, apply_edits, coverage, describe, handler_source, query, verify,
 };
 
 use crate::{
     generated::{Toolchain, Workspace},
-    service::{crate_is_scaffolded, handler_path, parse_edit_spec},
+    service::{crate_is_scaffolded, handler_path},
     workspace_root,
 };
 
@@ -113,18 +113,12 @@ impl<'a> Session<'a> {
     /// it, so a later call sees it. A `write` reprojects to disk, refused without
     /// `allow_writes`.
     fn patch(&mut self, input: &serde_json::Value) -> anyhow::Result<String> {
-        let specs: Vec<&str> = input
-            .get("edit")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| items.iter().filter_map(serde_json::Value::as_str).collect())
-            .unwrap_or_default();
-        if specs.is_empty() {
-            anyhow::bail!("patch needs an `edit` list of `verb|target|key=value` strings");
+        let edits: Vec<Edit> =
+            serde_json::from_value(input.get("edit").cloned().unwrap_or_default())
+                .context("patch `edit` must be a list of edits")?;
+        if edits.is_empty() {
+            anyhow::bail!("patch needs at least one edit");
         }
-        let edits = specs
-            .iter()
-            .map(|spec| parse_edit_spec(spec))
-            .collect::<anyhow::Result<Vec<_>>>()?;
         let write = input
             .get("write")
             .and_then(serde_json::Value::as_bool)

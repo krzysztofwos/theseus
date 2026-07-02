@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     // `arg_required_else_help(true)` in the generated surface means a bare
     // invocation prints help and exits, so there is always a subcommand to parse.
     let matches = generated::command().get_matches();
-    run(&ctx, Invocation::from_matches(&matches))
+    run(&ctx, Invocation::from_matches(&matches)?)
 }
 
 // ============================================================================

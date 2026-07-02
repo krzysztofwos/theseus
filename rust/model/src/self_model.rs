@@ -4,7 +4,7 @@
 //! Theseus's model of itself: the fixed point that describes the very tool
 //! that holds it, projected back to its builder form.
 
-use theseus_modeling::{Model, Port, Service, Transport};
+use theseus_modeling::{Model, Port, Service, Transport, Variant};
 
 pub fn theseus_model() -> Model {
     Model::new("Theseus")
@@ -59,13 +59,62 @@ pub fn theseus_model() -> Model {
                 ),
             ],
         )
+        .foreign_enum(
+            "Edit",
+            "theseus_modeling::Edit",
+            &[
+                Variant::data(
+                    "add",
+                    &[
+                        (
+                            "parent",
+                            "String",
+                            "Handle the new node attaches to; the model root for a top-level node.",
+                        ),
+                        (
+                            "kind",
+                            "String",
+                            "Node kind: operation, type, port, method, field, or variant.",
+                        ),
+                        ("name", "String", "Name of the new node."),
+                        (
+                            "attrs",
+                            "Option<BTreeMap<String, String>>",
+                            "Scalar attributes, e.g. `shape`, `ty`, or `summary`.",
+                        ),
+                    ],
+                ),
+                Variant::data(
+                    "remove",
+                    &[("target", "String", "Handle of the node to remove.")],
+                ),
+                Variant::data(
+                    "rename",
+                    &[
+                        ("target", "String", "Handle of the node to rename."),
+                        ("to", "String", "The new name."),
+                    ],
+                ),
+                Variant::data(
+                    "set",
+                    &[
+                        ("target", "String", "Handle of the node to edit."),
+                        (
+                            "attrs",
+                            "BTreeMap<String, String>",
+                            "Scalar attributes to set.",
+                        ),
+                    ],
+                ),
+            ],
+        )
         .struct_type(
             "PatchRequest",
             &[
                 (
                     "edit",
-                    "Vec<String>",
-                    "A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.",
+                    "Vec<Edit>",
+                    "The edits to apply in order, each a verb over a handle from `query`.",
                 ),
                 ("write", "bool", "Apply the edit by reprojecting the model."),
             ],
@@ -142,7 +191,7 @@ pub fn theseus_model() -> Model {
                     "PatchResult",
                 )
                 .tool(
-                    "Edit the model. Each `edit` is `verb|target|attr=value|attr=value` — pipe-separated, one attr per segment. `target` is a handle from `query`. A new top-level node attaches to the model root, `model:<model>`. Example: `add|model:theseus|kind=type|name=Slug|shape=newtype:String`. `write` true reprojects to disk.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. `write` true reprojects to disk.",
                 )
                 .operation(
                     "coverage",

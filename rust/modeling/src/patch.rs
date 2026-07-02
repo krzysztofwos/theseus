@@ -11,7 +11,10 @@
 //! [`query`](crate::query) mints. A handle resolves to a typed
 //! [`Target`](crate::path::Target), and the edit acts on the node it names.
 
-use serde::Serialize;
+use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     hash::model_hash,
@@ -22,15 +25,18 @@ use crate::{
     path::{NodeKind, Target},
 };
 
-/// One structured edit to a model: a verb over a handle.
-#[derive(Debug, Clone)]
+/// One structured edit to a model: a verb over a handle. Serialized with the verb
+/// as an internal `verb` tag, so an edit is one flat object, `{"verb": "add", …}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "verb", rename_all = "lowercase")]
 pub enum Edit {
     /// Add a node of `kind`, named `name`, under the node `parent` addresses.
     Add {
         parent: String,
         kind: String,
         name: String,
-        attrs: Vec<(String, String)>,
+        #[serde(default)]
+        attrs: BTreeMap<String, String>,
     },
     /// Remove the node `target` addresses.
     Remove { target: String },
@@ -39,8 +45,74 @@ pub enum Edit {
     /// Set scalar attributes on the node `target` addresses.
     Set {
         target: String,
-        attrs: Vec<(String, String)>,
+        attrs: BTreeMap<String, String>,
     },
+}
+
+/// Why an edit spec string could not be parsed into an [`Edit`]. The compact
+/// `verb|target|key=value` form is the CLI's input encoding; a structured caller
+/// builds an [`Edit`] directly.
+#[derive(Debug, thiserror::Error)]
+pub enum EditParseError {
+    #[error("an edit is `verb|target|key=value…`; `{0}` has no target")]
+    NoTarget(String),
+    #[error("edit field `{0}` must be `key=value`")]
+    BadField(String),
+    #[error("a `{verb}` edit needs a `{part}`")]
+    MissingPart { verb: String, part: String },
+    #[error("unknown verb `{0}`; expected add, remove, rename, or set")]
+    UnknownVerb(String),
+}
+
+impl FromStr for Edit {
+    type Err = EditParseError;
+
+    /// Parse the compact form `verb|target|key=value|…`. The keys `kind`, `name`,
+    /// and `to` set the matching parts; the rest are attributes. A pipe never
+    /// appears in a value, so it is the field separator.
+    fn from_str(spec: &str) -> Result<Self, Self::Err> {
+        let mut parts = spec.split('|');
+        let verb = parts.next().unwrap_or_default().trim();
+        let target = parts
+            .next()
+            .ok_or_else(|| EditParseError::NoTarget(spec.to_string()))?
+            .trim()
+            .to_string();
+        let (mut kind, mut name, mut to) = (None, None, None);
+        let mut attrs = BTreeMap::new();
+        for part in parts {
+            let (key, value) = part
+                .split_once('=')
+                .ok_or_else(|| EditParseError::BadField(part.to_string()))?;
+            match key.trim() {
+                "kind" => kind = Some(value.to_string()),
+                "name" => name = Some(value.to_string()),
+                "to" => to = Some(value.to_string()),
+                key => {
+                    attrs.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+        let missing = |part: &str| EditParseError::MissingPart {
+            verb: verb.to_string(),
+            part: part.to_string(),
+        };
+        match verb {
+            "add" => Ok(Edit::Add {
+                parent: target,
+                kind: kind.ok_or_else(|| missing("kind"))?,
+                name: name.ok_or_else(|| missing("name"))?,
+                attrs,
+            }),
+            "remove" => Ok(Edit::Remove { target }),
+            "rename" => Ok(Edit::Rename {
+                target,
+                to: to.ok_or_else(|| missing("to"))?,
+            }),
+            "set" => Ok(Edit::Set { target, attrs }),
+            other => Err(EditParseError::UnknownVerb(other.to_string())),
+        }
+    }
 }
 
 /// A coded reason a patch was refused, paired with a repair shape.
@@ -119,7 +191,7 @@ enum Plan {
         parent: Target,
         kind: NodeKind,
         name: String,
-        attrs: Vec<(String, String)>,
+        attrs: BTreeMap<String, String>,
     },
     Remove {
         target: Target,
@@ -130,7 +202,7 @@ enum Plan {
     },
     Set {
         target: Target,
-        attrs: Vec<(String, String)>,
+        attrs: BTreeMap<String, String>,
     },
 }
 
@@ -164,7 +236,7 @@ fn plan_add(
     parent: &str,
     kind: &str,
     name: &str,
-    attrs: &[(String, String)],
+    attrs: &BTreeMap<String, String>,
 ) -> Result<Plan, Vec<Diagnostic>> {
     let parent = resolve(model, parent)?;
     let kind = NodeKind::parse(kind).ok_or_else(|| {
@@ -264,7 +336,7 @@ fn plan_add(
         parent,
         kind,
         name: name.to_string(),
-        attrs: attrs.to_vec(),
+        attrs: attrs.clone(),
     })
 }
 
@@ -304,7 +376,7 @@ fn plan_rename(model: &Model, target: &str, to: &str) -> Result<Plan, Vec<Diagno
 fn plan_set(
     model: &Model,
     target: &str,
-    attrs: &[(String, String)],
+    attrs: &BTreeMap<String, String>,
 ) -> Result<Plan, Vec<Diagnostic>> {
     let target = resolve(model, target)?;
     reject_root(&target)?;
@@ -335,7 +407,7 @@ fn plan_set(
     }
     Ok(Plan::Set {
         target,
-        attrs: attrs.to_vec(),
+        attrs: attrs.clone(),
     })
 }
 
@@ -361,7 +433,7 @@ fn apply_add(
     parent: &Target,
     kind: NodeKind,
     name: &str,
-    attrs: &[(String, String)],
+    attrs: &BTreeMap<String, String>,
 ) {
     match kind {
         NodeKind::Crate => model.crates.push(CrateNode {
@@ -595,7 +667,7 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
     }
 }
 
-fn apply_set(model: &mut Model, target: &Target, attrs: &[(String, String)]) {
+fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String>) {
     match target {
         Target::Crate(name) => {
             if let Some(node) = crate_node_mut(model, name) {
@@ -734,7 +806,7 @@ fn add_address(parent: &Target, kind: NodeKind, name: &str) -> String {
     }
 }
 
-fn join_attrs(attrs: &[(String, String)]) -> String {
+fn join_attrs(attrs: &BTreeMap<String, String>) -> String {
     attrs
         .iter()
         .map(|(key, value)| format!("{key}={value}"))
@@ -846,8 +918,8 @@ fn free(taken: bool, kind: &str, name: &str) -> Result<(), Vec<Diagnostic>> {
 }
 
 /// The keys an edit carries must all be settable on the node kind.
-fn allow_keys(attrs: &[(String, String)], allowed: &[&str]) -> Result<(), Vec<Diagnostic>> {
-    for (key, _) in attrs {
+fn allow_keys(attrs: &BTreeMap<String, String>, allowed: &[&str]) -> Result<(), Vec<Diagnostic>> {
+    for key in attrs.keys() {
         if !allowed.contains(&key.as_str()) {
             let list = if allowed.is_empty() {
                 "none".to_string()
@@ -865,7 +937,10 @@ fn allow_keys(attrs: &[(String, String)], allowed: &[&str]) -> Result<(), Vec<Di
 }
 
 /// An attribute the edit requires must be present.
-fn required<'a>(attrs: &'a [(String, String)], key: &str) -> Result<&'a str, Vec<Diagnostic>> {
+fn required<'a>(
+    attrs: &'a BTreeMap<String, String>,
+    key: &str,
+) -> Result<&'a str, Vec<Diagnostic>> {
     attr(attrs, key).ok_or_else(|| {
         vec![diagnostic(
             "PATCH011",
@@ -924,14 +999,11 @@ fn node_exists(model: &Model, target: &Target) -> bool {
     }
 }
 
-fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    attrs
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, value)| value.as_str())
+fn attr<'a>(attrs: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    attrs.get(key).map(String::as_str)
 }
 
-fn set_if(attrs: &[(String, String)], key: &str, slot: &mut String) {
+fn set_if(attrs: &BTreeMap<String, String>, key: &str, slot: &mut String) {
     if let Some(value) = attr(attrs, key) {
         *slot = value.to_string();
     }
@@ -1330,7 +1402,7 @@ mod tests {
             &model,
             Edit::Set {
                 target: "crate:sample:sample".to_string(),
-                attrs: vec![("layer".to_string(), "ground".to_string())],
+                attrs: [("layer".to_string(), "ground".to_string())].into(),
             },
         );
         assert_eq!(code(&outcome), "PATCH014");
@@ -1657,7 +1729,7 @@ mod tests {
             &model,
             Edit::Set {
                 target: "op:sample:greet".to_string(),
-                attrs: vec![("color".to_string(), "blue".to_string())],
+                attrs: [("color".to_string(), "blue".to_string())].into(),
             },
         );
         assert_eq!(code(&outcome), "PATCH010");
@@ -1678,7 +1750,7 @@ mod tests {
             &model,
             Edit::Set {
                 target: "op:sample:greet".to_string(),
-                attrs: vec![("response".to_string(), "Reply".to_string())],
+                attrs: [("response".to_string(), "Reply".to_string())].into(),
             },
         );
         assert_eq!(model.operation("greet").unwrap().response, "Reply");
@@ -1794,7 +1866,7 @@ mod tests {
             &model,
             Edit::Set {
                 target: "field:sample:Operands.a".to_string(),
-                attrs: vec![("doc".to_string(), "Left operand.".to_string())],
+                attrs: [("doc".to_string(), "Left operand.".to_string())].into(),
             },
         );
         let fields = match &model.type_def("Operands").unwrap().shape {

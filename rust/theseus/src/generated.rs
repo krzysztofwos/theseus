@@ -38,8 +38,8 @@ pub struct QueryRequest {
 /// The `PatchRequest` request.
 #[derive(Debug, Clone)]
 pub struct PatchRequest {
-    /// A pipe-separated edit `verb|target|key=value...`, repeatable, applied in order.
-    pub edit: Vec<String>,
+    /// The edits to apply in order, each a verb over a handle from `query`.
+    pub edit: Vec<theseus_modeling::Edit>,
     /// Apply the edit by reprojecting the model.
     pub write: bool,
 }
@@ -150,9 +150,20 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : { "find" : { "type" :
         "string" }, "node" : { "type" : "string" }, "kind" : { "type" : "string" } } }
         }), serde_json::json!({ "name" : "patch", "description" :
-        "Edit the model. Each `edit` is `verb|target|attr=value|attr=value` — pipe-separated, one attr per segment. `target` is a handle from `query`. A new top-level node attaches to the model root, `model:<model>`. Example: `add|model:theseus|kind=type|name=Slug|shape=newtype:String`. `write` true reprojects to disk.",
+        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. `write` true reprojects to disk.",
         "input_schema" : { "type" : "object", "properties" : { "edit" : { "type" :
-        "array", "items" : { "type" : "string" } }, "write" : { "type" : "boolean" } },
+        "array", "items" : { "oneOf" : [{ "type" : "object", "properties" : { "verb" : {
+        "const" : "add" }, "parent" : { "type" : "string" }, "kind" : { "type" : "string"
+        }, "name" : { "type" : "string" }, "attrs" : { "type" : "object",
+        "additionalProperties" : { "type" : "string" } } }, "required" : ["verb",
+        "parent", "kind", "name"] }, { "type" : "object", "properties" : { "verb" : {
+        "const" : "remove" }, "target" : { "type" : "string" } }, "required" : ["verb",
+        "target"] }, { "type" : "object", "properties" : { "verb" : { "const" : "rename"
+        }, "target" : { "type" : "string" }, "to" : { "type" : "string" } }, "required" :
+        ["verb", "target", "to"] }, { "type" : "object", "properties" : { "verb" : {
+        "const" : "set" }, "target" : { "type" : "string" }, "attrs" : { "type" :
+        "object", "additionalProperties" : { "type" : "string" } } }, "required" :
+        ["verb", "target", "attrs"] }] } }, "write" : { "type" : "boolean" } },
         "required" : ["edit"] } }), serde_json::json!({ "name" : "coverage",
         "description" : "Report which operations have no authored handler.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({

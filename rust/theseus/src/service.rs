@@ -10,8 +10,8 @@
 use anyhow::Context;
 use theseus_model::{authored_impl_path, authored_impls, generated_files};
 use theseus_modeling::{
-    CoverageReport, Edit, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
-    apply_edits, coverage, describe, handler_source, query, scaffold_files, verify,
+    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
+    coverage, describe, handler_source, query, scaffold_files, verify,
 };
 
 use crate::{
@@ -132,14 +132,9 @@ impl TheseusService for Ctx<'_> {
 
     fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
         if request.edit.is_empty() {
-            anyhow::bail!("patch needs at least one `--edit verb|target|key=value…`");
+            anyhow::bail!("patch needs at least one edit");
         }
-        let edits = request
-            .edit
-            .iter()
-            .map(|spec| parse_edit_spec(spec))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let (outcome, proposed) = apply_edits(self.model, &edits);
+        let (outcome, proposed) = apply_edits(self.model, &request.edit);
         if request.write
             && let Some(proposed) = proposed
         {
@@ -177,59 +172,6 @@ pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) 
     }
 }
 
-/// Parse one batch edit spec, `verb|target|key=value|…`, into an [`Edit`]. The
-/// keys `kind`, `name`, and `to` set the matching fields. The rest are scalar
-/// assignments. A pipe never appears in a value, so it is the field separator.
-pub(crate) fn parse_edit_spec(spec: &str) -> anyhow::Result<Edit> {
-    let mut parts = spec.split('|');
-    let verb = parts.next().unwrap_or_default().trim();
-    let target = parts
-        .next()
-        .context("edit spec must be `verb|target|…`")?
-        .trim()
-        .to_string();
-    let (mut kind, mut name, mut to, mut attrs) = (None, None, None, Vec::new());
-    for part in parts {
-        let (key, value) = part
-            .split_once('=')
-            .with_context(|| format!("edit field `{part}` must be key=value"))?;
-        match key.trim() {
-            "kind" => kind = Some(value.to_string()),
-            "name" => name = Some(value.to_string()),
-            "to" => to = Some(value.to_string()),
-            key => attrs.push((key.to_string(), value.to_string())),
-        }
-    }
-    make_edit(verb, target, kind, to, name, attrs)
-}
-
-/// Assemble an [`Edit`] from a verb and its parts. A missing part the verb needs
-/// is a usage error.
-fn make_edit(
-    verb: &str,
-    target: String,
-    kind: Option<String>,
-    to: Option<String>,
-    name: Option<String>,
-    attrs: Vec<(String, String)>,
-) -> anyhow::Result<Edit> {
-    match verb {
-        "add" => Ok(Edit::Add {
-            parent: target,
-            kind: kind.context("add needs a kind")?,
-            name: name.context("add needs a name")?,
-            attrs,
-        }),
-        "remove" => Ok(Edit::Remove { target }),
-        "rename" => Ok(Edit::Rename {
-            target,
-            to: to.context("rename needs a new name")?,
-        }),
-        "set" => Ok(Edit::Set { target, attrs }),
-        other => anyhow::bail!("unknown verb `{other}`; expected add, remove, rename, or set"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use theseus_model::theseus_model;
@@ -240,9 +182,15 @@ mod tests {
         session::{Session, WRITE_REFUSED},
     };
 
-    /// An edit that adds a throwaway type, for exercising the `patch` tool. The
-    /// no-op workspace discards any reprojection, so a write touches no files.
-    const PROBE_EDIT: &str = "add|model:theseus|kind=type|name=Probe|shape=foreign:String";
+    /// A structured edit that adds a throwaway type, for exercising the `patch`
+    /// tool. The no-op workspace discards any reprojection, so a write touches no
+    /// files.
+    fn probe_edit() -> serde_json::Value {
+        serde_json::json!({
+            "verb": "add", "parent": "model:theseus", "kind": "type",
+            "name": "Probe", "attrs": { "shape": "foreign:String" }
+        })
+    }
 
     /// A workspace that writes nowhere. A read-only tool never reaches it.
     struct NoopWorkspace;
@@ -279,7 +227,7 @@ mod tests {
         let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
         // An in-memory edit, no write, updates the working model.
         session
-            .call("patch", &serde_json::json!({ "edit": [PROBE_EDIT] }))
+            .call("patch", &serde_json::json!({ "edit": [probe_edit()] }))
             .expect("the patch applies in memory");
         // A later call in the same session sees the new type.
         let result = session
@@ -296,7 +244,7 @@ mod tests {
 
     #[test]
     fn a_write_is_refused_without_the_gate() {
-        let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
+        let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
         let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("patch", &input)
             .expect("the tool returns a result");
@@ -306,7 +254,7 @@ mod tests {
     #[test]
     fn a_write_is_allowed_with_the_gate() {
         // The no-op workspace discards the reprojection, so this touches no files.
-        let input = serde_json::json!({ "edit": [PROBE_EDIT], "write": true });
+        let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
         let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, true)
             .call("patch", &input)
             .expect("the patch tool runs");

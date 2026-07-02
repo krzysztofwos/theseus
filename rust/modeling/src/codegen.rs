@@ -426,12 +426,29 @@ fn render_request_struct(def: &TypeDef, model: &Model) -> TokenStream {
 /// for `bool`, the collected values for `Vec<T>`, an optional value for
 /// `Option<T>`, otherwise a required value. A non-`String` value is read as its
 /// parsed type.
-fn field_parse(field: &Field) -> TokenStream {
+fn field_parse(field: &Field, model: &Model) -> TokenStream {
     let flag = field.name.replace('_', "-");
     if field.ty == "bool" {
         quote! { matches.get_flag(#flag) }
-    } else if field.ty.starts_with("Vec<") {
-        quote! { matches.get_many::<String>(#flag).map(|values| values.cloned().collect()).unwrap_or_default() }
+    } else if let Some(inner) = field
+        .ty
+        .strip_prefix("Vec<")
+        .and_then(|ty| ty.strip_suffix('>'))
+    {
+        if inner == "String" {
+            quote! { matches.get_many::<String>(#flag).map(|values| values.cloned().collect()).unwrap_or_default() }
+        } else {
+            // A `Vec` of a structured type: each repeatable value is a compact
+            // string the element's `FromStr` decodes.
+            let element = syn_type(&rust_type(inner, model));
+            quote! {
+                matches
+                    .get_many::<String>(#flag)
+                    .map(|values| values.map(|value| value.parse::<#element>()).collect::<Result<Vec<_>, _>>())
+                    .transpose()?
+                    .unwrap_or_default()
+            }
+        }
     } else if let Some(inner) = optional_inner(&field.ty) {
         if inner == "String" {
             quote! { arg(#flag) }
@@ -700,9 +717,9 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
             match request_type(op, model) {
                 Some(def) => {
                     let parser = parser_fn(def);
-                    quote! { Some((#name, sub)) => Invocation::#variant(#parser(sub)), }
+                    quote! { Some((#name, sub)) => Ok(Invocation::#variant(#parser(sub)?)), }
                 }
-                None => quote! { Some((#name, _)) => Invocation::#variant, },
+                None => quote! { Some((#name, _)) => Ok(Invocation::#variant), },
             }
         })
         .collect();
@@ -712,7 +729,7 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
         }
         impl Invocation {
             #[doc = " Parse the invocation from the matched command line."]
-            pub fn from_matches(matches: &ArgMatches) -> Self {
+            pub fn from_matches(matches: &ArgMatches) -> anyhow::Result<Self> {
                 match matches.subcommand() {
                     #(#arms)*
                     _ => unreachable!("arg_required_else_help guarantees a subcommand"),
@@ -798,16 +815,16 @@ fn render_inbound_parsers(service: &Service, model: &Model, prefix: &str) -> Tok
                 .iter()
                 .map(|field| {
                     let field_name = format_ident!("{}", field.name);
-                    let parse = field_parse(field);
+                    let parse = field_parse(field, model);
                     quote! { #field_name: #parse, }
                 })
                 .collect();
             Some(quote! {
-                fn #fn_name(matches: &ArgMatches) -> #ty {
+                fn #fn_name(matches: &ArgMatches) -> anyhow::Result<#ty> {
                     #arg_closure
-                    #ty {
+                    Ok(#ty {
                         #(#inits)*
-                    }
+                    })
                 }
             })
         })

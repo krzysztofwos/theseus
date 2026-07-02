@@ -90,11 +90,11 @@ pub fn command() -> Command {
         )
 }
 
-fn parse_operands(matches: &ArgMatches) -> theseus_calculator::Operands {
-    theseus_calculator::Operands {
+fn parse_operands(matches: &ArgMatches) -> anyhow::Result<theseus_calculator::Operands> {
+    Ok(theseus_calculator::Operands {
         a: matches.get_one::<f64>("a").cloned().unwrap_or_default(),
         b: matches.get_one::<f64>("b").cloned().unwrap_or_default(),
-    }
+    })
 }
 
 pub enum Invocation {
@@ -106,12 +106,12 @@ pub enum Invocation {
 
 impl Invocation {
     /// Parse the invocation from the matched command line.
-    pub fn from_matches(matches: &ArgMatches) -> Self {
+    pub fn from_matches(matches: &ArgMatches) -> anyhow::Result<Self> {
         match matches.subcommand() {
-            Some(("add", sub)) => Invocation::Add(parse_operands(sub)),
-            Some(("subtract", sub)) => Invocation::Subtract(parse_operands(sub)),
-            Some(("multiply", sub)) => Invocation::Multiply(parse_operands(sub)),
-            Some(("divide", sub)) => Invocation::Divide(parse_operands(sub)),
+            Some(("add", sub)) => Ok(Invocation::Add(parse_operands(sub)?)),
+            Some(("subtract", sub)) => Ok(Invocation::Subtract(parse_operands(sub)?)),
+            Some(("multiply", sub)) => Ok(Invocation::Multiply(parse_operands(sub)?)),
+            Some(("divide", sub)) => Ok(Invocation::Divide(parse_operands(sub)?)),
             _ => unreachable!("arg_required_else_help guarantees a subcommand"),
         }
     }

@@ -2053,6 +2053,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-grpc-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "prost",
+ "protox",
+ "serde",
+ "serde_json",
+ "theseus",
+ "theseus-grpc",
+ "theseus-modeling",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "theseus-http"
 version = "0.1.0"
 dependencies = [
@@ -2064,6 +2084,22 @@ dependencies = [
  "theseus",
  "theseus-calculator",
  "theseus-model",
+ "theseus-modeling",
+ "tokio",
+]
+
+[[package]]
+name = "theseus-http-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "theseus",
+ "theseus-http",
  "theseus-modeling",
  "tokio",
 ]

@@ -69,7 +69,9 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("implement")
-                .about("Splice an authored handler for an unimplemented operation.")
+                .about(
+                    "Splice an authored handler for an operation and compile-check it.",
+                )
                 .arg(
                     Arg::new("method")
                         .long("method")

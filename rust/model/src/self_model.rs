@@ -153,12 +153,12 @@ pub fn theseus_model() -> Model {
                 .tool("Report which operations have no authored handler.")
                 .operation(
                     "implement",
-                    "Splice an authored handler for an unimplemented operation.",
+                    "Splice an authored handler for an operation and compile-check it.",
                     "ImplementRequest",
                     "ImplementResult",
                 )
                 .tool(
-                    "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+                    "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the handler in place. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
                 )
                 .operation(
                     "show",
@@ -176,7 +176,7 @@ pub fn theseus_model() -> Model {
                     "CheckReport",
                 )
                 .tool(
-                    "Compile-check the workspace and report the outcome. Run it after `implement` writes a handler, so the authored code is proven to compile before a rebuild.",
+                    "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
                 )
                 .operation(
                     "calc",

@@ -144,10 +144,12 @@ impl<'a> Session<'a> {
     }
 
     /// Write an authored handler body for an operation into the service impl,
-    /// gated by `allow_writes`. The operation must exist in the working model, so
-    /// this follows a `patch` that adds it. The running binary still holds the old
-    /// code, hence the rebuild note, but `verify` reads the written source, so the
-    /// workspace conforms before the rebuild.
+    /// gated by `allow_writes`, then compile-check the workspace, so the result
+    /// carries the compiler's verdict on the authored code. The operation must
+    /// exist in the working model, so this follows a `patch` that adds it. The
+    /// running binary still holds the old code, hence the rebuild note, but
+    /// `verify` reads the written source, so the workspace conforms before the
+    /// rebuild.
     fn implement(&self, input: &serde_json::Value) -> anyhow::Result<String> {
         let method = input
             .get("method")
@@ -169,8 +171,9 @@ impl<'a> Session<'a> {
             path: path.clone(),
             contents: spliced,
         })?;
+        let outcome = self.toolchain.check()?;
         Ok(format!(
-            "wrote the handler for `{method}` into {path}. Rebuild to load it"
+            "wrote the handler for `{method}` into {path}. Rebuild to load it.\n{outcome}"
         ))
     }
 }

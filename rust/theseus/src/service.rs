@@ -123,8 +123,9 @@ impl TheseusService for Ctx<'_> {
             path: path.clone(),
             contents: spliced,
         })?;
+        let outcome = self.toolchain.check()?;
         Ok(format!(
-            "wrote the handler for `{}` into {path}. Rebuild to load it",
+            "wrote the handler for `{}` into {path}. Rebuild to load it.\n{outcome}",
             request.method
         ))
     }
@@ -349,6 +350,10 @@ mod tests {
         assert!(
             result.contains("wrote the handler for `verify`"),
             "the tool should report the write: {result}"
+        );
+        assert!(
+            result.contains("the workspace compiles (stub)"),
+            "the result should carry the check outcome: {result}"
         );
     }
 

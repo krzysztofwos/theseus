@@ -110,7 +110,7 @@ pub trait TheseusService {
         anyhow::bail!("unimplemented operation: coverage")
     }
 
-    /// Splice an authored handler for an unimplemented operation.
+    /// Splice an authored handler for an operation and compile-check it.
     fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
         anyhow::bail!("unimplemented operation: implement")
     }
@@ -157,7 +157,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "description" : "Report which operations have no authored handler.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "implement", "description" :
-        "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+        "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the handler in place. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
         "string" }, "body" : { "type" : "string" } }, "required" : ["method", "body"] }
         }), serde_json::json!({ "name" : "show", "description" :
@@ -165,7 +165,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
         "string" } }, "required" : ["method"] } }), serde_json::json!({ "name" : "check",
         "description" :
-        "Compile-check the workspace and report the outcome. Run it after `implement` writes a handler, so the authored code is proven to compile before a rebuild.",
+        "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
         "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }

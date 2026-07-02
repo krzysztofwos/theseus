@@ -37,9 +37,10 @@ fn restart_tool() -> Value {
     serde_json::json!({
         "name": RESTART_TOOL,
         "description": "Rebuild the agent and resume this session in the new \
-    binary, whose compiled model and tool catalog match the workspace. Apply the \
-    edits first — `patch` with write true, `implement` each handler, `check` — then \
-    call this alone, with no other tool in the turn.",
+    binary, whose compiled model, tool catalog, and tool dispatch match the \
+    workspace — an operation the applied patch exposed becomes a callable tool. \
+    Apply the edits first — `patch` with write true, `implement` each handler, \
+    `check` — then call this alone, with no other tool in the turn.",
         "input_schema": { "type": "object", "properties": {} }
     })
 }

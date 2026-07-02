@@ -72,9 +72,10 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .iter()
         .map(|service| render_service_trait(service, model))
         .collect();
-    // A service driven by an agent or MCP inbound carries a tool catalog, shared by
-    // both, rendered from each exposed operation's contract.
-    let agent_driven = services.iter().any(|service| {
+    // A service driven by an agent or MCP inbound carries a tool catalog and the
+    // dispatch behind it, both rendered from each exposed operation's contract,
+    // so every catalog entry has a dispatch arm.
+    let agent_service = services.iter().find(|service| {
         model.inbounds.iter().any(|inbound| {
             inbound.service == service.name
                 && matches!(inbound.transport, Transport::Agent | Transport::Mcp)
@@ -85,11 +86,14 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .flat_map(|service| service.operations.iter())
         .filter(|op| op.tool.is_some())
         .collect();
-    let has_tool_catalog = agent_driven && !tool_operations.is_empty();
-    let tool_catalog = if has_tool_catalog {
-        render_tool_catalog(&tool_operations, model)
-    } else {
-        quote! {}
+    let has_tool_catalog = agent_service.is_some() && !tool_operations.is_empty();
+    let tool_catalog = match agent_service {
+        Some(service) if !tool_operations.is_empty() => {
+            let catalog = render_tool_catalog(&tool_operations, model);
+            let dispatch = render_tool_dispatch(&tool_operations, service, model);
+            quote! { #catalog #dispatch }
+        }
+        _ => quote! {},
     };
     let requests = render_request_structs(&services, model);
     // A CLI inbound adapter hosted in this crate renders the command surface,
@@ -157,7 +161,7 @@ fn module_doc_summary(
         concerns.push("the outbound port traits and composition root");
     }
     if has_tool_catalog {
-        concerns.push("the agent tool catalog");
+        concerns.push("the agent tool catalog and dispatch");
     }
     if !inbound_modules.is_empty() {
         concerns.push("the command surface, request parsers, invocation, and dispatch");
@@ -491,6 +495,148 @@ fn render_tool_catalog(operations: &[&Operation], model: &Model) -> TokenStream 
         pub fn tool_catalog() -> Vec<serde_json::Value> {
             vec![#(#tools),*]
         }
+    }
+}
+
+/// Render the agent tool dispatch: one arm per exposed operation, parsing the
+/// request from the call's JSON input, running the trait method, and rendering
+/// the result — text for a `String` response, otherwise JSON. The catalog and
+/// this dispatch render from the same contract, so every catalog entry has an
+/// arm here.
+fn render_tool_dispatch(
+    operations: &[&Operation],
+    service: &Service,
+    model: &Model,
+) -> TokenStream {
+    let trait_name = format_ident!("{}Service", pascal_case(&service.name));
+    let parsers = render_tool_parsers(operations, model);
+    let arms: Vec<TokenStream> = operations
+        .iter()
+        .map(|op| {
+            let name = op.name.as_str();
+            let method = format_ident!("{}", op.name);
+            let call = match request_type(op, model) {
+                Some(def) => {
+                    let parser = format_ident!("parse_{}_input", def.name.to_lowercase());
+                    quote! { service.#method(#parser(input)?)? }
+                }
+                None => quote! { service.#method()? },
+            };
+            let render = if rust_type(&op.response, model) == "String" {
+                quote! { Ok(#call) }
+            } else {
+                quote! { Ok(serde_json::to_string(&#call)?) }
+            };
+            quote! { #name => #render, }
+        })
+        .collect();
+    let known = operations
+        .iter()
+        .map(|op| op.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let unknown = format!("unknown tool `{{other}}`; tools are {known}");
+    let input = if operations
+        .iter()
+        .any(|op| request_type(op, model).is_some())
+    {
+        format_ident!("input")
+    } else {
+        format_ident!("_input")
+    };
+    let doc_a = doc("Dispatch one tool call to the service: parse the request from the");
+    let doc_b = doc("call's JSON input, run the operation, and render the result — text");
+    let doc_c = doc("for a string, otherwise JSON. The catalog and this dispatch render");
+    let doc_d = doc("from the same contract, so every catalog entry has an arm here.");
+    quote! {
+        #parsers
+        #doc_a
+        #doc_b
+        #doc_c
+        #doc_d
+        pub fn dispatch_tool(
+            service: &impl #trait_name,
+            name: &str,
+            #input: &serde_json::Value,
+        ) -> anyhow::Result<String> {
+            match name {
+                #(#arms)*
+                other => anyhow::bail!(#unknown),
+            }
+        }
+    }
+}
+
+/// Render a parser per distinct request struct the exposed operations take,
+/// building the request from a tool call's JSON input. The wire-to-domain
+/// conversion is rendered with the dispatch, so the struct itself stays
+/// transport-neutral.
+fn render_tool_parsers(operations: &[&Operation], model: &Model) -> TokenStream {
+    let mut seen: Vec<&str> = Vec::new();
+    let parsers: Vec<TokenStream> = operations
+        .iter()
+        .filter_map(|op| request_type(op, model))
+        .filter(|def| {
+            let fresh = !seen.contains(&def.name.as_str());
+            if fresh {
+                seen.push(&def.name);
+            }
+            fresh
+        })
+        .map(|def| {
+            let TypeShape::Struct(fields) = &def.shape else {
+                return quote! {};
+            };
+            let fn_name = format_ident!("parse_{}_input", def.name.to_lowercase());
+            let ty = format_ident!("{}", def.name);
+            let inits: Vec<TokenStream> = fields.iter().map(tool_field_init).collect();
+            quote! {
+                fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
+                    Ok(#ty { #(#inits),* })
+                }
+            }
+        })
+        .collect();
+    quote! { #(#parsers)* }
+}
+
+/// Render one field's extraction from a tool call's JSON input. A `bool` defaults
+/// false and a `String` is required, mirroring the schema's `required` list. A
+/// container defaults empty when absent, and any other type deserializes from the
+/// field's value — an `Option` reads absence as `None`.
+fn tool_field_init(field: &Field) -> TokenStream {
+    let name = format_ident!("{}", field.name);
+    let key = field.name.as_str();
+    if field.ty == "bool" {
+        return quote! {
+            #name: input.get(#key).and_then(serde_json::Value::as_bool).unwrap_or_default()
+        };
+    }
+    if field.ty == "String" {
+        let message = format!("the call needs a string `{key}`");
+        return quote! {
+            #name: input
+                .get(#key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!(#message))?
+        };
+    }
+    let message = format!("the `{key}` field is invalid: {{error}}");
+    if field.ty.starts_with("Vec<") || field.ty.starts_with("BTreeMap<") {
+        return quote! {
+            #name: match input.get(#key) {
+                None => Default::default(),
+                Some(value) => serde_json::from_value(value.clone())
+                    .map_err(|error| anyhow::anyhow!(#message))?,
+            }
+        };
+    }
+    quote! {
+        #name: serde_json::from_value(
+            input.get(#key).cloned().unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|error| anyhow::anyhow!(#message))?
     }
 }
 
@@ -1014,6 +1160,35 @@ mod tests {
         assert!(
             rendered.contains("Ping the service."),
             "catalog lacks the tool description: {rendered}"
+        );
+    }
+
+    #[test]
+    fn the_tool_dispatch_renders_an_arm_per_exposed_operation() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .struct_type("Payload", &[("body", "String", "The body.")])
+            .service(
+                Service::new("App")
+                    .crate_name("app")
+                    .operation("greet", "Greet.", "Empty", "String")
+                    .tool("Say hello.")
+                    .operation("send", "Send.", "Payload", "Empty")
+                    .tool("Send a payload.")
+                    .operation("hidden", "Hidden.", "Empty", "Empty"),
+            )
+            .inbound("loop", Transport::Agent, "App", "app-agent");
+        let rendered = render_module_for_crate(&model, "app");
+        assert!(rendered.contains("pub fn dispatch_tool"), "{rendered}");
+        assert!(rendered.contains(r#""greet" =>"#));
+        assert!(rendered.contains(r#""send" =>"#));
+        assert!(
+            !rendered.contains(r#""hidden" =>"#),
+            "an unexposed operation has no dispatch arm"
+        );
+        assert!(
+            rendered.contains("fn parse_payload_input"),
+            "a struct request renders a parser"
         );
     }
 

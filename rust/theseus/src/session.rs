@@ -12,17 +12,13 @@
 
 use anyhow::Context;
 use theseus_model::generated_files;
-use theseus_modeling::{Edit, GeneratedFile, Model, apply_edits};
+use theseus_modeling::{Edit, GeneratedFile, Model, Refused, apply_edits};
 
 use crate::{
     generated::{Ctx, Toolchain, Workspace, dispatch_tool},
     service::crate_is_scaffolded,
     workspace_root,
 };
-
-/// The result fed back when a write tool runs without the permission gate.
-pub(crate) const WRITE_REFUSED: &str =
-    "writes are not permitted; rerun with write permission to apply this edit";
 
 /// A working model an agent edits by calling Theseus's own operations as tools.
 /// Each accepted edit updates the working model, so a later call sees it. Disk
@@ -122,7 +118,7 @@ struct GatedWorkspace<'a> {
 impl Workspace for GatedWorkspace<'_> {
     fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         if !self.allow_writes {
-            anyhow::bail!(WRITE_REFUSED);
+            return Err(Refused.into());
         }
         self.workspace.write_file(file)
     }

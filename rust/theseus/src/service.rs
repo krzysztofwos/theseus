@@ -175,11 +175,11 @@ pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) 
 #[cfg(test)]
 mod tests {
     use theseus_model::theseus_model;
-    use theseus_modeling::GeneratedFile;
+    use theseus_modeling::{GeneratedFile, Refused};
 
     use crate::{
         generated::{Toolchain, Workspace, tool_catalog},
-        session::{Session, WRITE_REFUSED},
+        session::Session,
     };
 
     /// A structured edit that adds a throwaway type, for exercising the `patch`
@@ -248,7 +248,10 @@ mod tests {
         let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("patch", &input)
             .expect_err("the gate refuses the write");
-        assert_eq!(error.to_string(), WRITE_REFUSED);
+        assert!(
+            error.downcast_ref::<Refused>().is_some(),
+            "the refusal should carry the typed gate error: {error}"
+        );
     }
 
     #[test]
@@ -285,7 +288,10 @@ mod tests {
         let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
             .call("implement", &input)
             .expect_err("the gate refuses the write");
-        assert_eq!(error.to_string(), WRITE_REFUSED);
+        assert!(
+            error.downcast_ref::<Refused>().is_some(),
+            "the refusal should carry the typed gate error: {error}"
+        );
     }
 
     #[test]

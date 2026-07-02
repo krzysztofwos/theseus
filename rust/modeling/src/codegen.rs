@@ -72,6 +72,13 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .iter()
         .map(|service| render_service_trait(service, model))
         .collect();
+    // The typed error the trait defaults return, rendered once beside the traits
+    // so the generated contract stays self-contained.
+    let unimplemented = if service_traits.is_empty() {
+        quote! {}
+    } else {
+        render_unimplemented()
+    };
     // A service driven by an agent or MCP inbound carries a tool catalog and the
     // dispatch behind it, both rendered from each exposed operation's contract,
     // so every catalog entry has a dispatch arm.
@@ -125,6 +132,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         #(#port_traits)*
         #composition_root
         #requests
+        #unimplemented
         #(#service_traits)*
         #tool_catalog
         #(#inbound_modules)*
@@ -774,11 +782,11 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
                 None => quote! {},
             };
             let response = response_type(&op.response, model);
-            let unimplemented = format!("unimplemented operation: {}", op.name);
+            let name = op.name.as_str();
             quote! {
                 #method_doc
                 fn #method_name(&self #param) -> anyhow::Result<#response> {
-                    anyhow::bail!(#unimplemented)
+                    Err(Unimplemented(#name).into())
                 }
             }
         })
@@ -789,6 +797,28 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
         pub trait #trait_name {
             #(#methods)*
         }
+    }
+}
+
+/// Render the typed error the trait defaults return, so a transport adapter can
+/// downcast an operation left on its default and map the outcome in its own
+/// vocabulary — the coverage gate surfacing at the wire.
+fn render_unimplemented() -> TokenStream {
+    let doc_a = doc("An operation with no authored handler, the trait default's error. A");
+    let doc_b = doc("transport adapter downcasts it to map the outcome in its own vocabulary.");
+    quote! {
+        #doc_a
+        #doc_b
+        #[derive(Debug)]
+        pub struct Unimplemented(pub &'static str);
+
+        impl std::fmt::Display for Unimplemented {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "unimplemented operation: {}", self.0)
+            }
+        }
+
+        impl std::error::Error for Unimplemented {}
     }
 }
 

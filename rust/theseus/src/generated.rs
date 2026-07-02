@@ -71,22 +71,35 @@ pub struct CalcRequest {
     pub b: f64,
 }
 
+/// An operation with no authored handler, the trait default's error. A
+/// transport adapter downcasts it to map the outcome in its own vocabulary.
+#[derive(Debug)]
+pub struct Unimplemented(pub &'static str);
+
+impl std::fmt::Display for Unimplemented {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unimplemented operation: {}", self.0)
+    }
+}
+
+impl std::error::Error for Unimplemented {}
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait TheseusService {
     /// Print Theseus's model of itself as JSON.
     fn model(&self) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: model")
+        Err(Unimplemented("model").into())
     }
 
     /// Check that the workspace conforms to its self-model.
     fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
-        anyhow::bail!("unimplemented operation: verify")
+        Err(Unimplemented("verify").into())
     }
 
     /// Regenerate model-derived code from the self-model.
     fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
-        anyhow::bail!("unimplemented operation: generate")
+        Err(Unimplemented("generate").into())
     }
 
     /// Return a stable handle and model hash for a model element.
@@ -94,7 +107,7 @@ pub trait TheseusService {
         &self,
         _request: QueryRequest,
     ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
-        anyhow::bail!("unimplemented operation: query")
+        Err(Unimplemented("query").into())
     }
 
     /// Propose an edit to the model.
@@ -102,37 +115,37 @@ pub trait TheseusService {
         &self,
         _request: PatchRequest,
     ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
-        anyhow::bail!("unimplemented operation: patch")
+        Err(Unimplemented("patch").into())
     }
 
     /// Report which operations have an authored handler.
     fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
-        anyhow::bail!("unimplemented operation: coverage")
+        Err(Unimplemented("coverage").into())
     }
 
     /// Splice an authored handler for an operation and compile-check it.
     fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: implement")
+        Err(Unimplemented("implement").into())
     }
 
     /// Show an operation's current handler source.
     fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: show")
+        Err(Unimplemented("show").into())
     }
 
     /// Compile-check the workspace and report the outcome.
     fn check(&self) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: check")
+        Err(Unimplemented("check").into())
     }
 
     /// Evaluate an arithmetic expression through the calculator service.
     fn calc(&self, _request: CalcRequest) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: calc")
+        Err(Unimplemented("calc").into())
     }
 
     /// Write the skeleton of each library service crate that is missing it.
     fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
-        anyhow::bail!("unimplemented operation: scaffold")
+        Err(Unimplemented("scaffold").into())
     }
 }
 

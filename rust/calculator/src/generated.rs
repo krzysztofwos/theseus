@@ -10,26 +10,39 @@ pub struct Operands {
     pub b: f64,
 }
 
+/// An operation with no authored handler, the trait default's error. A
+/// transport adapter downcasts it to map the outcome in its own vocabulary.
+#[derive(Debug)]
+pub struct Unimplemented(pub &'static str);
+
+impl std::fmt::Display for Unimplemented {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unimplemented operation: {}", self.0)
+    }
+}
+
+impl std::error::Error for Unimplemented {}
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 pub trait CalculatorService {
     /// Add the operands.
     fn add(&self, _request: Operands) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: add")
+        Err(Unimplemented("add").into())
     }
 
     /// Subtract the operands.
     fn subtract(&self, _request: Operands) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: subtract")
+        Err(Unimplemented("subtract").into())
     }
 
     /// Multiply the operands.
     fn multiply(&self, _request: Operands) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: multiply")
+        Err(Unimplemented("multiply").into())
     }
 
     /// Divide the operands.
     fn divide(&self, _request: Operands) -> anyhow::Result<String> {
-        anyhow::bail!("unimplemented operation: divide")
+        Err(Unimplemented("divide").into())
     }
 }

@@ -1,0 +1,21 @@
+[package]
+name = "theseus-http"
+version = "0.1.0"
+edition = "2024"
+description = "The Theseus HTTP server — the operations over HTTP with a structural status map"
+
+[[bin]]
+name = "http-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+
+theseus = { path = "../theseus" }
+theseus-calculator = { path = "../calculator" }
+theseus-model = { path = "../model" }
+theseus-modeling = { path = "../modeling" }

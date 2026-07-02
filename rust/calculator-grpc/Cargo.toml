@@ -1,0 +1,23 @@
+[package]
+name = "theseus-calculator-grpc"
+version = "0.1.0"
+edition = "2024"
+description = "The calculator gRPC server — the Calculator service over gRPC"
+
+[[bin]]
+name = "calculator-grpc"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+theseus-calculator = { path = "../calculator" }
+theseus-modeling = { path = "../modeling" }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

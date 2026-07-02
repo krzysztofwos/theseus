@@ -19,6 +19,12 @@ pub fn theseus_model() -> Model {
             &["theseus-calculator"],
         )
         .crate_node(
+            "theseus-calculator-grpc",
+            "calculator-grpc",
+            2,
+            &["theseus-calculator", "theseus-modeling"],
+        )
+        .crate_node(
             "theseus",
             "theseus",
             3,
@@ -297,4 +303,10 @@ pub fn theseus_model() -> Model {
         .inbound("mcp", Transport::Mcp, "Theseus", "theseus-mcp")
         .inbound("http", Transport::Http, "Theseus", "theseus-http")
         .inbound("calculator", Transport::Cli, "Calculator", "theseus-calculator-cli")
+        .inbound(
+            "calculator-grpc",
+            Transport::Grpc,
+            "Calculator",
+            "theseus-calculator-grpc",
+        )
 }

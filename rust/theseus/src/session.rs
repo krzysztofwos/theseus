@@ -12,9 +12,10 @@
 
 use anyhow::Context;
 use theseus_model::generated_files;
-use theseus_modeling::{Edit, GeneratedFile, Model, Refused, apply_edits};
+use theseus_modeling::{Edit, Model, apply_edits};
 
 use crate::{
+    GatedWorkspace,
     generated::{Ctx, Toolchain, Workspace, dispatch_tool},
     service::crate_is_scaffolded,
     workspace_root,
@@ -104,23 +105,6 @@ impl<'a> Session<'a> {
             workspace: self.workspace,
             allow_writes: self.allow_writes,
         }
-    }
-}
-
-/// A workspace port carrying the session's write permission. A permitted write
-/// passes through and a refused one reports the gate, so every operation that
-/// reaches disk through the port is gated the same way.
-struct GatedWorkspace<'a> {
-    workspace: &'a dyn Workspace,
-    allow_writes: bool,
-}
-
-impl Workspace for GatedWorkspace<'_> {
-    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
-        if !self.allow_writes {
-            return Err(Refused.into());
-        }
-        self.workspace.write_file(file)
     }
 }
 

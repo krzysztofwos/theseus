@@ -55,6 +55,25 @@ impl Workspace for FsWorkspace {
     }
 }
 
+/// A workspace port carrying a write permission. A permitted write passes
+/// through to the wrapped port and a refused one reports
+/// [`Refused`](theseus_modeling::Refused), so every operation that reaches disk
+/// through the port is gated the same way. The session and the server inbounds
+/// share it.
+pub struct GatedWorkspace<'a> {
+    pub workspace: &'a dyn Workspace,
+    pub allow_writes: bool,
+}
+
+impl Workspace for GatedWorkspace<'_> {
+    fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+        if !self.allow_writes {
+            return Err(theseus_modeling::Refused.into());
+        }
+        self.workspace.write_file(file)
+    }
+}
+
 /// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
 /// at the repository root. The shared toolchain adapter for the inbound binaries.
 pub struct CargoToolchain;

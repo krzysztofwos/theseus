@@ -123,3 +123,104 @@ fn head(diagnostics: &str) -> String {
         ),
     }
 }
+
+/// The service over its own local adapters: an owned composition root for a
+/// long-lived inbound that cannot hold a borrowed [`Ctx`]. Each call runs over
+/// a fresh `Ctx` built on the gated workspace, so a standalone value drives the
+/// same authored handlers as every other inbound.
+pub struct Standalone {
+    model: theseus_modeling::Model,
+    workspace: FsWorkspace,
+    toolchain: CargoToolchain,
+    calculator: theseus_calculator::Calculator,
+    allow_writes: bool,
+}
+
+impl Standalone {
+    /// The service over the repository's adapters, writes gated by `allow_writes`.
+    pub fn new(allow_writes: bool) -> Self {
+        Self {
+            model: theseus_model::theseus_model(),
+            workspace: FsWorkspace::at_repo_root(),
+            toolchain: CargoToolchain,
+            calculator: theseus_calculator::Calculator,
+            allow_writes,
+        }
+    }
+
+    /// The workspace port carrying this root's write permission.
+    fn gate(&self) -> GatedWorkspace<'_> {
+        GatedWorkspace {
+            workspace: &self.workspace,
+            allow_writes: self.allow_writes,
+        }
+    }
+
+    /// The composition root one call runs over.
+    fn ctx<'a>(&'a self, workspace: &'a GatedWorkspace<'a>) -> Ctx<'a> {
+        Ctx {
+            model: &self.model,
+            workspace,
+            calculator: &self.calculator,
+            toolchain: &self.toolchain,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TheseusService for Standalone {
+    async fn model(&self) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).model().await
+    }
+
+    async fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
+        let workspace = self.gate();
+        self.ctx(&workspace).verify().await
+    }
+
+    async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+        let workspace = self.gate();
+        self.ctx(&workspace).generate().await
+    }
+
+    async fn query(&self, request: QueryRequest) -> anyhow::Result<theseus_modeling::QueryOutcome> {
+        let workspace = self.gate();
+        self.ctx(&workspace).query(request).await
+    }
+
+    async fn patch(&self, request: PatchRequest) -> anyhow::Result<theseus_modeling::PatchOutcome> {
+        let workspace = self.gate();
+        self.ctx(&workspace).patch(request).await
+    }
+
+    async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
+        let workspace = self.gate();
+        self.ctx(&workspace).coverage().await
+    }
+
+    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).implement(request).await
+    }
+
+    async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).show(request).await
+    }
+
+    async fn check(&self) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).check().await
+    }
+
+    async fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).calc(request).await
+    }
+
+    async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+        let workspace = self.gate();
+        self.ctx(&workspace).scaffold().await
+    }
+}

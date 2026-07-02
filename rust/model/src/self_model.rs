@@ -191,7 +191,7 @@ pub fn theseus_model() -> Model {
                     "PatchResult",
                 )
                 .tool(
-                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. `write` true reprojects to disk.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. `write` true reprojects to disk.",
                 )
                 .operation(
                     "coverage",

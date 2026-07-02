@@ -2017,6 +2017,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-grpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "prost",
+ "protox",
+ "serde_json",
+ "theseus",
+ "theseus-calculator",
+ "theseus-model",
+ "theseus-modeling",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "theseus-http"
 version = "0.1.0"
 dependencies = [

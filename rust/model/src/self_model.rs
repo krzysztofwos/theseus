@@ -25,6 +25,12 @@ pub fn theseus_model() -> Model {
             &["theseus-calculator", "theseus-modeling"],
         )
         .crate_node(
+            "theseus-calculator-grpc-client",
+            "calculator-grpc-client",
+            2,
+            &["theseus-calculator", "theseus-modeling"],
+        )
+        .crate_node(
             "theseus",
             "theseus",
             3,
@@ -33,8 +39,15 @@ pub fn theseus_model() -> Model {
         .crate_node(
             "theseus-cli",
             "cli",
-            4,
-            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
+            5,
+            &[
+                "theseus",
+                "theseus-model",
+                "theseus-modeling",
+                "theseus-calculator",
+                "theseus-http-client",
+                "theseus-calculator-grpc-client",
+            ],
         )
         .crate_node(
             "theseus-agent",
@@ -63,13 +76,13 @@ pub fn theseus_model() -> Model {
         .crate_node(
             "theseus-http-client",
             "http-client",
-            5,
+            4,
             &["theseus", "theseus-modeling"],
         )
         .crate_node(
             "theseus-grpc-client",
             "grpc-client",
-            5,
+            4,
             &["theseus", "theseus-modeling"],
         )
         .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
@@ -330,4 +343,10 @@ pub fn theseus_model() -> Model {
         )
         .client("http-client", Transport::Http, "Theseus", "theseus-http-client")
         .client("grpc-client", Transport::Grpc, "Theseus", "theseus-grpc-client")
+        .client(
+            "calculator-grpc-client",
+            Transport::Grpc,
+            "Calculator",
+            "theseus-calculator-grpc-client",
+        )
 }

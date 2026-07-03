@@ -1,36 +1,81 @@
-//! Theseus's command-line interface (L4) — the Cli inbound adapter.
+//! Theseus's command-line interface (L5) — the Cli inbound adapter.
 //!
 //! The `theseus` crate holds the service: the [`TheseusService`] contract, the
 //! request types, the outbound port traits, and the [`Ctx`] composition root. The
 //! generated [`generated`] module here supplies this inbound's surface — the
 //! command, the parsed [`Invocation`](generated::Invocation), and the `dispatch`.
-//! This entry point wires real adapters into `Ctx`, renders bespoke output for the
-//! operations that need it — an exit code, per-file lines, a follow-up notice —
-//! and delegates the rest to the generated `dispatch`.
+//! This entry point wires adapters into the composition, renders bespoke output
+//! for the operations that need it — an exit code, per-file lines, a follow-up
+//! notice — and delegates the rest to the generated `dispatch`.
+//!
+//! The composition is the CLI's to choose: `--remote <URL>` drives a remote
+//! Theseus over HTTP through the generated client, every subcommand unchanged,
+//! and `--calculator <ENDPOINT>` reaches the calculator over gRPC through its
+//! generated client where the in-process adapter would stand.
 
 mod generated;
 
+use clap::Arg;
 use generated::Invocation;
 use theseus::{CargoToolchain, Ctx, FsWorkspace, TheseusService};
+use theseus_calculator::CalculatorService;
+use theseus_calculator_grpc_client::GrpcCalculatorClient;
+use theseus_http_client::HttpTheseusClient;
 use theseus_model::theseus_model;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    // `arg_required_else_help(true)` in the generated surface means a bare
+    // invocation prints help and exits, so there is always a subcommand to parse.
+    let matches = generated::command()
+        .arg(
+            Arg::new("remote")
+                .long("remote")
+                .global(true)
+                .value_name("URL")
+                .help("Drive a remote Theseus over HTTP at this base URL."),
+        )
+        .arg(
+            Arg::new("calculator")
+                .long("calculator")
+                .global(true)
+                .value_name("ENDPOINT")
+                .help("Reach the calculator over gRPC at this endpoint."),
+        )
+        .get_matches();
+    let invocation = Invocation::from_matches(&matches)?;
+
+    // A remote composition: the generated HTTP client stands where the local
+    // composition root would, and every subcommand drives the remote instance.
+    if let Some(url) = matches.get_one::<String>("remote") {
+        return run(&HttpTheseusClient::new(url.clone()), invocation).await;
+    }
+
     let model = theseus_model();
     let workspace = FsWorkspace::at_repo_root();
-    let calculator = theseus_calculator::Calculator;
     let toolchain = CargoToolchain;
+    // The calculator port takes the in-process adapter, or the generated gRPC
+    // client when an endpoint names a remote calculator — the same port either
+    // way.
+    let local_calculator;
+    let remote_calculator;
+    let calculator: &dyn CalculatorService = match matches.get_one::<String>("calculator") {
+        Some(endpoint) => {
+            remote_calculator = GrpcCalculatorClient::connect(endpoint.clone()).await?;
+            &remote_calculator
+        }
+        None => {
+            local_calculator = theseus_calculator::Calculator;
+            &local_calculator
+        }
+    };
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
-        calculator: &calculator,
+        calculator,
         toolchain: &toolchain,
     };
-
-    // `arg_required_else_help(true)` in the generated surface means a bare
-    // invocation prints help and exits, so there is always a subcommand to parse.
-    let matches = generated::command().get_matches();
-    run(&ctx, Invocation::from_matches(&matches)?).await
+    run(&ctx, invocation).await
 }
 
 // ============================================================================

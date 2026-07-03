@@ -1,0 +1,10 @@
+//! Compile the generated proto contract into the wire types and the client
+//! stub. The proto is itself a projection of the model, so the wire schema is
+//! drift-gated with the rest of the generated code.
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let descriptors = protox::compile(["proto/calculator.proto"], ["proto"])?;
+    tonic_prost_build::configure().compile_fds(descriptors)?;
+    println!("cargo:rerun-if-changed=proto/calculator.proto");
+    Ok(())
+}

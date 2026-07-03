@@ -1,0 +1,27 @@
+[package]
+name = "theseus-calculator-grpc-client"
+version = "0.1.0"
+edition = "2024"
+description = "The calculator gRPC client — the Calculator contract carried over gRPC"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+theseus-calculator = { path = "../calculator" }
+theseus-modeling = { path = "../modeling" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net"] }
+tokio-stream = { workspace = true }
+
+theseus-calculator-grpc = { path = "../calculator-grpc" }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

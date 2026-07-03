@@ -16,5 +16,7 @@ tokio = { workspace = true }
 
 theseus = { path = "../theseus" }
 theseus-calculator = { path = "../calculator" }
+theseus-calculator-grpc-client = { path = "../calculator-grpc-client" }
+theseus-http-client = { path = "../http-client" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }

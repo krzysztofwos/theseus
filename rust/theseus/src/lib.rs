@@ -49,18 +49,17 @@ impl Workspace for FsWorkspace {
         let path = self.root.join(&file.path);
         // Scaffolding a new crate writes into a directory that does not exist yet.
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
-        std::fs::write(&path, &file.contents)?;
+        tokio::fs::write(&path, &file.contents).await?;
         Ok(())
     }
 }
 
 /// A workspace port carrying a write permission. A permitted write passes
-/// through to the wrapped port and a refused one reports
-/// [`Refused`](theseus_modeling::Refused), so every operation that reaches disk
-/// through the port is gated the same way. The session and the server inbounds
-/// share it.
+/// through to the wrapped port and a refused one reports the contract's
+/// [`Refused`], so every operation that reaches disk through the port is gated
+/// the same way. The session and the server inbounds share it.
 pub struct GatedWorkspace<'a> {
     pub workspace: &'a dyn Workspace,
     pub allow_writes: bool,

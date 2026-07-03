@@ -29,12 +29,20 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn verify(&self) -> anyhow::Result<VerifyReport> {
-        Ok(verify(
-            self.model,
-            &workspace_root(),
-            &generated_files(self.model),
-            &authored_impls(self.model),
-        ))
+        // The full render and the manifest reads are compute and blocking file
+        // I/O, so the check runs off the async thread and a server keeps
+        // serving while it verifies.
+        let model = self.model.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            verify(
+                &model,
+                &workspace_root(),
+                &generated_files(&model),
+                &authored_impls(&model),
+            )
+        })
+        .await?;
+        Ok(report)
     }
 
     async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -75,16 +83,23 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn coverage(&self) -> anyhow::Result<CoverageReport> {
-        let root = workspace_root();
-        Ok(coverage(self.model, |service| -> anyhow::Result<String> {
-            let path = authored_impl_path(self.model, service);
-            std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
-        })?)
+        // The handler sources read and parse off the async thread.
+        let model = self.model.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            let root = workspace_root();
+            coverage(&model, |service| -> anyhow::Result<String> {
+                let path = authored_impl_path(&model, service);
+                std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
+            })
+        })
+        .await??;
+        Ok(report)
     }
 
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
         let path = handler_path(self.model, &request.method)?;
-        let source = std::fs::read_to_string(workspace_root().join(&path))
+        let source = tokio::fs::read_to_string(workspace_root().join(&path))
+            .await
             .with_context(|| format!("reading {path}"))?;
         Ok(handler_source(self.model, &source, &request.method)?)
     }
@@ -111,7 +126,8 @@ impl TheseusService for Ctx<'_> {
 
     async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
         let path = handler_path(self.model, &request.method)?;
-        let source = std::fs::read_to_string(workspace_root().join(&path))
+        let source = tokio::fs::read_to_string(workspace_root().join(&path))
+            .await
             .with_context(|| format!("reading {path}"))?;
         let spliced = theseus_modeling::implement(
             self.model,

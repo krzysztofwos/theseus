@@ -97,15 +97,17 @@ The result is a `String`, so the generated `dispatch` prints it as text. A struc
 ### 6. Verify
 
 ```sh
-theseus coverage          # 8 / 8 implemented
+theseus coverage          # every operation implemented
 theseus verify
 #   ✓ crate graph: required dependencies present
 #   ✓ crate graph: dependency direction (layering functor)
 #   ✓ types: every reference resolves to a definition
 #   ✓ ports: every service-targeting port resolves to a service
 #   ✓ inbounds: every inbound adapter drives a defined service
+#   ✓ clients: every client adapter reaches a defined service
 #   ✓ generated code: in sync with model (drift gate)
 #   ✓ operations: every operation has an authored handler
+#   ✓ flow: every handler reaches exactly its declared ports
 #   conformant: workspace matches its self-model
 ```
 
@@ -169,6 +171,24 @@ cargo run -q -p theseus-cli -- greet --name World
 
 Field types determine the flag shape: `bool` is a flag, `Vec<T>` a repeatable value, `Option<T>` an optional value, and any other type a required value.
 
+### Reaching a port
+
+A handler that calls one of the service's outbound ports — the filesystem `workspace`, the compile-checking `toolchain`, the `calculator` — must declare that flow on its operation, and the flow check (`verify`'s ninth) holds the handler to exactly the declared set: a declared port the handler never touches and a touched port the operation never declares both fail.
+
+```sh
+theseus patch --write --edit 'set|op:theseus:greet|uses=toolchain'
+theseus implement --method greet --body 'self.toolchain.check().await'
+```
+
+The port side has the same read-and-revise loop as handlers. A port can grow a method through `patch` (its trait method defaults to the typed `unimplemented` error, so existing adapters keep compiling), and `implement --port` splices the adapter method into the crate's authored adapters file — `--adapter` picks the implementing type when the file holds more than one:
+
+```sh
+theseus patch --write \
+  --edit 'add|port:theseus:toolchain|kind=method|name=test|summary=Run the tests.|request=Empty|response=String'
+theseus show --port toolchain --method test            # the generated signature
+theseus implement --port toolchain --method test --adapter CargoToolchain --body '…'
+```
+
 ### With custom output
 
 The generated `dispatch` prints a `String` as text and any other type as pretty JSON. This covers most operations. When an operation requires an exit code, per-file lines, or a follow-up notice, add an arm to the overrides in `run()` in `rust/cli/src/main.rs`, the only location in the composition root that is edited:
@@ -196,21 +216,24 @@ The result and the gates are identical. The protocol is the editor-free path use
 
 ### Generated versus authored files
 
-| File                           | Owner                                  | Contents                                                                              |
-| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------- |
+| File                            | Owner                                  | Contents                                                                              |
+| ------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------- |
 | `rust/theseus/src/generated.rs` | `generate` (`// @generated`)           | request structs, `TheseusService` trait, outbound port traits, `Ctx` composition root |
-| `rust/cli/src/generated.rs`    | `generate` (`// @generated`)           | command surface, request parsers, `Invocation`, dispatch                              |
-| `rust/model/src/self_model.rs` | `generate` / `patch` (`// @generated`) | the model, projected to its builder form (the fixed point)                            |
-| `rust/theseus/src/service.rs`  | authored / `implement`                 | the operation handlers (`impl TheseusService for Ctx`)                                |
-| `rust/cli/src/main.rs`         | authored                               | composition root, adapters, output overrides                                          |
+| `rust/cli/src/generated.rs`     | `generate` (`// @generated`)           | command surface, request parsers, `Invocation`, dispatch                              |
+| `rust/model/src/self_model.rs`  | `generate` / `patch` (`// @generated`) | the model, projected to its builder form (the fixed point)                            |
+| `rust/theseus/src/service.rs`   | authored / `implement`                 | the operation handlers (`impl TheseusService for Ctx`)                                |
+| `rust/theseus/src/lib.rs`       | authored / `implement --port`          | the shared adapters (`FsWorkspace`, `CargoToolchain`, the write gate)                 |
+| `rust/agent/src/generated.rs`   | `generate` (`// @generated`)           | the agent loop's interior: the `Llm` port trait, its request, `TURN_BUDGET`           |
+| `rust/agent/src/adapters.rs`    | authored / `implement --port`          | the `Llm` port's adapters (`AnthropicLlm`, `OfflineLlm`)                              |
+| `rust/cli/src/main.rs`          | authored                               | composition root, adapters, output overrides                                          |
 
 ### Gates
 
-| Gate                        | Property enforced                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                   |
-| `coverage`                  | the derived list of operations still on their `unimplemented` default                                                               |
-| `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, generated drift, implementation coverage |
+| Gate                        | Property enforced                                                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                                                      |
+| `coverage`                  | the derived list of operations still on their `unimplemented` default                                                                                                   |
+| `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, client services, generated drift, implementation coverage, flow conformance |
 
 ### The edit vocabulary
 
@@ -223,7 +246,9 @@ theseus patch --edit 'rename|<handle>|to=<name>'
 theseus patch --edit 'set|<handle>|k=v|…'
 ```
 
-Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, `crate:theseus:<name>`, `service:theseus:<name>`, `inbound:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, `variant:theseus:<type>.<name>`, and `dep:theseus:<crate>.<dep>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, `variant`, `crate`, `dep`, `service`, or `inbound` — the crate-and-service kinds are exercised in [building a calculator](building-a-calculator.md).
+Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, `crate:theseus:<name>`, `service:theseus:<name>`, `inbound:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, `variant:theseus:<type>.<name>`, and `dep:theseus:<crate>.<dep>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, `variant`, `crate`, `dep`, `service`, or `inbound` — the crate-and-service kinds are exercised in [building a calculator](building-a-calculator.md). A port attaches to a service or to an inbound — the agent loop's own `llm` port hangs on the `agent` inbound and is addressed by the same `port:theseus:llm` handle.
+
+An operation's `uses` attribute (comma-separated port names, empty to clear) declares its flow for the ninth check, and its `tool` attribute (empty to withdraw) is its agent tool description. An inbound's `turns` attribute is its loop's turn budget, rendered as the generated `TURN_BUDGET`.
 
 Type shapes (`shape=…`) are `newtype:Inner`, `foreign:Path`, `enum:A,B,C`, and `struct:field=Type,field=Type`. A struct field may carry its documentation inline as `field=Type:doc`, and a non-`String` field type is parsed and validated as that type on the command line.
 
@@ -232,4 +257,6 @@ Multiple `--edit` flags apply in one atomic `patch`, in order — refused as a w
 ### Troubleshooting
 
 - `no operation named …` or `already has a handler` from `implement` — the method must name a current operation that is unimplemented. Run `theseus coverage`.
+- `flow: …` fails in `verify` — the named handler and its operation's `uses` disagree. Declare the flow with `set|op:theseus:<name>|uses=<ports>`, or make the handler reach what it declares.
+- `adapters … implement `X` here` from `implement --port` — the authored file holds more than one adapter for the port's trait. Name one with `--adapter`.
 - drift-gate failure (`theseus_conforms_to_its_self_model`) — `self_model.rs` was edited without running `theseus generate`.

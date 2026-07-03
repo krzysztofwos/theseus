@@ -23,6 +23,13 @@ pub fn authored_impl_path(model: &Model, service: &Service) -> String {
     format!("rust/{dir}/src/service.rs")
 }
 
+/// The authored adapters file for `service`'s crate: the `lib.rs` beside the
+/// generated contract, where the crate's shared port adapters live. The
+/// `implement` and `show` operations reach a port's adapter methods here.
+pub fn adapter_impl_path(model: &Model, service: &Service) -> String {
+    format!("rust/{}/src/lib.rs", crate_dir(model, service))
+}
+
 /// The authored impl path of every service, paired with the service name.
 pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
     model

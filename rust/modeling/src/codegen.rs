@@ -1944,6 +1944,7 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
             Command::new(#bin)
                 .about(#about)
                 .arg_required_else_help(true)
+                .subcommand_required(true)
                 #(#subcommands)*
         }
     };
@@ -1988,7 +1989,7 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
             pub fn from_matches(matches: &ArgMatches) -> anyhow::Result<Self> {
                 match matches.subcommand() {
                     #(#arms)*
-                    _ => unreachable!("arg_required_else_help guarantees a subcommand"),
+                    _ => unreachable!("subcommand_required guarantees a subcommand"),
                 }
             }
         }

@@ -8,6 +8,7 @@ pub fn command() -> Command {
     Command::new("theseus")
         .about("The Theseus service.")
         .arg_required_else_help(true)
+        .subcommand_required(true)
         .subcommand(
             Command::new("model").about("Print Theseus's model of itself as JSON."),
         )
@@ -220,7 +221,7 @@ impl Invocation {
             Some(("check", _)) => Ok(Invocation::Check),
             Some(("calc", sub)) => Ok(Invocation::Calc(parse_calcrequest(sub)?)),
             Some(("scaffold", _)) => Ok(Invocation::Scaffold),
-            _ => unreachable!("arg_required_else_help guarantees a subcommand"),
+            _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
 }

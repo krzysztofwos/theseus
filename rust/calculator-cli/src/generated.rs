@@ -8,6 +8,7 @@ pub fn command() -> Command {
     Command::new("calculator")
         .about("The Calculator service.")
         .arg_required_else_help(true)
+        .subcommand_required(true)
         .subcommand(
             Command::new("add")
                 .about("Add the operands.")
@@ -112,7 +113,7 @@ impl Invocation {
             Some(("subtract", sub)) => Ok(Invocation::Subtract(parse_operands(sub)?)),
             Some(("multiply", sub)) => Ok(Invocation::Multiply(parse_operands(sub)?)),
             Some(("divide", sub)) => Ok(Invocation::Divide(parse_operands(sub)?)),
-            _ => unreachable!("arg_required_else_help guarantees a subcommand"),
+            _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
 }

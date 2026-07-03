@@ -166,12 +166,7 @@ fn all_handles(model: &Model) -> Vec<Handle> {
         }
     }
 
-    for port in model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
-    {
+    for port in model.ports() {
         let target = Target::Port(port.name.clone());
         handles.push(handle(
             model,

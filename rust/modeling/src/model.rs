@@ -83,6 +83,24 @@ impl Model {
         self.operations().into_iter().find(|op| op.name == name)
     }
 
+    /// Every port across the services and the inbound interiors. The one
+    /// traversal `patch`, `query`, `verify`, and `implement` all resolve
+    /// port names through.
+    pub fn ports(&self) -> impl Iterator<Item = &Port> {
+        self.services
+            .iter()
+            .flat_map(|service| service.outbound.iter())
+            .chain(self.inbounds.iter().flat_map(|i| i.outbound.iter()))
+    }
+
+    /// Every port, mutably, across the services and the inbound interiors.
+    pub fn ports_mut(&mut self) -> impl Iterator<Item = &mut Port> {
+        self.services
+            .iter_mut()
+            .flat_map(|service| service.outbound.iter_mut())
+            .chain(self.inbounds.iter_mut().flat_map(|i| i.outbound.iter_mut()))
+    }
+
     /// The service whose outbound ports include `port`.
     pub fn service_of_port(&self, port: &str) -> Option<&Service> {
         self.services

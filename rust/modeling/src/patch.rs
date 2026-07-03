@@ -273,6 +273,7 @@ fn plan_add(
         }
         NodeKind::Service => {
             under_root(&parent, kind)?;
+            modeled_crate(model, required(attrs, "crate")?)?;
             free(service_exists(model, name), "service", name)?;
             allow_keys(attrs, &["crate"])?;
             required(attrs, "crate")?;
@@ -283,8 +284,10 @@ fn plan_add(
             allow_keys(attrs, &["transport", "service", "crate", "turns"])?;
             parse_transport(required(attrs, "transport")?).map_err(transport_refused)?;
             required(attrs, "service")?;
-            required(attrs, "crate")?;
-            if let Some(turns) = attr(attrs, "turns") {
+            modeled_crate(model, required(attrs, "crate")?)?;
+            if let Some(turns) = attr(attrs, "turns")
+                && !turns.is_empty()
+            {
                 parse_turns(turns).map_err(turns_refused)?;
             }
         }
@@ -294,19 +297,21 @@ fn plan_add(
             allow_keys(attrs, &["transport", "service", "crate"])?;
             parse_transport(required(attrs, "transport")?).map_err(transport_refused)?;
             required(attrs, "service")?;
-            required(attrs, "crate")?;
+            modeled_crate(model, required(attrs, "crate")?)?;
         }
         NodeKind::Operation => {
             attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
             allow_keys(attrs, &["summary", "request", "response", "uses", "tool"])?;
+            renderable_types(attrs, &["request", "response"])?;
         }
         NodeKind::Type => {
             under_root(&parent, kind)?;
             free(model.type_def(name).is_some(), "type", name)?;
             allow_keys(attrs, &["shape"])?;
             let shape = required(attrs, "shape")?;
-            parse_shape(shape).map_err(shape_refused)?;
+            let parsed = parse_shape(shape).map_err(shape_refused)?;
+            renderable_shape(&parsed)?;
         }
         NodeKind::Port => {
             attaches_to_port_owner(model, &parent)?;
@@ -320,6 +325,7 @@ fn plan_add(
                 "method",
                 &format!("{port}.{name}"),
             )?;
+            renderable_types(attrs, &["request", "response"])?;
             allow_keys(attrs, &["summary", "request", "response"])?;
         }
         NodeKind::Field => {
@@ -421,6 +427,15 @@ fn plan_set(
             {
                 parse_turns(turns).map_err(turns_refused)?;
             }
+            if let Some(crate_name) = attr(attrs, "crate") {
+                modeled_crate(model, crate_name)?;
+            }
+        }
+        Target::Operation(_) | Target::Method { .. } => {
+            renderable_types(attrs, &["request", "response"])?;
+        }
+        Target::Field { .. } => {
+            renderable_types(attrs, &["ty"])?;
         }
         _ => {}
     }
@@ -478,6 +493,7 @@ fn apply_add(
         NodeKind::Inbound => model.inbounds.push(Inbound {
             outbound: Vec::new(),
             turns: attr(attrs, "turns")
+                .filter(|turns| !turns.is_empty())
                 .map(|turns| parse_turns(turns).expect("turns validated during planning")),
             name: name.to_string(),
             transport: parse_transport(attr(attrs, "transport").unwrap_or("Cli"))
@@ -657,7 +673,7 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
                 }
             }
             // A port bound to the renamed service follows it.
-            for port in ports_mut(model) {
+            for port in model.ports_mut() {
                 if port.target.as_deref() == Some(name) {
                     port.target = Some(to.to_string());
                 }
@@ -679,7 +695,7 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
             rewrite_type_references(model, name, to);
         }
         Target::Port(name) => {
-            for port in ports_mut(model) {
+            for port in model.ports_mut() {
                 if &port.name == name {
                     port.name = to.to_string();
                 }
@@ -1161,12 +1177,7 @@ fn set_if(attrs: &BTreeMap<String, String>, key: &str, slot: &mut String) {
 // ============================================================================
 
 fn port_exists(model: &Model, name: &str) -> bool {
-    model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
-        .any(|port| port.name == name)
+    model.ports().any(|port| port.name == name)
 }
 
 fn service_exists(model: &Model, name: &str) -> bool {
@@ -1248,10 +1259,7 @@ fn shape_of<'a>(model: &'a Model, ty: &str) -> Option<&'a TypeShape> {
 
 fn method_of<'a>(model: &'a Model, port: &str, name: &str) -> Option<&'a Method> {
     model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
+        .ports()
         .find(|p| p.name == port)
         .and_then(|p| p.methods.iter().find(|m| m.name == name))
 }
@@ -1274,16 +1282,8 @@ fn operations_mut(model: &mut Model) -> impl Iterator<Item = &mut Operation> {
         .flat_map(|service| service.operations.iter_mut())
 }
 
-fn ports_mut(model: &mut Model) -> impl Iterator<Item = &mut Port> {
-    let (services, inbounds) = (&mut model.services, &mut model.inbounds);
-    services
-        .iter_mut()
-        .flat_map(|service| service.outbound.iter_mut())
-        .chain(inbounds.iter_mut().flat_map(|i| i.outbound.iter_mut()))
-}
-
 fn port_mut<'a>(model: &'a mut Model, name: &str) -> Option<&'a mut Port> {
-    ports_mut(model).find(|port| port.name == name)
+    model.ports_mut().find(|port| port.name == name)
 }
 
 fn struct_fields_mut<'a>(model: &'a mut Model, ty: &str) -> Option<&'a mut Vec<Field>> {
@@ -1323,12 +1323,10 @@ fn type_referenced(model: &Model, name: &str) -> bool {
         TypeShape::Struct(fields) => fields.iter().any(|f| field_names_type(&f.ty, name)),
         _ => false,
     });
-    let in_methods = model.services.iter().any(|service| {
-        service.outbound.iter().any(|port| {
-            port.methods
-                .iter()
-                .any(|m| m.request == name || m.response == name)
-        })
+    let in_methods = model.ports().any(|port| {
+        port.methods
+            .iter()
+            .any(|m| m.request == name || m.response == name)
     });
     in_operations || in_fields || in_methods
 }
@@ -1359,23 +1357,21 @@ fn rewrite_type_references(model: &mut Model, name: &str, to: &str) {
             }
         }
     }
-    for service in &mut model.services {
-        for op in &mut service.operations {
-            if op.request == name {
-                op.request = to.to_string();
-            }
-            if op.response == name {
-                op.response = to.to_string();
-            }
+    for op in operations_mut(model) {
+        if op.request == name {
+            op.request = to.to_string();
         }
-        for port in &mut service.outbound {
-            for method in &mut port.methods {
-                if method.request == name {
-                    method.request = to.to_string();
-                }
-                if method.response == name {
-                    method.response = to.to_string();
-                }
+        if op.response == name {
+            op.response = to.to_string();
+        }
+    }
+    for port in model.ports_mut() {
+        for method in &mut port.methods {
+            if method.request == name {
+                method.request = to.to_string();
+            }
+            if method.response == name {
+                method.response = to.to_string();
             }
         }
     }
@@ -1490,6 +1486,60 @@ fn layer_refused(error: LayerError) -> Vec<Diagnostic> {
         error.to_string(),
         "pass --set layer=<integer>",
     )]
+}
+
+/// A service, inbound, or client must land on a crate the model defines, so a
+/// later render never reaches for a directory the model cannot name.
+fn modeled_crate(model: &Model, name: &str) -> Result<(), Vec<Diagnostic>> {
+    if model.crate_named(name).is_some() {
+        return Ok(());
+    }
+    Err(vec![diagnostic(
+        "PATCH017",
+        format!("crate `{name}` is not modeled"),
+        "add the crate first: add|model:<model>|kind=crate|name=<name>|dir=<dir>|layer=<n>",
+    )])
+}
+
+/// Each named attribute, when present, must parse as a Rust type, so a later
+/// render never panics on a label it cannot express.
+fn renderable_types(
+    attrs: &BTreeMap<String, String>,
+    keys: &[&str],
+) -> Result<(), Vec<Diagnostic>> {
+    for key in keys {
+        if let Some(value) = attr(attrs, key) {
+            renderable_type(value)?;
+        }
+    }
+    Ok(())
+}
+
+/// A type label the renderer can express: it parses as a Rust type.
+fn renderable_type(value: &str) -> Result<(), Vec<Diagnostic>> {
+    if syn::parse_str::<syn::Type>(value).is_ok() {
+        return Ok(());
+    }
+    Err(vec![diagnostic(
+        "PATCH018",
+        format!("`{value}` does not parse as a type"),
+        "pass a Rust type label, e.g. String, Vec<Edit>, or Option<u32>",
+    )])
+}
+
+/// Every type a shape carries must render: a newtype's inner type, a foreign
+/// type's path, and each struct field's type.
+fn renderable_shape(shape: &TypeShape) -> Result<(), Vec<Diagnostic>> {
+    match shape {
+        TypeShape::Newtype(inner) | TypeShape::Foreign(inner) => renderable_type(inner),
+        TypeShape::Struct(fields) => {
+            for field in fields {
+                renderable_type(&field.ty)?;
+            }
+            Ok(())
+        }
+        TypeShape::Enum { .. } => Ok(()),
+    }
 }
 
 /// A turn budget that does not parse as a positive integer.
@@ -1620,6 +1670,16 @@ mod tests {
     #[test]
     fn add_a_service_and_an_operation_addressed_to_it() {
         let model = sample_model();
+        // The service's crate is modeled first, as PATCH017 requires.
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "crate",
+                "calc",
+                &[("dir", "calc"), ("layer", "1")],
+            ),
+        );
         let model = accept(
             &model,
             add(
@@ -1664,6 +1724,15 @@ mod tests {
     fn add_a_service_targeting_port_to_a_named_service() {
         let model = accept(
             &sample_model(),
+            add(
+                "model:sample",
+                "crate",
+                "calc",
+                &[("dir", "calc"), ("layer", "1")],
+            ),
+        );
+        let model = accept(
+            &model,
             add(
                 "model:sample",
                 "service",
@@ -1720,6 +1789,15 @@ mod tests {
     #[test]
     fn add_a_client_adapter() {
         let model = sample_model();
+        let model = accept(
+            &model,
+            add(
+                "model:sample",
+                "crate",
+                "sample-http-client",
+                &[("dir", "http-client"), ("layer", "2")],
+            ),
+        );
         let model = accept(
             &model,
             add(
@@ -2000,6 +2078,77 @@ mod tests {
             },
         );
         assert_eq!(code(&outcome), "PATCH010");
+    }
+
+    #[test]
+    fn a_service_on_an_unmodeled_crate_is_refused() {
+        let (outcome, _) = apply_edit(
+            &sample_model(),
+            &add("model:sample", "service", "Ghost", &[("crate", "ghost")]),
+        );
+        assert!(!outcome.ok);
+        assert_eq!(code(&outcome), "PATCH017");
+    }
+
+    #[test]
+    fn an_unparseable_type_label_is_refused() {
+        let (outcome, _) = apply_edit(
+            &sample_model(),
+            &Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("response".to_string(), "not a type".to_string())].into(),
+            },
+        );
+        assert!(!outcome.ok);
+        assert_eq!(code(&outcome), "PATCH018");
+
+        let (outcome, _) = apply_edit(
+            &sample_model(),
+            &add(
+                "model:sample",
+                "type",
+                "Broken",
+                &[("shape", "newtype:not a type")],
+            ),
+        );
+        assert!(!outcome.ok);
+        assert_eq!(code(&outcome), "PATCH018");
+    }
+
+    #[test]
+    fn a_type_referenced_only_by_an_interior_port_is_guarded() {
+        let model = sample_model()
+            .foreign_type("Reply", "String")
+            .struct_type("Turn", &[("system", "String", "The framing.")])
+            .inbound("agent", Transport::Agent, "Sample", "sample-agent")
+            .inbound_port(
+                crate::model::Port::new("llm", "Completes one turn.").method(
+                    "complete",
+                    "Complete one turn.",
+                    "Turn",
+                    "Reply",
+                ),
+            );
+
+        // Removal is refused while the interior method references the type.
+        let (outcome, _) = apply_edit(
+            &model,
+            &Edit::Remove {
+                target: "type:sample:Turn".to_string(),
+            },
+        );
+        assert!(!outcome.ok, "{outcome:?}");
+
+        // A rename carries the interior method's reference with it.
+        let renamed = accept(
+            &model,
+            Edit::Rename {
+                target: "type:sample:Turn".to_string(),
+                to: "TurnRequest".to_string(),
+            },
+        );
+        let llm = renamed.inbound_of_port("llm").unwrap();
+        assert_eq!(llm.outbound[0].methods[0].request, "TurnRequest");
     }
 
     #[test]

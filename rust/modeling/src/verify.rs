@@ -245,14 +245,14 @@ fn flow_conformance<E: std::fmt::Display>(
             }
             for port in &declared {
                 declared_edges.push((
-                    flow_label(&op.name, port),
+                    flow_label(service, &op.name, port),
                     operation_object(service, op),
                     port_object(service, port),
                 ));
             }
             for port in reached {
                 extracted_edges.push((
-                    flow_label(&op.name, port),
+                    flow_label(service, &op.name, port),
                     operation_object(service, op),
                     port_object(service, port),
                 ));
@@ -318,9 +318,10 @@ fn port_object(service: &crate::model::Service, port: &str) -> String {
     format!("port:{}:{port}", service.name)
 }
 
-/// Label for a flow edge between an operation and a port it uses.
-fn flow_label(op: &str, port: &str) -> String {
-    format!("{op}__uses__{port}")
+/// Label for a flow edge between an operation and a port it uses, qualified by
+/// the service so two services' same-named edges stay distinct.
+fn flow_label(service: &crate::model::Service, op: &str, port: &str) -> String {
+    format!("{}:{op}__uses__{port}", service.name)
 }
 
 /// Every modeled operation must have an authored handler. An operation left on
@@ -364,12 +365,7 @@ fn check_implementation_coverage(
 fn check_port_targets(model: &Model) -> Result<String, String> {
     let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
     let mut bound = 0;
-    for port in model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
-    {
+    for port in model.ports() {
         if let Some(target) = &port.target {
             bound += 1;
             if !services.contains(target.as_str()) {
@@ -431,12 +427,7 @@ fn check_type_references(model: &Model) -> Result<String, String> {
         referenced.push(&op.request);
         referenced.push(&op.response);
     }
-    for port in model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
-    {
+    for port in model.ports() {
         for method in &port.methods {
             referenced.push(&method.request);
             referenced.push(&method.response);

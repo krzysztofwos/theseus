@@ -92,6 +92,9 @@ pub fn opening(message: &str) -> Vec<Message> {
 pub enum Outcome {
     /// The model answered, and the conversation is complete.
     Answered(String),
+    /// The turn budget ran out. The transcript carries everything the run did,
+    /// so the caller can persist and inspect it.
+    Exhausted(Vec<Message>),
     /// The model asked to restart. The transcript ends with the assistant turn
     /// whose sole tool call is `restart`. The caller rebuilds, persists the
     /// transcript, and re-enters the new binary, which answers the pending call
@@ -198,7 +201,7 @@ other calls, then call it alone"
             blocks: results,
         });
     }
-    anyhow::bail!("the agent did not finish within {TURN_BUDGET} turns")
+    Ok(Outcome::Exhausted(messages))
 }
 
 /// Write the transcript as JSON, creating its directory.

@@ -9,7 +9,7 @@
 //! persists to `.theseus/session.json`, the workspace rebuilds, and this process
 //! replaces itself with the new binary, which resumes the conversation with
 //! `--resume`. A failed rebuild feeds the compiler's output back into the running
-//! loop instead, so the model can repair the workspace from the old binary.
+//! loop, so the model can repair the workspace from the old binary.
 
 mod adapters;
 mod agent;
@@ -80,6 +80,13 @@ async fn drive(
     loop {
         match run_agent(llm, session, messages).await? {
             Outcome::Answered(text) => return Ok(text),
+            Outcome::Exhausted(transcript) => {
+                save_transcript(&session_path(), &transcript)?;
+                anyhow::bail!(
+                    "the agent did not finish within its turn budget; the transcript is saved at {}",
+                    session_path().display()
+                );
+            }
             Outcome::Restart(transcript) => match rebuild().await {
                 Ok(()) => {
                     save_transcript(&session_path(), &transcript)?;
@@ -145,6 +152,9 @@ fn parse_args() -> anyhow::Result<(Mode, bool)> {
         match arg.as_str() {
             "--allow-writes" => allow_writes = true,
             "--resume" => resume = true,
+            flag if flag.starts_with("--") => {
+                anyhow::bail!("unknown flag `{flag}`; the flags are --allow-writes and --resume")
+            }
             _ => message = Some(arg),
         }
     }

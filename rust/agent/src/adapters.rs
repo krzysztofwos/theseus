@@ -115,8 +115,8 @@ fn parse_reply(value: &Value) -> anyhow::Result<Reply> {
                 }
             }
             Some("tool_use") => tool_uses.push(ToolUse {
-                id: string_field(block, "id"),
-                name: string_field(block, "name"),
+                id: string_field(block, "id")?,
+                name: string_field(block, "name")?,
                 input: block.get("input").cloned().unwrap_or(Value::Null),
             }),
             _ => {}
@@ -125,12 +125,14 @@ fn parse_reply(value: &Value) -> anyhow::Result<Reply> {
     Ok(Reply { text, tool_uses })
 }
 
-fn string_field(block: &Value, key: &str) -> String {
+/// A required string field of a content block. A `tool_use` without one is a
+/// malformed reply, reported here where the block is read.
+fn string_field(block: &Value, key: &str) -> anyhow::Result<String> {
     block
         .get(key)
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+        .map(str::to_string)
+        .with_context(|| format!("a tool_use block in the reply has no `{key}`"))
 }
 
 /// A model that replays a fixed script of replies, ignoring the conversation, so

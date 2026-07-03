@@ -10,6 +10,15 @@ pub trait Llm: Send + Sync {
     }
 }
 
+/// A borrowed adapter serves the port its target serves, so a wrapper
+/// generic over the port holds a borrow as readily as an owned adapter.
+#[async_trait::async_trait]
+impl<T: Llm + ?Sized> Llm for &T {
+    async fn complete(&self, request: &Turn) -> anyhow::Result<crate::agent::Reply> {
+        (**self).complete(request).await
+    }
+}
+
 /// The most turns the loop runs before giving up.
 pub const TURN_BUDGET: usize = 32;
 

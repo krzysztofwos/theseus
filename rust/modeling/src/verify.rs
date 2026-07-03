@@ -373,8 +373,29 @@ fn manifest_path(root: &Path, dir: &str) -> PathBuf {
 }
 
 /// Does `manifest` declare a path dependency on the crate living in `../<dir>`?
+/// Only the `[dependencies]` table counts: the layering law governs the
+/// delivered coupling, and a test-only dependency crosses layers freely — a
+/// client's round trip drives the server it mirrors.
 fn manifest_references_dir(manifest: &str, dir: &str) -> bool {
-    manifest.contains(&format!("\"../{dir}\""))
+    delivered_dependencies(manifest).contains(&format!("\"../{dir}\""))
+}
+
+/// The `[dependencies]` table of a manifest, cut at the section boundaries.
+fn delivered_dependencies(manifest: &str) -> String {
+    let mut inside = false;
+    let mut section = String::new();
+    for line in manifest.lines() {
+        let header = line.trim();
+        if header.starts_with('[') {
+            inside = header == "[dependencies]";
+            continue;
+        }
+        if inside {
+            section.push_str(line);
+            section.push('\n');
+        }
+    }
+    section
 }
 
 /// The intended crate graph, straight from the model.
@@ -612,6 +633,17 @@ mod tests {
         let model = Model::new("Sample")
             .service(Service::new("Sample").operation("op", "", "Empty", "Ghost"));
         assert!(check_type_references(&model).is_err());
+    }
+
+    #[test]
+    fn a_test_only_dependency_stays_outside_the_layering_law() {
+        let manifest = concat!(
+            "[package]\nname = \"x\"\n\n",
+            "[dependencies]\na = { path = \"../a\" }\n\n",
+            "[dev-dependencies]\nb = { path = \"../b\" }\n",
+        );
+        assert!(manifest_references_dir(manifest, "a"));
+        assert!(!manifest_references_dir(manifest, "b"));
     }
 
     #[test]

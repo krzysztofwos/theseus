@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{Json, Path, State},
+    body::Bytes,
+    extract::{Path, State},
     http::{StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
     routing::post,
@@ -25,14 +26,32 @@ pub fn router<S: TheseusService + 'static>(service: Arc<S>) -> Router {
 }
 
 /// Run one operation call through the generated handler and write its reply out.
+/// An empty body reads as an empty object, and a body that is not JSON replies
+/// 400 in the same error envelope the generated handlers use.
 async fn call<S: TheseusService + 'static>(
     State(service): State<Arc<S>>,
     Path(operation): Path<String>,
-    body: Option<Json<serde_json::Value>>,
+    body: Bytes,
 ) -> Response {
-    let input = body
-        .map(|Json(value)| value)
-        .unwrap_or_else(|| serde_json::json!({}));
+    let input = if body.is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                let body = serde_json::json!({
+                    "error": format!("the body is not JSON: {error}")
+                })
+                .to_string();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(CONTENT_TYPE, "application/json")],
+                    body,
+                )
+                    .into_response();
+            }
+        }
+    };
     let reply = generated::handle(service.as_ref(), &operation, &input).await;
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, [(CONTENT_TYPE, reply.content_type)], reply.body).into_response()

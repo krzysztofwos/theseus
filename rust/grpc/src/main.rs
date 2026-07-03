@@ -14,11 +14,20 @@ use theseus_grpc::generated::{GrpcTheseus, proto::theseus_server::TheseusServer}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let allow_writes = std::env::args().skip(1).any(|arg| arg == "--allow-writes");
-    let listen = std::env::args()
-        .skip(1)
-        .find(|arg| arg != "--allow-writes")
-        .unwrap_or_else(|| "127.0.0.1:4873".to_string());
+    let mut allow_writes = false;
+    let mut address = None;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--allow-writes" => allow_writes = true,
+            flag if flag.starts_with("--") => {
+                anyhow::bail!(
+                    "unknown flag `{flag}`; usage: grpc-server [--allow-writes] [address]"
+                )
+            }
+            _ => address = Some(arg),
+        }
+    }
+    let listen = address.unwrap_or_else(|| "127.0.0.1:4873".to_string());
     let addr = listen.parse()?;
     eprintln!("listening on grpc://{listen}");
     tonic::transport::Server::builder()

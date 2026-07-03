@@ -13,9 +13,14 @@ use theseus_calculator_grpc::generated::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let listen = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:4872".to_string());
+    let mut address = None;
+    for arg in std::env::args().skip(1) {
+        if arg.starts_with("--") {
+            anyhow::bail!("unknown flag `{arg}`; usage: calculator-grpc [address]");
+        }
+        address = Some(arg);
+    }
+    let listen = address.unwrap_or_else(|| "127.0.0.1:4872".to_string());
     let addr = listen.parse()?;
     eprintln!("listening on grpc://{listen}");
     tonic::transport::Server::builder()

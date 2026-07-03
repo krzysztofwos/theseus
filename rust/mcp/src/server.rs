@@ -88,6 +88,9 @@ impl ServerHandler for TheseusMcp {
             self.allow_writes,
         );
         let outcome = session.call(request.name.as_ref(), &input).await;
+        // A host that cancels mid-call drops the future here: a write that
+        // already reprojected stays on disk while the working model reverts,
+        // and the drift gate reports the divergence on the next verify.
         *model = session.into_model();
         drop(model);
         Ok(match outcome {

@@ -238,6 +238,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
+                .uses(&["workspace"])
                 .operation(
                     "query",
                     "Return a stable handle and model hash for a model element.",
@@ -253,8 +254,9 @@ pub fn theseus_model() -> Model {
                     "PatchRequest",
                     "PatchResult",
                 )
+                .uses(&["workspace"])
                 .tool(
-                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. `write` true reprojects to disk.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects to disk.",
                 )
                 .operation(
                     "coverage",
@@ -269,6 +271,7 @@ pub fn theseus_model() -> Model {
                     "ImplementRequest",
                     "ImplementResult",
                 )
+                .uses(&["workspace", "toolchain"])
                 .tool(
                     "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
                 )
@@ -287,6 +290,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CheckReport",
                 )
+                .uses(&["toolchain"])
                 .tool(
                     "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
                 )
@@ -296,18 +300,21 @@ pub fn theseus_model() -> Model {
                     "CalcRequest",
                     "CalcResult",
                 )
+                .uses(&["calculator"])
                 .operation(
                     "scaffold",
                     "Write the skeleton of each library service crate that is missing it.",
                     "Empty",
                     "GeneratedFiles",
                 )
+                .uses(&["workspace"])
                 .operation(
                     "test",
                     "Run the workspace tests and report the outcome.",
                     "Empty",
                     "CheckReport",
                 )
+                .uses(&["toolchain"])
                 .tool(
                     "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
                 )

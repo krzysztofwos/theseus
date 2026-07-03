@@ -292,7 +292,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : { "find" : { "type" :
         "string" }, "node" : { "type" : "string" }, "kind" : { "type" : "string" } } }
         }), serde_json::json!({ "name" : "patch", "description" :
-        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. `write` true reprojects to disk.",
+        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects to disk.",
         "input_schema" : { "type" : "object", "properties" : { "edit" : { "type" :
         "array", "items" : { "oneOf" : [{ "type" : "object", "properties" : { "verb" : {
         "const" : "add" }, "parent" : { "type" : "string" }, "kind" : { "type" : "string"

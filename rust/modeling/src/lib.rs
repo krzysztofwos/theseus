@@ -7,6 +7,7 @@
 mod codegen;
 mod coverage;
 mod dsl;
+mod flow;
 mod hash;
 mod implement;
 mod label;
@@ -23,6 +24,7 @@ mod test_support;
 
 pub use codegen::{GeneratedFile, render_cli_module, render_module_for_crate, render_proto};
 pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
+pub use flow::{FlowError, handler_flows};
 pub use hash::model_hash;
 pub use implement::{ImplementError, adapter_source, handler_source, implement, implement_adapter};
 pub use model::{

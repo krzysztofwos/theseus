@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Eight checks, all derived from the same [`Model`]:
+//! Nine checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -21,6 +21,9 @@
 //!   8. **Implementation coverage** — every operation has an authored handler.
 //!      The service trait defaults each method to `unimplemented`, so this check
 //!      holds the gate the compiler once did.
+//!   9. **Flow conformance** — every authored handler reaches exactly the ports
+//!      its operation's `uses` edges declare. Realized as a functor from the
+//!      declared flow graph into the one extracted from the handlers.
 //!
 //! Checks 1 and 2 read the real manifests, so they degrade gracefully under
 //! refactoring: rename a crate in the model and its manifest together and the
@@ -158,7 +161,166 @@ pub fn verify(
         check_implementation_coverage(model, workspace_root, impls),
     );
 
+    report.record(
+        "flow: every handler reaches exactly its declared ports",
+        check_flow_conformance(model, workspace_root, impls),
+    );
+
     report
+}
+
+/// Every authored handler must reach exactly the ports its operation declares
+/// through `uses`. The check reads each service's authored impl, extracts the
+/// ports each handler touches, and holds the two edge sets against each other —
+/// a declared port the handler never reaches and a reached port the operation
+/// never declares both fail. An operation still on its `unimplemented` default
+/// is coverage's finding, so its declared edges wait for the handler.
+fn check_flow_conformance(
+    model: &Model,
+    root: &Path,
+    impls: &[(String, String)],
+) -> Result<String, String> {
+    flow_conformance(model, |service| {
+        let path = impls
+            .iter()
+            .find(|(name, _)| name == &service.name)
+            .map(|(_, path)| path.as_str())
+            .ok_or_else(|| format!("no authored impl path for service `{}`", service.name))?;
+        fs::read_to_string(root.join(path)).map_err(|e| format!("reading {path}: {e}"))
+    })
+}
+
+/// The flow check over supplied sources: `source_of` hands each service its
+/// authored impl, so the conformance law is testable without a filesystem.
+fn flow_conformance<E: std::fmt::Display>(
+    model: &Model,
+    mut source_of: impl FnMut(&crate::model::Service) -> Result<String, E>,
+) -> Result<String, String> {
+    let mut objects: Vec<String> = Vec::new();
+    let mut declared_edges: Vec<(String, String, String)> = Vec::new();
+    let mut extracted_edges: Vec<(String, String, String)> = Vec::new();
+    let mut violations: Vec<String> = Vec::new();
+
+    for service in &model.services {
+        let ports: BTreeSet<String> = service
+            .outbound
+            .iter()
+            .map(|port| port.name.clone())
+            .collect();
+        for port in &ports {
+            objects.push(port_object(service, port));
+        }
+        let source = source_of(service).map_err(|e| e.to_string())?;
+        let flows = crate::flow::handler_flows(
+            &source,
+            &crate::coverage::service_trait_name(service),
+            &ports,
+        )
+        .map_err(|e| e.to_string())?;
+        for op in &service.operations {
+            objects.push(operation_object(service, op));
+            let declared: BTreeSet<String> = op.uses.iter().cloned().collect();
+            for port in &declared {
+                if !ports.contains(port) {
+                    violations.push(format!(
+                        "operation `{}` uses port `{port}`, which service `{}` does not declare",
+                        op.name, service.name
+                    ));
+                }
+            }
+            let Some(reached) = flows.get(&op.name) else {
+                continue;
+            };
+            for port in declared.difference(reached) {
+                violations.push(format!(
+                    "operation `{}` declares port `{port}` but its handler does not reach it",
+                    op.name
+                ));
+            }
+            for port in reached.difference(&declared) {
+                violations.push(format!(
+                    "the handler for `{}` reaches port `{port}`, which the operation does not declare",
+                    op.name
+                ));
+            }
+            for port in &declared {
+                declared_edges.push((
+                    flow_label(&op.name, port),
+                    operation_object(service, op),
+                    port_object(service, port),
+                ));
+            }
+            for port in reached {
+                extracted_edges.push((
+                    flow_label(&op.name, port),
+                    operation_object(service, op),
+                    port_object(service, port),
+                ));
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        return Err(violations.join("; "));
+    }
+
+    let functor = build_flow_functor(&objects, &declared_edges, &extracted_edges)?;
+    Ok(format!(
+        "{functor} declared flow edge(s) all realized by their handlers"
+    ))
+}
+
+/// Verify the flow functor: the declared graph maps into the extracted one,
+/// every `uses` edge landing on the reach with the same endpoints. Returns the
+/// number of verified edges.
+fn build_flow_functor(
+    objects: &[String],
+    declared: &[(String, String, String)],
+    extracted: &[(String, String, String)],
+) -> Result<usize, String> {
+    let object_refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let build = |name: &str, doc: &str, edges: &[(String, String, String)]| {
+        let edge_refs: Vec<(&str, &str, &str)> = edges
+            .iter()
+            .map(|(l, s, t)| (l.as_str(), s.as_str(), t.as_str()))
+            .collect();
+        CategoryBuilder::new(name, doc)
+            .objects(&object_refs)
+            .morphisms(&edge_refs)
+            .build()
+            .map_err(|e| e.to_string())
+    };
+    let declared_cat = build("DeclaredFlow", "modeled uses edges", declared)?;
+    let extracted_cat = build("ExtractedFlow", "handler port reaches", extracted)?;
+
+    let object_pairs: Vec<(&str, &str)> = object_refs.iter().map(|o| (*o, *o)).collect();
+    let morphism_pairs: Vec<(&str, &str)> = declared
+        .iter()
+        .map(|(label, _, _)| (label.as_str(), label.as_str()))
+        .collect();
+    let functor = FunctorBuilder::new("Flow", "declared flow into extracted flow")
+        .map_objects(&object_pairs)
+        .map_morphisms(&morphism_pairs)
+        .build();
+    functor
+        .verify(&declared_cat, &extracted_cat)
+        .map_err(|e| format!("flow functor failed: {e}"))?;
+    Ok(morphism_pairs.len())
+}
+
+/// Label for an operation object in the flow graph.
+fn operation_object(service: &crate::model::Service, op: &crate::model::Operation) -> String {
+    format!("operation:{}:{}", service.name, op.name)
+}
+
+/// Label for a port object in the flow graph.
+fn port_object(service: &crate::model::Service, port: &str) -> String {
+    format!("port:{}:{port}", service.name)
+}
+
+/// Label for a flow edge between an operation and a port it uses.
+fn flow_label(op: &str, port: &str) -> String {
+    format!("{op}__uses__{port}")
 }
 
 /// Every modeled operation must have an authored handler. An operation left on
@@ -642,6 +804,85 @@ mod tests {
         );
         assert!(manifest_references_dir(manifest, "a"));
         assert!(!manifest_references_dir(manifest, "b"));
+    }
+
+    fn flow_model() -> Model {
+        Model::new("Sample").service(
+            Service::new("Sample")
+                .crate_name("sample")
+                .operation("run", "Run.", "Empty", "String")
+                .uses(&["toolchain"])
+                .operation("describe", "Describe.", "Empty", "String")
+                .port(
+                    crate::model::Port::new("toolchain", "Checks the build.")
+                        .method("check", "Check.", "Empty", "String"),
+                ),
+        )
+    }
+
+    fn from(source: &str) -> impl FnMut(&Service) -> Result<String, String> + '_ {
+        move |_| Ok(source.to_string())
+    }
+
+    #[test]
+    fn a_handler_matching_its_declared_flow_conforms() {
+        let source = r#"
+            impl SampleService for Ctx {
+                async fn run(&self) -> anyhow::Result<String> { self.toolchain.check().await }
+                async fn describe(&self) -> anyhow::Result<String> { Ok("sample".to_string()) }
+            }
+        "#;
+        let detail = flow_conformance(&flow_model(), from(source)).unwrap();
+        assert!(detail.contains("1 declared flow edge(s)"), "{detail}");
+    }
+
+    #[test]
+    fn a_declared_port_the_handler_never_reaches_fails() {
+        let source = r#"
+            impl SampleService for Ctx {
+                async fn run(&self) -> anyhow::Result<String> { Ok("skipped".to_string()) }
+            }
+        "#;
+        let error = flow_conformance(&flow_model(), from(source)).unwrap_err();
+        assert!(
+            error.contains("declares port `toolchain` but its handler does not reach it"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_reached_port_the_operation_never_declares_fails() {
+        let source = r#"
+            impl SampleService for Ctx {
+                async fn describe(&self) -> anyhow::Result<String> { self.toolchain.check().await }
+            }
+        "#;
+        let error = flow_conformance(&flow_model(), from(source)).unwrap_err();
+        assert!(
+            error.contains("reaches port `toolchain`, which the operation does not declare"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_uses_edge_naming_an_unknown_port_fails() {
+        let model = Model::new("Sample").service(
+            Service::new("Sample")
+                .operation("run", "Run.", "Empty", "String")
+                .uses(&["ghost"]),
+        );
+        let error = flow_conformance(&model, from("")).unwrap_err();
+        assert!(
+            error.contains("uses port `ghost`, which service `Sample` does not declare"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_unimplemented_handler_leaves_flow_to_the_coverage_check() {
+        // No impl block at all: coverage reports the gap, flow stays quiet.
+        let detail = flow_conformance(&flow_model(), from("")).unwrap();
+        assert!(detail.contains("0 declared flow edge(s)"), "{detail}");
     }
 
     #[test]

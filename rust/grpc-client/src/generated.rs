@@ -163,6 +163,16 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("scaffold", status))?;
         parsed("scaffold", &reply.into_inner().json)
     }
+
+    async fn test(&self) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .test(proto::Empty {})
+            .await
+            .map_err(|status| failed("test", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

@@ -207,6 +207,17 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn test(
+        &self,
+        _request: tonic::Request<proto::Empty>,
+    ) -> Result<tonic::Response<proto::CheckReport>, tonic::Status> {
+        let outcome = self.0.test().await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::CheckReport { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

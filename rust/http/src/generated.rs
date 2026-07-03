@@ -159,6 +159,7 @@ pub async fn handle(
             }
         }
         "scaffold" => reply_json(service.scaffold().await),
+        "test" => reply_text(service.test().await),
         other => {
             HttpReply {
                 status: 404,

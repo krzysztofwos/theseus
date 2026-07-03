@@ -83,6 +83,28 @@ pub struct CargoToolchain;
 
 #[async_trait::async_trait]
 impl Toolchain for CargoToolchain {
+    async fn test(&self) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("cargo")
+            .args(["test", "--workspace", "--quiet"])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running `cargo test --workspace`")?;
+        // With `--quiet` the diagnostic stream carries warnings and errors only.
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        Ok(if output.status.success() {
+            if diagnostics.is_empty() {
+                "the tests pass".to_string()
+            } else {
+                format!("the tests pass, with warnings:\n{}", head(diagnostics))
+            }
+        } else {
+            format!("tests failed:\n{}", head(diagnostics))
+        })
+    }
+
     async fn check(&self) -> anyhow::Result<String> {
         let output = tokio::process::Command::new("cargo")
             .args(["check", "--workspace", "--quiet"])
@@ -212,6 +234,11 @@ impl TheseusService for Standalone {
     async fn check(&self) -> anyhow::Result<String> {
         let workspace = self.gate();
         self.ctx(&workspace).check().await
+    }
+
+    async fn test(&self) -> anyhow::Result<String> {
+        let workspace = self.gate();
+        self.ctx(&workspace).test().await
     }
 
     async fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {

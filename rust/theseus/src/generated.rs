@@ -20,6 +20,11 @@ pub trait Toolchain: Send + Sync {
     async fn check(&self) -> anyhow::Result<String> {
         Err(Unimplemented("toolchain.check").into())
     }
+
+    /// Run the workspace tests and report the outcome.
+    async fn test(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("toolchain.test").into())
+    }
 }
 
 /// Composition root: the model plus the wired outbound ports.
@@ -175,6 +180,11 @@ pub trait TheseusService: Send + Sync {
     async fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         Err(Unimplemented("scaffold").into())
     }
+
+    /// Run the workspace tests and report the outcome.
+    async fn test(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("test").into())
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -220,6 +230,9 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "required" : ["method"] } }), serde_json::json!({ "name" : "check", "description"
         :
         "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
+        "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
+        "name" : "test", "description" :
+        "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
         "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }
@@ -336,9 +349,10 @@ pub async fn dispatch_tool(
         }
         "show" => Ok(service.show(parse_show_request_input(input)?).await?),
         "check" => Ok(service.check().await?),
+        "test" => Ok(service.test().await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check"
+                "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check, test"
             )
         }
     }

@@ -149,6 +149,12 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("scaffold", status, &body)?;
         parsed("scaffold", &body)
     }
+
+    async fn test(&self) -> anyhow::Result<String> {
+        let (status, body) = self.post("test", serde_json::json!({})).await?;
+        checked("test", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

@@ -154,4 +154,6 @@ service Theseus {
   rpc Calc (CalcRequest) returns (CalcResult);
   // Write the skeleton of each library service crate that is missing it.
   rpc Scaffold (Empty) returns (GeneratedFiles);
+  // Run the workspace tests and report the outcome.
+  rpc Test (Empty) returns (CheckReport);
 }

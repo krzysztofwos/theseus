@@ -26,6 +26,10 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn test(&self) -> anyhow::Result<String> {
+        self.toolchain.test().await
+    }
+
     async fn model(&self) -> anyhow::Result<String> {
         Ok(describe(self.model))
     }

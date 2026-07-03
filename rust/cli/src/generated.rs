@@ -170,6 +170,9 @@ pub fn command() -> Command {
                     "Write the skeleton of each library service crate that is missing it.",
                 ),
         )
+        .subcommand(
+            Command::new("test").about("Run the workspace tests and report the outcome."),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -238,6 +241,7 @@ pub enum Invocation {
     Check,
     Calc(theseus::CalcRequest),
     Scaffold,
+    Test,
 }
 
 impl Invocation {
@@ -257,6 +261,7 @@ impl Invocation {
             Some(("check", _)) => Ok(Invocation::Check),
             Some(("calc", sub)) => Ok(Invocation::Calc(parse_calc_request(sub)?)),
             Some(("scaffold", _)) => Ok(Invocation::Scaffold),
+            Some(("test", _)) => Ok(Invocation::Test),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -299,6 +304,7 @@ pub async fn dispatch(
         Invocation::Scaffold => {
             println!("{}", serde_json::to_string_pretty(& service.scaffold(). await ?) ?)
         }
+        Invocation::Test => println!("{}", service.test(). await ?),
     }
     Ok(())
 }

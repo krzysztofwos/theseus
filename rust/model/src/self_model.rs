@@ -302,6 +302,15 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
+                .operation(
+                    "test",
+                    "Run the workspace tests and report the outcome.",
+                    "Empty",
+                    "CheckReport",
+                )
+                .tool(
+                    "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
@@ -326,6 +335,12 @@ pub fn theseus_model() -> Model {
                         .method(
                             "check",
                             "Compile-check the workspace and report the outcome.",
+                            "Empty",
+                            "CheckReport",
+                        )
+                        .method(
+                            "test",
+                            "Run the workspace tests and report the outcome.",
                             "Empty",
                             "CheckReport",
                         ),

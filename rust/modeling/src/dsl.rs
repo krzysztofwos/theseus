@@ -189,8 +189,17 @@ impl Service {
             summary: summary.to_string(),
             request: request.to_string(),
             response: response.to_string(),
+            uses: Vec::new(),
             tool: None,
         });
+        self
+    }
+
+    /// Declare the ports the most recently added operation's handler reaches.
+    pub fn uses(mut self, ports: &[&str]) -> Self {
+        if let Some(operation) = self.operations.last_mut() {
+            operation.uses = ports.iter().map(|port| port.to_string()).collect();
+        }
         self
     }
 

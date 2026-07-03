@@ -172,11 +172,17 @@ fn render_operation(op: &Operation) -> TokenStream {
     let summary = &op.summary;
     let request = &op.request;
     let response = &op.response;
+    let uses = if op.uses.is_empty() {
+        quote! {}
+    } else {
+        let ports = op.uses.iter();
+        quote! { .uses(&[#(#ports),*]) }
+    };
     let tool = match &op.tool {
         Some(description) => quote! { .tool(#description) },
         None => quote! {},
     };
-    quote! { .operation(#name, #summary, #request, #response) #tool }
+    quote! { .operation(#name, #summary, #request, #response) #uses #tool }
 }
 
 fn render_port(port: &Port) -> TokenStream {
@@ -215,6 +221,21 @@ mod tests {
                 op.name
             );
         }
+    }
+
+    #[test]
+    fn render_emits_the_uses_edges() {
+        use crate::model::Service;
+        let model = crate::model::Model::new("Sample").service(
+            Service::new("Sample")
+                .operation("run", "Run.", "Empty", "String")
+                .uses(&["workspace", "toolchain"]),
+        );
+        let source = render_model_source(&model, "", "sample_model");
+        assert!(
+            source.contains(r#".uses(&["workspace", "toolchain"])"#),
+            "{source}"
+        );
     }
 
     #[test]

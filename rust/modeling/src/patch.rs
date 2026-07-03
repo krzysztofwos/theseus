@@ -296,7 +296,7 @@ fn plan_add(
         NodeKind::Operation => {
             attaches_to_service(model, &parent)?;
             free(model.operation(name).is_some(), "operation", name)?;
-            allow_keys(attrs, &["summary", "request", "response", "tool"])?;
+            allow_keys(attrs, &["summary", "request", "response", "uses", "tool"])?;
         }
         NodeKind::Type => {
             under_root(&parent, kind)?;
@@ -489,6 +489,7 @@ fn apply_add(
                 summary: attr(attrs, "summary").unwrap_or_default().to_string(),
                 request: attr(attrs, "request").unwrap_or("Empty").to_string(),
                 response: attr(attrs, "response").unwrap_or("Empty").to_string(),
+                uses: attr(attrs, "uses").map(parse_uses).unwrap_or_default(),
                 tool: attr(attrs, "tool").map(str::to_string),
             });
         }
@@ -709,6 +710,11 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String
                 set_if(attrs, "summary", &mut op.summary);
                 set_if(attrs, "request", &mut op.request);
                 set_if(attrs, "response", &mut op.response);
+                // The `uses` attribute is the operation's declared flow: the
+                // ports its handler reaches, comma-separated. Empty clears it.
+                if let Some(uses) = attr(attrs, "uses") {
+                    op.uses = parse_uses(uses);
+                }
                 // The `tool` attribute is the operation's agent tool description.
                 // Text exposes the operation in the catalog; empty withdraws it.
                 if let Some(tool) = attr(attrs, "tool") {
@@ -1055,7 +1061,7 @@ fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
         Target::Crate(_) => &["dir", "layer"],
         Target::Inbound(_) | Target::Client(_) => &["transport", "service", "crate"],
-        Target::Operation(_) => &["summary", "request", "response", "tool"],
+        Target::Operation(_) => &["summary", "request", "response", "uses", "tool"],
         Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
@@ -1337,6 +1343,16 @@ enum ShapeError {
 #[derive(Debug, thiserror::Error)]
 #[error("unknown transport `{0}`")]
 struct TransportError(String);
+
+/// Parse a comma-separated `uses` attribute into its port names.
+fn parse_uses(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|port| !port.is_empty())
+        .map(str::to_string)
+        .collect()
+}
 
 /// Parse an inbound transport name into a [`Transport`].
 fn parse_transport(text: &str) -> Result<Transport, TransportError> {
@@ -1938,6 +1954,29 @@ mod tests {
             model.operation("greet").unwrap().tool.as_deref(),
             Some("Say hello."),
         );
+
+        // A `uses` edit declares the operation's flow.
+        let model = accept(
+            &model,
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("uses".to_string(), "workspace, toolchain".to_string())].into(),
+            },
+        );
+        assert_eq!(
+            model.operation("greet").unwrap().uses,
+            vec!["workspace".to_string(), "toolchain".to_string()]
+        );
+
+        // An empty `uses` clears the declaration.
+        let model = accept(
+            &model,
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("uses".to_string(), String::new())].into(),
+            },
+        );
+        assert!(model.operation("greet").unwrap().uses.is_empty());
 
         // An empty `tool` withdraws the exposure.
         let model = accept(

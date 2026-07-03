@@ -252,6 +252,7 @@ fn plan_add(
             "pass a name via --name <name>",
         )]);
     }
+    renderable_name(kind, name)?;
 
     match kind {
         NodeKind::Crate => {
@@ -373,6 +374,9 @@ fn plan_rename(model: &Model, target: &str, to: &str) -> Result<Plan, Vec<Diagno
             format!("cannot rename to `{to}`: name is empty or already taken"),
             "choose an unused name for --to",
         )]);
+    }
+    if let Some(kind) = rename_kind(&target) {
+        renderable_name(kind, to)?;
     }
     Ok(Plan::Rename {
         target,
@@ -945,6 +949,59 @@ fn parent_enum<'a>(model: &Model, parent: &'a Target) -> Result<&'a str, Vec<Dia
             "pass --parent type:<model>:<name> naming an enum",
         )]),
     }
+}
+
+/// A name must render as code. An operation, type, method, or field renders
+/// directly as a Rust identifier. Every other node renders through a case
+/// conversion, so its `-`- or `_`-separated words must each survive as an
+/// identifier once joined. A refused name carries the rule as its repair.
+fn renderable_name(kind: NodeKind, name: &str) -> Result<(), Vec<Diagnostic>> {
+    let direct = matches!(
+        kind,
+        NodeKind::Operation | NodeKind::Type | NodeKind::Method | NodeKind::Field
+    );
+    let renders = if direct {
+        is_identifier(name)
+    } else {
+        is_identifier(&name.replace('-', "_"))
+    };
+    if renders {
+        Ok(())
+    } else {
+        let repair = if direct {
+            "use a snake_case Rust identifier: letters, digits, and `_`, starting with a letter"
+        } else {
+            "use letters, digits, `_`, and `-`, starting with a letter, avoiding Rust keywords"
+        };
+        Err(vec![diagnostic(
+            "PATCH015",
+            format!("name `{name}` does not render as a Rust identifier"),
+            repair,
+        )])
+    }
+}
+
+/// Whether a name parses as one Rust identifier, keywords excluded.
+fn is_identifier(name: &str) -> bool {
+    syn::parse_str::<syn::Ident>(name).is_ok()
+}
+
+/// The node kind a rename target names, for the renderable-name rule.
+fn rename_kind(target: &Target) -> Option<NodeKind> {
+    Some(match target {
+        Target::Crate(_) => NodeKind::Crate,
+        Target::Dep { .. } => NodeKind::Dep,
+        Target::Service(_) => NodeKind::Service,
+        Target::Inbound(_) => NodeKind::Inbound,
+        Target::Client(_) => NodeKind::Client,
+        Target::Operation(_) => NodeKind::Operation,
+        Target::Type(_) => NodeKind::Type,
+        Target::Port(_) => NodeKind::Port,
+        Target::Method { .. } => NodeKind::Method,
+        Target::Field { .. } => NodeKind::Field,
+        Target::Variant { .. } => NodeKind::Variant,
+        Target::Model => return None,
+    })
 }
 
 /// A name being added must not already be taken among its siblings.
@@ -1676,6 +1733,37 @@ mod tests {
         // The first edit's effect is discarded — nothing is written.
         assert!(next.is_none());
         assert_eq!(code(&outcome), "PATCH005");
+    }
+
+    #[test]
+    fn a_name_that_cannot_render_is_refused() {
+        let model = sample_model();
+        // An operation renders directly as an identifier: no hyphens, no keywords.
+        let (outcome, _) = edit(&model, add("model:sample", "operation", "foo-bar", &[]));
+        assert_eq!(code(&outcome), "PATCH015");
+        let (outcome, _) = edit(&model, add("model:sample", "operation", "type", &[]));
+        assert_eq!(code(&outcome), "PATCH015");
+        // A crate renders through case conversion, so hyphenated words pass and
+        // a leading digit does not.
+        let (outcome, _) = edit(
+            &model,
+            add(
+                "model:sample",
+                "crate",
+                "1st-crate",
+                &[("dir", "x"), ("layer", "1")],
+            ),
+        );
+        assert_eq!(code(&outcome), "PATCH015");
+        // A rename honors the same rule.
+        let (outcome, _) = edit(
+            &model,
+            Edit::Rename {
+                target: "op:sample:greet".to_string(),
+                to: "foo bar".to_string(),
+            },
+        );
+        assert_eq!(code(&outcome), "PATCH015");
     }
 
     #[test]

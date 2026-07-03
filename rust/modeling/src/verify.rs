@@ -217,9 +217,8 @@ fn check_port_targets(model: &Model) -> Result<String, String> {
     Ok(format!("{bound} service-targeting port(s) all resolve"))
 }
 
-/// Every inbound adapter must drive a service the model defines, so an adapter
-/// bound to a phantom service is caught before code generation reaches for its
-/// trait.
+/// Every client adapter must reach a service the model defines — the mirror of
+/// the inbound check.
 fn check_client_services(model: &Model) -> Result<String, String> {
     let services: Vec<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
     for client in &model.clients {
@@ -236,8 +235,9 @@ fn check_client_services(model: &Model) -> Result<String, String> {
     ))
 }
 
-/// Every client adapter must reach a service the model defines — the mirror of
-/// the inbound check.
+/// Every inbound adapter must drive a service the model defines, so an adapter
+/// bound to a phantom service is caught before code generation reaches for its
+/// trait.
 fn check_inbound_services(model: &Model) -> Result<String, String> {
     let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
     for inbound in &model.inbounds {

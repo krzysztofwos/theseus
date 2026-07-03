@@ -36,20 +36,21 @@ The self-modifying agent loop is not a subcommand. It is a separate `agent` bina
 
 ## Architecture
 
-Fourteen crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
+Fifteen crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
 
 - `theseus-kernel` (L0) — `rust/kernel/`. Finite categories, functors, and the one law: a functor sends every morphism to one with matching endpoints. The structural substrate for all conformance checks. Knows nothing about Theseus.
 - `theseus-modeling` (L1) — `rust/modeling/`. The general engine over _any_ model: the `Model` vocabulary + fluent-builder DSL (`dsl.rs`), stable hashing (`hash.rs`), `verify`, `codegen`, crate scaffolding (`scaffold.rs`), the agent `query`/`patch` surface, and source splicing (`source.rs`).
 - `theseus-model` (L2) — `rust/model/`. The _adopter_: the concrete `theseus_model()`, the workspace-relative paths Theseus owns, and `generated_files()`. This is the model of record.
 - `theseus` (L3) — `rust/theseus/`. The Theseus service itself. `generated.rs` holds the model-rendered contract: the `TheseusService` trait, the request structs, the outbound port traits, the composition root `Ctx`, and the `tool_catalog()` and `dispatch_tool()` rendered from each exposed operation. `service.rs` holds the authored `impl TheseusService for Ctx`. `session.rs` holds the shared `Session` — the working model and the gated workspace port over the generated tool dispatch — that the agent loop and the MCP server both drive.
-- `theseus-cli` (L4) — `rust/cli/`. The `Cli` inbound, the binary `theseus`. `generated.rs` renders the command surface and dispatch. `main.rs` wires concrete adapters into `Ctx` and runs.
+- `theseus-cli` (L5) — `rust/cli/`. The `Cli` inbound, the binary `theseus`. `generated.rs` renders the command surface and dispatch. `main.rs` wires the composition: local adapters into `Ctx` by default, the generated HTTP client in their place under `--remote <URL>` (every subcommand drives a remote instance unchanged), and the generated calculator gRPC client on the `calculator` port under `--calculator <ENDPOINT>`.
 - `theseus-agent` (L4) — `rust/agent/`. The `Agent` inbound, the binary `agent`. An LLM drives the service's operations as tools over a `Session` in a loop, behind an `Llm` port — an Anthropic adapter, or an offline stub. A loop-level `restart` tool rebuilds the workspace and re-enters the session in the new binary, over a transcript persisted to `.theseus/session.json` (resumed with `agent --resume`).
 - `theseus-mcp` (L4) — `rust/mcp/`. The `Mcp` inbound, the binary `mcp-server`. A Model Context Protocol server exposing the same `tool_catalog()` over the same `Session` to an external host over stdio.
 - `theseus-grpc` (L4) — `rust/grpc/`. The `Grpc` inbound, the binary `grpc-server`. The build compiles a model-rendered `proto/theseus.proto` — the `Edit` enum as a `oneof` over its verbs, attribute maps as proto maps, and each foreign-typed response as a message carrying its JSON rendering — and generated glue maps outcomes onto gRPC statuses (UNIMPLEMENTED, PERMISSION_DENIED, INTERNAL).
 - `theseus-http` (L4) — `rust/http/`. The `Http` inbound, the binary `http-server`. Every operation over `POST /{operation}` with a JSON body, through generated handlers whose status map derives from the outcome's structure: 200 a result, 400 a body that does not parse, 404 an unknown operation, 501 an operation on its trait default, 403 a write the gate refused, 500 anything else.
-- `theseus-http-client` (L5) — `rust/http-client/`. The `Http` client adapter: the `TheseusService` contract carried over HTTP. Each call posts its request as a JSON body, and the reply's status maps back onto the contract's error classes — 501 the typed `Unimplemented`, 403 the typed `Refused` — so the classes survive the wire crossing (proven by round-trip tests over a real socket).
-- `theseus-grpc-client` (L5) — `rust/grpc-client/`. The `Grpc` client adapter over the generated stub: requests convert to the proto messages (the `Edit` oneof crosses verb by verb), statuses map back onto the typed error classes, and foreign-typed responses parse from their JSON envelope.
+- `theseus-http-client` (L4) — `rust/http-client/`. The `Http` client adapter: the `TheseusService` contract carried over HTTP. Each call posts its request as a JSON body, and the reply's status maps back onto the contract's error classes — 501 the typed `Unimplemented`, 403 the typed `Refused` — so the classes survive the wire crossing (proven by round-trip tests over a real socket).
+- `theseus-grpc-client` (L4) — `rust/grpc-client/`. The `Grpc` client adapter over the generated stub: requests convert to the proto messages (the `Edit` oneof crosses verb by verb), statuses map back onto the typed error classes, and foreign-typed responses parse from their JSON envelope.
 - `theseus-calculator` (L1) — `rust/calculator/`. A second service, `Calculator` (four arithmetic operations over `Operands`), reached from Theseus through an in-process `calculator` port.
+- `theseus-calculator-grpc-client` (L2) — `rust/calculator-grpc-client/`. The Calculator contract carried over gRPC — the client the `theseus` CLI wires onto its `calculator` port for a remote composition.
 - `theseus-calculator-cli` (L2) — `rust/calculator-cli/`. A standalone `calculator` binary driving that service through its own `Cli` inbound — the worked multi-service example (`docs/building-a-calculator.md`).
 - `theseus-calculator-grpc` (L2) — `rust/calculator-grpc/`. The `Grpc` inbound, the binary `calculator-grpc`. The build compiles a model-rendered `proto/calculator.proto` (drift-gated like every generated file) into the wire types and server trait, and generated glue maps outcomes onto gRPC statuses (UNIMPLEMENTED, PERMISSION_DENIED, INTERNAL).
 
@@ -66,7 +67,7 @@ The contract is async end to end: the generated service and port traits are asyn
 `theseus verify` runs eight checks, all derived from the same model (see `verify.rs`):
 
 1. Required dependencies — every modeled dep edge exists in the real `Cargo.toml`s (a functor from the spec graph into the extracted graph).
-2. Dependency direction — every real dep descends through the layer preorder (a layering functor).
+2. Dependency direction — every delivered dep (the `[dependencies]` table; test-only deps cross freely) descends through the layer preorder (a layering functor).
 3. Type references — every request and response label resolves to a builtin or a defined type.
 4. Port targets — every service-targeting port resolves to a defined service.
 5. Inbound services — every inbound adapter drives a defined service.

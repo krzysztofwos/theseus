@@ -34,6 +34,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("model", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
         let reply = self
             .stub
@@ -43,6 +44,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("verify", status))?;
         parsed("verify", &reply.into_inner().json)
     }
+
     async fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         let reply = self
             .stub
@@ -52,6 +54,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("generate", status))?;
         parsed("generate", &reply.into_inner().json)
     }
+
     async fn query(
         &self,
         request: theseus::QueryRequest,
@@ -68,6 +71,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("query", status))?;
         parsed("query", &reply.into_inner().json)
     }
+
     async fn patch(
         &self,
         request: theseus::PatchRequest,
@@ -83,6 +87,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("patch", status))?;
         parsed("patch", &reply.into_inner().json)
     }
+
     async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         let reply = self
             .stub
@@ -92,6 +97,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("coverage", status))?;
         parsed("coverage", &reply.into_inner().json)
     }
+
     async fn implement(
         &self,
         request: theseus::ImplementRequest,
@@ -107,6 +113,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("implement", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {
         let reply = self
             .stub
@@ -118,6 +125,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("show", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn check(&self) -> anyhow::Result<String> {
         let reply = self
             .stub
@@ -127,6 +135,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("check", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn calc(&self, request: theseus::CalcRequest) -> anyhow::Result<String> {
         let reply = self
             .stub
@@ -140,6 +149,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("calc", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         let reply = self
             .stub

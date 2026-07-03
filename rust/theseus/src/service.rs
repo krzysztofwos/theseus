@@ -150,10 +150,7 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
-        if request.edit.is_empty() {
-            anyhow::bail!("patch needs at least one edit");
-        }
-        let (outcome, proposed) = apply_edits(self.model, &request.edit);
+        let (outcome, proposed) = apply_patch(self.model, &request)?;
         if request.write
             && let Some(proposed) = proposed
         {
@@ -165,6 +162,18 @@ impl TheseusService for Ctx<'_> {
         }
         Ok(outcome)
     }
+}
+
+/// Apply a patch request to a model: the one place the at-least-one-edit rule
+/// and the edit application live, shared by the trait handler and the session.
+pub(crate) fn apply_patch(
+    model: &Model,
+    request: &PatchRequest,
+) -> anyhow::Result<(PatchOutcome, Option<Model>)> {
+    if request.edit.is_empty() {
+        anyhow::bail!("patch needs at least one edit");
+    }
+    Ok(apply_edits(model, &request.edit))
 }
 
 /// The authored impl file holding the handler for `method`: the `service.rs` of

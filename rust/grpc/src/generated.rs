@@ -23,6 +23,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn verify(
         &self,
         _request: tonic::Request<proto::Empty>,
@@ -38,6 +39,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn generate(
         &self,
         _request: tonic::Request<proto::Empty>,
@@ -53,6 +55,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn query(
         &self,
         request: tonic::Request<proto::QueryRequest>,
@@ -76,6 +79,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn patch(
         &self,
         request: tonic::Request<proto::PatchRequest>,
@@ -102,6 +106,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn coverage(
         &self,
         _request: tonic::Request<proto::Empty>,
@@ -117,6 +122,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn implement(
         &self,
         request: tonic::Request<proto::ImplementRequest>,
@@ -134,6 +140,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn show(
         &self,
         request: tonic::Request<proto::ShowRequest>,
@@ -150,6 +157,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn check(
         &self,
         _request: tonic::Request<proto::Empty>,
@@ -160,6 +168,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn calc(
         &self,
         request: tonic::Request<proto::CalcRequest>,
@@ -178,6 +187,7 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn scaffold(
         &self,
         _request: tonic::Request<proto::Empty>,

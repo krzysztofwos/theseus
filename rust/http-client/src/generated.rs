@@ -44,16 +44,19 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("model", status, &body)?;
         Ok(body)
     }
+
     async fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
         let (status, body) = self.post("verify", serde_json::json!({})).await?;
         checked("verify", status, &body)?;
         parsed("verify", &body)
     }
+
     async fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         let (status, body) = self.post("generate", serde_json::json!({})).await?;
         checked("generate", status, &body)?;
         parsed("generate", &body)
     }
+
     async fn query(
         &self,
         request: theseus::QueryRequest,
@@ -70,6 +73,7 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("query", status, &body)?;
         parsed("query", &body)
     }
+
     async fn patch(
         &self,
         request: theseus::PatchRequest,
@@ -83,11 +87,13 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("patch", status, &body)?;
         parsed("patch", &body)
     }
+
     async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         let (status, body) = self.post("coverage", serde_json::json!({})).await?;
         checked("coverage", status, &body)?;
         parsed("coverage", &body)
     }
+
     async fn implement(
         &self,
         request: theseus::ImplementRequest,
@@ -101,6 +107,7 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("implement", status, &body)?;
         Ok(body)
     }
+
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {
         let (status, body) = self
             .post("show", serde_json::json!({ "method" : request.method }))
@@ -108,11 +115,13 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("show", status, &body)?;
         Ok(body)
     }
+
     async fn check(&self) -> anyhow::Result<String> {
         let (status, body) = self.post("check", serde_json::json!({})).await?;
         checked("check", status, &body)?;
         Ok(body)
     }
+
     async fn calc(&self, request: theseus::CalcRequest) -> anyhow::Result<String> {
         let (status, body) = self
             .post(
@@ -125,6 +134,7 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("calc", status, &body)?;
         Ok(body)
     }
+
     async fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
         let (status, body) = self.post("scaffold", serde_json::json!({})).await?;
         checked("scaffold", status, &body)?;

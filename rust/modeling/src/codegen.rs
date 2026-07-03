@@ -92,11 +92,15 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
                 && matches!(inbound.transport, Transport::Agent | Transport::Mcp)
         })
     });
-    let tool_operations: Vec<&Operation> = services
-        .iter()
-        .flat_map(|service| service.operations.iter())
-        .filter(|op| op.tool.is_some())
-        .collect();
+    let tool_operations: Vec<&Operation> = agent_service
+        .map(|service| {
+            service
+                .operations
+                .iter()
+                .filter(|op| op.tool.is_some())
+                .collect()
+        })
+        .unwrap_or_default();
     let has_tool_catalog = agent_service.is_some() && !tool_operations.is_empty();
     let tool_catalog = match agent_service {
         Some(service) if !tool_operations.is_empty() => {
@@ -273,11 +277,13 @@ pub(crate) fn space_items(body: &str) -> String {
 /// item keyword.
 fn opens_item(line: &str) -> bool {
     let line = line.trim_start();
-    const KEYWORDS: [&str; 20] = [
+    const KEYWORDS: [&str; 22] = [
         "use ",
         "pub use ",
         "fn ",
         "pub fn ",
+        "async fn ",
+        "pub async fn ",
         "struct ",
         "pub struct ",
         "enum ",
@@ -529,7 +535,7 @@ fn field_parse(field: &Field, model: &Model) -> TokenStream {
         if inner == "String" {
             quote! { arg(#flag) }
         } else {
-            let inner = syn_type(inner);
+            let inner = syn_type(&rust_type(inner, model));
             quote! { matches.get_one::<#inner>(#flag).cloned() }
         }
     } else if field.ty == "String" {
@@ -663,7 +669,7 @@ fn render_tool_parsers(operations: &[&Operation], model: &Model) -> TokenStream 
             let ty = format_ident!("{}", def.name);
             let inits: Vec<TokenStream> = fields.iter().map(tool_field_init).collect();
             quote! {
-                fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
+                pub(crate) fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
                     Ok(#ty { #(#inits),* })
                 }
             }
@@ -2279,7 +2285,10 @@ mod tests {
         assert!(outcome.ok, "edit refused: {:?}", outcome.diagnostics);
         let rendered = render_module_for_crate(&patched.unwrap(), "app");
         // The patched-in operation joins the catalog beside the authored one.
-        assert!(rendered.contains("ping"), "catalog lacks ping: {rendered}");
+        assert!(
+            rendered.contains(r#""ping" =>"#),
+            "the dispatch lacks a ping arm: {rendered}"
+        );
         assert!(
             rendered.contains("Ping the service."),
             "catalog lacks the tool description: {rendered}"

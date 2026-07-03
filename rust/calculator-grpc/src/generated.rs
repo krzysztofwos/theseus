@@ -31,6 +31,7 @@ impl<
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn subtract(
         &self,
         request: tonic::Request<proto::Operands>,
@@ -48,6 +49,7 @@ impl<
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn multiply(
         &self,
         request: tonic::Request<proto::Operands>,
@@ -65,6 +67,7 @@ impl<
             Err(error) => Err(status(&error)),
         }
     }
+
     async fn divide(
         &self,
         request: tonic::Request<proto::Operands>,

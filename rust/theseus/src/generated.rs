@@ -209,8 +209,9 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }
-
-fn parse_query_request_input(input: &serde_json::Value) -> anyhow::Result<QueryRequest> {
+pub(crate) fn parse_query_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<QueryRequest> {
     Ok(QueryRequest {
         find: serde_json::from_value(
                 input.get("find").cloned().unwrap_or(serde_json::Value::Null),
@@ -226,8 +227,9 @@ fn parse_query_request_input(input: &serde_json::Value) -> anyhow::Result<QueryR
             .map_err(|error| anyhow::anyhow!("the `kind` field is invalid: {error}"))?,
     })
 }
-
-fn parse_patch_request_input(input: &serde_json::Value) -> anyhow::Result<PatchRequest> {
+pub(crate) fn parse_patch_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<PatchRequest> {
     Ok(PatchRequest {
         edit: match input.get("edit") {
             None => Default::default(),
@@ -244,8 +246,7 @@ fn parse_patch_request_input(input: &serde_json::Value) -> anyhow::Result<PatchR
             .unwrap_or_default(),
     })
 }
-
-fn parse_implement_request_input(
+pub(crate) fn parse_implement_request_input(
     input: &serde_json::Value,
 ) -> anyhow::Result<ImplementRequest> {
     Ok(ImplementRequest {
@@ -261,8 +262,9 @@ fn parse_implement_request_input(
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `body`"))?,
     })
 }
-
-fn parse_show_request_input(input: &serde_json::Value) -> anyhow::Result<ShowRequest> {
+pub(crate) fn parse_show_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<ShowRequest> {
     Ok(ShowRequest {
         method: input
             .get("method")

@@ -40,6 +40,7 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .map_err(|status| failed("add", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn subtract(
         &self,
         request: theseus_calculator::Operands,
@@ -55,6 +56,7 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .map_err(|status| failed("subtract", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn multiply(
         &self,
         request: theseus_calculator::Operands,
@@ -70,6 +72,7 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .map_err(|status| failed("multiply", status))?;
         Ok(reply.into_inner().value)
     }
+
     async fn divide(
         &self,
         request: theseus_calculator::Operands,

@@ -10,14 +10,13 @@
 //! the same way. Both the agent loop and an external host over MCP drive the
 //! same `Session`, so they see one tool surface with one set of semantics.
 
-use anyhow::Context;
 use theseus_model::generated_files;
-use theseus_modeling::{Edit, Model, apply_edits};
+use theseus_modeling::Model;
 
 use crate::{
     GatedWorkspace,
     generated::{Ctx, Toolchain, Workspace, dispatch_tool},
-    service::crate_is_scaffolded,
+    service::{apply_patch, crate_is_scaffolded},
     workspace_root,
 };
 
@@ -78,20 +77,13 @@ impl<'a> Session<'a> {
 
     /// Apply a `patch` tool call to the working model. Every accepted edit updates
     /// it, so a later call sees it. A `write` reprojects to disk through the gated
-    /// workspace port.
+    /// workspace port. The request parses through the generated conversion and
+    /// applies through the shared rule, so the session and the trait handler
+    /// read one contract.
     async fn patch(&mut self, input: &serde_json::Value) -> anyhow::Result<String> {
-        let edits: Vec<Edit> =
-            serde_json::from_value(input.get("edit").cloned().unwrap_or_default())
-                .context("patch `edit` must be a list of edits")?;
-        if edits.is_empty() {
-            anyhow::bail!("patch needs at least one edit");
-        }
-        let write = input
-            .get("write")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-        let (outcome, proposed) = apply_edits(&self.model, &edits);
+        let request = crate::generated::parse_patch_request_input(input)?;
+        let write = request.write;
+        let (outcome, proposed) = apply_patch(&self.model, &request)?;
         if let Some(proposed) = proposed {
             if write {
                 persist(&proposed, &self.gate()).await?;

@@ -27,6 +27,7 @@ use crate::{
 pub struct Session<'a> {
     model: Model,
     workspace: &'a dyn Workspace,
+    calculator: &'a dyn theseus_calculator::CalculatorService,
     toolchain: &'a dyn Toolchain,
     allow_writes: bool,
 }
@@ -36,12 +37,14 @@ impl<'a> Session<'a> {
     pub fn new(
         model: Model,
         workspace: &'a dyn Workspace,
+        calculator: &'a dyn theseus_calculator::CalculatorService,
         toolchain: &'a dyn Toolchain,
         allow_writes: bool,
     ) -> Self {
         Self {
             model,
             workspace,
+            calculator,
             toolchain,
             allow_writes,
         }
@@ -64,11 +67,10 @@ impl<'a> Session<'a> {
             return self.patch(input).await;
         }
         let workspace = self.gate();
-        let calculator = theseus_calculator::Calculator;
         let ctx = Ctx {
             model: &self.model,
             workspace: &workspace,
-            calculator: &calculator,
+            calculator: self.calculator,
             toolchain: self.toolchain,
         };
         dispatch_tool(&ctx, name, input).await

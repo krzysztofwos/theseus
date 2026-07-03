@@ -53,13 +53,13 @@ pub fn theseus_model() -> Model {
             "theseus-agent",
             "agent",
             4,
-            &["theseus", "theseus-model", "theseus-modeling"],
+            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
         )
         .crate_node(
             "theseus-mcp",
             "mcp",
             4,
-            &["theseus", "theseus-model", "theseus-modeling"],
+            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
         )
         .crate_node("theseus-http", "http", 4, &["theseus"])
         .crate_node("theseus-grpc", "grpc", 4, &["theseus", "theseus-modeling"])

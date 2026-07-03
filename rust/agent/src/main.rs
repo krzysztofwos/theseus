@@ -28,8 +28,15 @@ use theseus_model::theseus_model;
 async fn main() -> anyhow::Result<()> {
     let (mode, allow_writes) = parse_args()?;
     let workspace = FsWorkspace::at_repo_root();
+    let calculator = theseus_calculator::Calculator;
     let toolchain = CargoToolchain;
-    let mut session = Session::new(theseus_model(), &workspace, &toolchain, allow_writes);
+    let mut session = Session::new(
+        theseus_model(),
+        &workspace,
+        &calculator,
+        &toolchain,
+        allow_writes,
+    );
 
     let messages = match &mode {
         Mode::Start(message) => opening(message),

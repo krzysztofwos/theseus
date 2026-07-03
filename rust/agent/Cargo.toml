@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 
 theseus = { path = "../theseus" }
+theseus-calculator = { path = "../calculator" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }
 

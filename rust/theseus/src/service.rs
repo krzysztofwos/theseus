@@ -234,10 +234,16 @@ mod tests {
 
     #[tokio::test]
     async fn the_query_tool_finds_an_operation() {
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("query", &serde_json::json!({ "kind": "operation" }))
-            .await
-            .expect("the query tool runs");
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("query", &serde_json::json!({ "kind": "operation" }))
+        .await
+        .expect("the query tool runs");
         assert!(
             result.contains("verify"),
             "an operation handle should appear: {result}"
@@ -246,7 +252,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_session_sees_its_own_edit() {
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
+        let mut session = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
         // An in-memory edit, no write, updates the working model.
         session
             .call("patch", &serde_json::json!({ "edit": [probe_edit()] }))
@@ -269,10 +281,16 @@ mod tests {
     #[tokio::test]
     async fn a_write_is_refused_without_the_gate() {
         let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
-        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("patch", &input)
-            .await
-            .expect_err("the gate refuses the write");
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("patch", &input)
+        .await
+        .expect_err("the gate refuses the write");
         assert!(
             error.downcast_ref::<Refused>().is_some(),
             "the refusal should carry the typed gate error: {error}"
@@ -283,10 +301,16 @@ mod tests {
     async fn a_write_is_allowed_with_the_gate() {
         // The no-op workspace discards the reprojection, so this touches no files.
         let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, true)
-            .call("patch", &input)
-            .await
-            .expect("the patch tool runs");
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        )
+        .call("patch", &input)
+        .await
+        .expect("the patch tool runs");
         assert!(
             result.contains(r#""ok":true"#),
             "the patch should apply: {result}"
@@ -299,10 +323,16 @@ mod tests {
 
     #[tokio::test]
     async fn the_show_tool_returns_a_handler() {
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("show", &serde_json::json!({ "method": "verify" }))
-            .await
-            .expect("the show tool runs");
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("show", &serde_json::json!({ "method": "verify" }))
+        .await
+        .expect("the show tool runs");
         assert!(
             result.contains("fn verify"),
             "the handler source should appear: {result}"
@@ -312,10 +342,16 @@ mod tests {
     #[tokio::test]
     async fn an_implement_is_refused_without_the_gate() {
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
-        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("implement", &input)
-            .await
-            .expect_err("the gate refuses the write");
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("implement", &input)
+        .await
+        .expect_err("the gate refuses the write");
         assert!(
             error.downcast_ref::<Refused>().is_some(),
             "the refusal should carry the typed gate error: {error}"
@@ -326,10 +362,16 @@ mod tests {
     async fn an_implement_is_allowed_with_the_gate() {
         // The no-op workspace discards the spliced source, so this touches no files.
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, true)
-            .call("implement", &input)
-            .await
-            .expect("the implement tool runs");
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        )
+        .call("implement", &input)
+        .await
+        .expect("the implement tool runs");
         assert!(
             result.contains("wrote the handler for `verify`"),
             "the tool should report the write: {result}"
@@ -342,19 +384,31 @@ mod tests {
 
     #[tokio::test]
     async fn the_check_tool_reports_through_the_toolchain_port() {
-        let result = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("check", &serde_json::json!({}))
-            .await
-            .expect("the check tool runs");
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("check", &serde_json::json!({}))
+        .await
+        .expect("the check tool runs");
         assert_eq!(result, "the workspace compiles (stub)");
     }
 
     #[tokio::test]
     async fn an_unexposed_operation_is_not_a_tool() {
-        let error = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false)
-            .call("generate", &serde_json::json!({}))
-            .await
-            .expect_err("an unexposed operation has no dispatch arm");
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("generate", &serde_json::json!({}))
+        .await
+        .expect_err("an unexposed operation has no dispatch arm");
         assert!(
             error.to_string().contains("unknown tool"),
             "the dispatch should refuse it: {error}"
@@ -380,7 +434,13 @@ mod tests {
             );
             // Every exposed tool has a dispatch arm: a bare call never falls
             // through to the unknown-tool error, though it may fail on missing input.
-            let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
+            let mut session = Session::new(
+                theseus_model(),
+                &NoopWorkspace,
+                &theseus_calculator::Calculator,
+                &StubToolchain,
+                false,
+            );
             if let Err(error) = session.call(name, &serde_json::json!({})).await {
                 assert!(
                     !error.to_string().contains("unknown tool"),

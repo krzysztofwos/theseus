@@ -329,7 +329,13 @@ mod tests {
             calls(vec![call("1", "query", json!({ "kind": "operation" }))]),
             Reply::answer("Theseus exposes a verify operation."),
         ]);
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
+        let mut session = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
         let outcome = run_agent(&llm, &mut session, opening("what can you do?"))
             .await
             .expect("the loop answers");
@@ -342,7 +348,13 @@ mod tests {
     #[tokio::test]
     async fn a_solo_restart_ends_the_run_and_the_resumed_transcript_continues() {
         let llm = OfflineLlm::new([calls(vec![call("r1", RESTART_TOOL, json!({}))])]);
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
+        let mut session = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
         let outcome = run_agent(&llm, &mut session, opening("restart yourself"))
             .await
             .expect("the loop runs");
@@ -378,7 +390,13 @@ mod tests {
             ]),
             Reply::answer("done"),
         ]);
-        let mut session = Session::new(theseus_model(), &NoopWorkspace, &StubToolchain, false);
+        let mut session = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
         let outcome = run_agent(&llm, &mut session, opening("query then restart"))
             .await
             .expect("the loop runs");

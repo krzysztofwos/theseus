@@ -45,6 +45,55 @@ impl FsWorkspace {
 
 #[async_trait::async_trait]
 impl Workspace for FsWorkspace {
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("git")
+            .args(["restore", "--source", request, "--worktree", "--", "."])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running git restore")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("{}", stderr.trim()));
+        }
+        Ok(format!("restored the working tree to {request}"))
+    }
+
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("git")
+            .args(["stash", "create", request])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running git stash create")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("{}", stderr.trim()));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stash_id = stdout.trim();
+        if stash_id.is_empty() {
+            // A clean tree snapshots HEAD.
+            let head = tokio::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(workspace_root())
+                .kill_on_drop(true)
+                .output()
+                .await
+                .context("running git rev-parse HEAD")?;
+            if !head.status.success() {
+                let stderr = String::from_utf8_lossy(&head.stderr);
+                return Err(anyhow::anyhow!("{}", stderr.trim()));
+            }
+            let head_id = String::from_utf8_lossy(&head.stdout);
+            Ok(head_id.trim().to_string())
+        } else {
+            Ok(stash_id.to_string())
+        }
+    }
+
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         let path = self.root.join(&file.path);
         // Scaffolding a new crate writes into a directory that does not exist yet.
@@ -68,6 +117,17 @@ pub struct GatedWorkspace<W> {
 
 #[async_trait::async_trait]
 impl<W: Workspace> Workspace for GatedWorkspace<W> {
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.workspace.restore(request).await
+    }
+
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        self.workspace.snapshot(request).await
+    }
+
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         if !self.allow_writes {
             return Err(Refused.into());
@@ -82,6 +142,14 @@ impl<W: Workspace> Workspace for GatedWorkspace<W> {
 impl<T: Workspace + ?Sized> Workspace for &T {
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         (**self).write_file(file).await
+    }
+
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        (**self).snapshot(request).await
+    }
+
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        (**self).restore(request).await
     }
 }
 

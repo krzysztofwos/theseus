@@ -95,6 +95,20 @@ message CalcResult {
   string value = 1;
 }
 
+message SnapshotRequest {
+  // A short label naming the snapshot.
+  string label = 1;
+}
+
+message String {
+  string value = 1;
+}
+
+message RollbackRequest {
+  // The snapshot id to restore, as returned by `snapshot`.
+  string reference = 1;
+}
+
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
@@ -156,4 +170,8 @@ service Theseus {
   rpc Scaffold (Empty) returns (GeneratedFiles);
   // Run the workspace tests and report the outcome.
   rpc Test (Empty) returns (CheckReport);
+  // Checkpoint the working tree and return the snapshot id.
+  rpc Snapshot (SnapshotRequest) returns (String);
+  // Restore the working tree to a snapshot.
+  rpc Rollback (RollbackRequest) returns (String);
 }

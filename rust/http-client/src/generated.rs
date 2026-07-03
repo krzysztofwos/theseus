@@ -155,6 +155,28 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("test", status, &body)?;
         Ok(body)
     }
+
+    async fn snapshot(
+        &self,
+        request: theseus::SnapshotRequest,
+    ) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("snapshot", serde_json::json!({ "label" : request.label }))
+            .await?;
+        checked("snapshot", status, &body)?;
+        Ok(body)
+    }
+
+    async fn rollback(
+        &self,
+        request: theseus::RollbackRequest,
+    ) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("rollback", serde_json::json!({ "reference" : request.reference }))
+            .await?;
+        checked("rollback", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

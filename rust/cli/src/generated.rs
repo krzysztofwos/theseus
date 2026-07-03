@@ -173,6 +173,28 @@ pub fn command() -> Command {
         .subcommand(
             Command::new("test").about("Run the workspace tests and report the outcome."),
         )
+        .subcommand(
+            Command::new("snapshot")
+                .about("Checkpoint the working tree and return the snapshot id.")
+                .arg(
+                    Arg::new("label")
+                        .long("label")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("A short label naming the snapshot."),
+                ),
+        )
+        .subcommand(
+            Command::new("rollback")
+                .about("Restore the working tree to a snapshot.")
+                .arg(
+                    Arg::new("reference")
+                        .long("reference")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The snapshot id to restore, as returned by `snapshot`."),
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -229,6 +251,24 @@ fn parse_calc_request(matches: &ArgMatches) -> anyhow::Result<theseus::CalcReque
     })
 }
 
+fn parse_snapshot_request(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::SnapshotRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::SnapshotRequest {
+        label: arg("label").unwrap_or_default(),
+    })
+}
+
+fn parse_rollback_request(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::RollbackRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::RollbackRequest {
+        reference: arg("reference").unwrap_or_default(),
+    })
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -242,6 +282,8 @@ pub enum Invocation {
     Calc(theseus::CalcRequest),
     Scaffold,
     Test,
+    Snapshot(theseus::SnapshotRequest),
+    Rollback(theseus::RollbackRequest),
 }
 
 impl Invocation {
@@ -262,6 +304,12 @@ impl Invocation {
             Some(("calc", sub)) => Ok(Invocation::Calc(parse_calc_request(sub)?)),
             Some(("scaffold", _)) => Ok(Invocation::Scaffold),
             Some(("test", _)) => Ok(Invocation::Test),
+            Some(("snapshot", sub)) => {
+                Ok(Invocation::Snapshot(parse_snapshot_request(sub)?))
+            }
+            Some(("rollback", sub)) => {
+                Ok(Invocation::Rollback(parse_rollback_request(sub)?))
+            }
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -305,6 +353,12 @@ pub async fn dispatch(
             println!("{}", serde_json::to_string_pretty(& service.scaffold(). await ?) ?)
         }
         Invocation::Test => println!("{}", service.test(). await ?),
+        Invocation::Snapshot(request) => {
+            println!("{}", service.snapshot(request). await ?)
+        }
+        Invocation::Rollback(request) => {
+            println!("{}", service.rollback(request). await ?)
+        }
     }
     Ok(())
 }

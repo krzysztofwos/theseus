@@ -112,6 +112,30 @@ fn parse_calc_request_http(
     })
 }
 
+fn parse_snapshot_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::SnapshotRequest> {
+    Ok(theseus::SnapshotRequest {
+        label: input
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `label`"))?,
+    })
+}
+
+fn parse_rollback_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::RollbackRequest> {
+    Ok(theseus::RollbackRequest {
+        reference: input
+            .get("reference")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `reference`"))?,
+    })
+}
+
 /// Handle one operation call: parse the request from the call's JSON body,
 /// run the operation, and render the reply. The status derives from the
 /// outcome's structure: 200 a result, 400 a request that does not parse,
@@ -160,6 +184,18 @@ pub async fn handle(
         }
         "scaffold" => reply_json(service.scaffold().await),
         "test" => reply_text(service.test().await),
+        "snapshot" => {
+            match parse_snapshot_request_http(input) {
+                Ok(request) => reply_text(service.snapshot(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "rollback" => {
+            match parse_rollback_request_http(input) {
+                Ok(request) => reply_text(service.rollback(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
         other => {
             HttpReply {
                 status: 404,

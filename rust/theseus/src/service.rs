@@ -26,6 +26,14 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn rollback(&self, request: crate::generated::RollbackRequest) -> anyhow::Result<String> {
+        self.workspace.restore(&request.reference).await
+    }
+
+    async fn snapshot(&self, request: crate::generated::SnapshotRequest) -> anyhow::Result<String> {
+        self.workspace.snapshot(&request.label).await
+    }
+
     async fn test(&self) -> anyhow::Result<String> {
         self.toolchain.test().await
     }

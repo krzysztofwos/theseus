@@ -173,6 +173,36 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("test", status))?;
         Ok(reply.into_inner().value)
     }
+
+    async fn snapshot(
+        &self,
+        request: theseus::SnapshotRequest,
+    ) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .snapshot(proto::SnapshotRequest {
+                label: request.label,
+            })
+            .await
+            .map_err(|status| failed("snapshot", status))?;
+        Ok(reply.into_inner().value)
+    }
+
+    async fn rollback(
+        &self,
+        request: theseus::RollbackRequest,
+    ) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .rollback(proto::RollbackRequest {
+                reference: request.reference,
+            })
+            .await
+            .map_err(|status| failed("rollback", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

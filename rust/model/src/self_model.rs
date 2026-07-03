@@ -226,6 +226,20 @@ pub fn theseus_model() -> Model {
                 ("b", "f64", "Right operand."),
             ],
         )
+        .struct_type(
+            "SnapshotRequest",
+            &[("label", "String", "A short label naming the snapshot.")],
+        )
+        .struct_type(
+            "RollbackRequest",
+            &[
+                (
+                    "reference",
+                    "String",
+                    "The snapshot id to restore, as returned by `snapshot`.",
+                ),
+            ],
+        )
         .service(
             Service::new("Theseus")
                 .crate_name("theseus")
@@ -329,13 +343,48 @@ pub fn theseus_model() -> Model {
                 .tool(
                     "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
                 )
+                .operation(
+                    "snapshot",
+                    "Checkpoint the working tree and return the snapshot id.",
+                    "SnapshotRequest",
+                    "String",
+                )
+                .uses(&["workspace"])
+                .tool(
+                    "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback.",
+                )
+                .operation(
+                    "rollback",
+                    "Restore the working tree to a snapshot.",
+                    "RollbackRequest",
+                    "String",
+                )
+                .uses(&["workspace"])
+                .tool(
+                    "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
+                )
                 .port(
-                    Port::new("workspace", "Writes generated files into the workspace.")
+                    Port::new(
+                            "workspace",
+                            "Writes generated files and checkpoints the working tree.",
+                        )
                         .method(
                             "write_file",
                             "Write one generated file to disk.",
                             "GeneratedFile",
                             "Empty",
+                        )
+                        .method(
+                            "snapshot",
+                            "Checkpoint the working tree and return the snapshot id.",
+                            "String",
+                            "String",
+                        )
+                        .method(
+                            "restore",
+                            "Restore the working tree to a snapshot.",
+                            "String",
+                            "String",
                         ),
                 )
                 .port(

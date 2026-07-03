@@ -218,6 +218,40 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn snapshot(
+        &self,
+        request: tonic::Request<proto::SnapshotRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .snapshot(theseus::SnapshotRequest {
+                label: request.label,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
+
+    async fn rollback(
+        &self,
+        request: tonic::Request<proto::RollbackRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .rollback(theseus::RollbackRequest {
+                reference: request.reference,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

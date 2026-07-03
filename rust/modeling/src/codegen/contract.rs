@@ -37,6 +37,107 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
     }
 }
 
+/// Render the owned composition root: the service over one owned adapter per
+/// port, driven through a fresh borrowed `Ctx` per call. A long-lived inbound
+/// holds it where a borrowed root cannot live, and its delegations regenerate
+/// with the contract, so a new operation reaches every owned composition on
+/// the next render.
+pub(super) fn render_standalone(
+    services: &[&Service],
+    ports: &[&Port],
+    model: &Model,
+    current_crate: &str,
+) -> TokenStream {
+    let params: Vec<proc_macro2::Ident> = ports
+        .iter()
+        .map(|port| format_ident!("{}Adapter", pascal_case(&port.name)))
+        .collect();
+    let bounds: Vec<TokenStream> = ports
+        .iter()
+        .zip(&params)
+        .map(|(port, param)| {
+            let bound = port_trait_path(port, model, current_crate);
+            quote! { #param: #bound }
+        })
+        .collect();
+    let fields: Vec<TokenStream> = ports
+        .iter()
+        .zip(&params)
+        .map(|(port, param)| {
+            let field = format_ident!("{}", snake_case(&port.name));
+            quote! { pub #field: #param }
+        })
+        .collect();
+    let ctx_fields: Vec<TokenStream> = ports
+        .iter()
+        .map(|port| {
+            let field = format_ident!("{}", snake_case(&port.name));
+            quote! { #field: &self.#field }
+        })
+        .collect();
+
+    let impls: Vec<TokenStream> = services
+        .iter()
+        .map(|service| {
+            let trait_name = format_ident!("{}Service", pascal_case(&service.name));
+            let methods: Vec<TokenStream> = service
+                .operations
+                .iter()
+                .map(|op| {
+                    let method = format_ident!("{}", op.name);
+                    let response = response_type(&op.response, model);
+                    match request_type(op, model) {
+                        Some(def) => {
+                            let request = format_ident!("{}", def.name);
+                            quote! {
+                                async fn #method(&self, request: #request) -> anyhow::Result<#response> {
+                                    self.ctx().#method(request).await
+                                }
+                            }
+                        }
+                        None => quote! {
+                            async fn #method(&self) -> anyhow::Result<#response> {
+                                self.ctx().#method().await
+                            }
+                        },
+                    }
+                })
+                .collect();
+            quote! {
+                #[async_trait::async_trait]
+                impl<#(#bounds),*> #trait_name for Standalone<#(#params),*> {
+                    #(#methods)*
+                }
+            }
+        })
+        .collect();
+
+    let doc_a = doc("An owned composition root: the service over one owned adapter per port,");
+    let doc_b = doc("driven through a fresh borrowed `Ctx` per call. A long-lived inbound");
+    let doc_c = doc("holds it where a borrowed root cannot live.");
+    quote! {
+        #doc_a
+        #doc_b
+        #doc_c
+        pub struct Standalone<#(#bounds),*> {
+            pub model: theseus_modeling::Model,
+            #(#fields,)*
+        }
+
+        impl<#(#bounds),*> Standalone<#(#params),*> {
+            #[doc = " The borrowed composition root one call runs over."]
+            fn ctx(&self) -> Ctx<'_> {
+                Ctx {
+                    model: &self.model,
+                    #(#ctx_fields),*
+                }
+            }
+        }
+
+        #(#impls)*
+    }
+}
+
 /// Render the composition root: the model plus one field per wired port.
 pub(super) fn render_composition_root(
     ports: &[&Port],
@@ -283,6 +384,32 @@ mod tests {
         assert!(plain.contains("pub a: f64"));
         assert!(!plain.contains("parse_operands"));
         assert!(!plain.contains("use clap"));
+    }
+
+    #[test]
+    fn a_crate_with_ports_renders_an_owned_root_delegating_every_operation() {
+        let model = Model::new("App")
+            .struct_type("Payload", &[("body", "String", "The body.")])
+            .service(
+                Service::new("App")
+                    .crate_name("app")
+                    .operation("run", "Run.", "Payload", "String")
+                    .operation("status", "Status.", "Empty", "String")
+                    .port(
+                        Port::new("sink", "Receives a payload.")
+                            .method("send", "Send it.", "Payload", "Empty"),
+                    ),
+            );
+        let rendered = render_module_for_crate(&model, "app");
+        // One generic parameter per port, bounded by the port trait, and one
+        // delegation per operation through a fresh borrowed root.
+        assert!(rendered.contains("pub struct Standalone<SinkAdapter: Sink>"));
+        assert!(rendered.contains("fn ctx(&self) -> Ctx<'_>"));
+        assert!(
+            rendered.contains("impl<SinkAdapter: Sink> AppService for Standalone<SinkAdapter>")
+        );
+        assert!(rendered.contains("self.ctx().run(request).await"));
+        assert!(rendered.contains("self.ctx().status().await"));
     }
 
     #[test]

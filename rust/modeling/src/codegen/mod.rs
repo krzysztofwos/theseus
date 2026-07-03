@@ -90,6 +90,11 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
     } else {
         render_composition_root(&ports, model, crate_name)
     };
+    let standalone = if ports.is_empty() {
+        quote! {}
+    } else {
+        contract::render_standalone(&services, &ports, model, crate_name)
+    };
 
     let service_traits: Vec<TokenStream> = services
         .iter()
@@ -198,6 +203,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         #requests
         #unimplemented
         #(#service_traits)*
+        #standalone
         #tool_catalog
         #(#inbound_modules)*
         #(#client_modules)*
@@ -249,7 +255,7 @@ fn module_doc_summary(services: &[&Service], ports: &[&Port], surfaces: &Surface
         concerns.push("the request types and service contract");
     }
     if !ports.is_empty() {
-        concerns.push("the outbound port traits and composition root");
+        concerns.push("the outbound port traits and composition roots");
     }
     if surfaces.tool_catalog {
         concerns.push("the agent tool catalog and dispatch");

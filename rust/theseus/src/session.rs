@@ -94,7 +94,7 @@ impl<'a> Session<'a> {
     }
 
     /// The workspace port carrying this session's write permission.
-    fn gate(&self) -> GatedWorkspace<'a> {
+    fn gate(&self) -> GatedWorkspace<&'a dyn Workspace> {
         GatedWorkspace {
             workspace: self.workspace,
             allow_writes: self.allow_writes,

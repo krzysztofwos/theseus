@@ -56,8 +56,9 @@ The generated file holds the contract trait and the plain request struct, with n
 ```sh
 sed -n '1,12p' rust/calculator/src/generated.rs
 #   pub struct Operands { pub a: f64, pub b: f64 }
-#   pub trait CalculatorService {
-#       fn add(&self, _request: Operands) -> anyhow::Result<String> { ... }
+#   #[async_trait::async_trait]
+#   pub trait CalculatorService: Send + Sync {
+#       async fn add(&self, _request: Operands) -> anyhow::Result<String> { ... }
 #       ...
 #   }
 ```

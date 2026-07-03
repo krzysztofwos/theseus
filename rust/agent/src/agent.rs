@@ -250,13 +250,13 @@ pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Resu
 /// A model that replays a fixed script of replies, ignoring the conversation, so
 /// the loop runs with no network. The offline stub for the binary and tests.
 pub struct OfflineLlm {
-    replies: std::cell::RefCell<std::collections::VecDeque<Reply>>,
+    replies: std::sync::Mutex<std::collections::VecDeque<Reply>>,
 }
 
 impl OfflineLlm {
     pub fn new(replies: impl IntoIterator<Item = Reply>) -> Self {
         Self {
-            replies: std::cell::RefCell::new(replies.into_iter().collect()),
+            replies: std::sync::Mutex::new(replies.into_iter().collect()),
         }
     }
 }
@@ -270,7 +270,8 @@ impl Llm for OfflineLlm {
     ) -> anyhow::Result<Reply> {
         use anyhow::Context;
         self.replies
-            .borrow_mut()
+            .lock()
+            .expect("the offline script lock is not poisoned")
             .pop_front()
             .context("the offline model ran out of replies")
     }

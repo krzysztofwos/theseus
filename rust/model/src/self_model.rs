@@ -22,13 +22,13 @@ pub fn theseus_model() -> Model {
             "theseus-calculator-grpc",
             "calculator-grpc",
             2,
-            &["theseus-calculator", "theseus-modeling"],
+            &["theseus-calculator"],
         )
         .crate_node(
             "theseus-calculator-grpc-client",
             "calculator-grpc-client",
             2,
-            &["theseus-calculator", "theseus-modeling"],
+            &["theseus-calculator"],
         )
         .crate_node(
             "theseus",
@@ -61,18 +61,8 @@ pub fn theseus_model() -> Model {
             4,
             &["theseus", "theseus-model", "theseus-modeling"],
         )
-        .crate_node(
-            "theseus-http",
-            "http",
-            4,
-            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
-        )
-        .crate_node(
-            "theseus-grpc",
-            "grpc",
-            4,
-            &["theseus", "theseus-model", "theseus-modeling", "theseus-calculator"],
-        )
+        .crate_node("theseus-http", "http", 4, &["theseus"])
+        .crate_node("theseus-grpc", "grpc", 4, &["theseus", "theseus-modeling"])
         .crate_node(
             "theseus-http-client",
             "http-client",

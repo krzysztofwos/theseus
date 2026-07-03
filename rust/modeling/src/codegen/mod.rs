@@ -372,7 +372,11 @@ fn opens_item(line: &str) -> bool {
 }
 
 /// A `#[doc = " ..."]` attribute. `prettyplease` renders it as a `///` line.
+/// Empty text renders nothing, so an undocumented field carries no doc line.
 fn doc(text: &str) -> TokenStream {
+    if text.is_empty() {
+        return quote! {};
+    }
     let line = format!(" {text}");
     quote! { #[doc = #line] }
 }

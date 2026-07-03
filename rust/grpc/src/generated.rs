@@ -133,6 +133,8 @@ for GrpcTheseus<S> {
             .implement(theseus::ImplementRequest {
                 method: request.method,
                 body: request.body,
+                port: request.port,
+                adapter: request.adapter,
             })
             .await;
         match outcome {
@@ -150,6 +152,8 @@ for GrpcTheseus<S> {
             .0
             .show(theseus::ShowRequest {
                 method: request.method,
+                port: request.port,
+                adapter: request.adapter,
             })
             .await;
         match outcome {

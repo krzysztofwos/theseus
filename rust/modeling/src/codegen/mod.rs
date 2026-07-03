@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     label::{base_label, map_value, optional_inner, vec_inner},
     model::{
-        Client, Field, Inbound, Model, Operation, Port, Service, Transport, TypeDef, TypeShape,
-        Variant,
+        Client, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
+        TypeShape, Variant,
     },
 };
 
@@ -499,6 +499,42 @@ fn response_type(label: &str, model: &Model) -> TokenStream {
     quote! { #ty }
 }
 
+/// Render a port method's adapter signature, for splicing an authored body.
+/// The parameter and response resolve to absolute types through
+/// `request_path`, so the spliced method needs no imports.
+pub(crate) fn adapter_signature(method: &Method, model: &Model, request_path: &str) -> String {
+    let param = if method.request == "Empty" {
+        String::new()
+    } else if method.request == "String" {
+        ", request: &str".to_string()
+    } else {
+        format!(
+            ", request: &{}",
+            absolute_type(&method.request, model, request_path)
+        )
+    };
+    format!(
+        "async fn {}(&self{param}) -> anyhow::Result<{}>",
+        method.name,
+        absolute_type(&method.response, model, request_path)
+    )
+}
+
+/// A label's Rust type with an absolute path: a struct or enum the model owns
+/// is prefixed with `request_path`, and everything else already resolves to a
+/// full path or a builtin.
+fn absolute_type(label: &str, model: &Model, request_path: &str) -> String {
+    let resolved = rust_type(label, model);
+    let local = model
+        .type_def(label)
+        .is_some_and(|def| matches!(def.shape, TypeShape::Struct(_) | TypeShape::Enum { .. }));
+    if local {
+        format!("{request_path}{resolved}")
+    } else {
+        resolved
+    }
+}
+
 /// Render an operation's handler signature, for splicing an authored body. The
 /// request is named through `request_path` and the response resolves to an
 /// absolute type, so the spliced method needs no imports.
@@ -522,10 +558,10 @@ fn request_param(label: &str, model: &Model) -> TokenStream {
     }
     let ty = rust_type(label, model);
     if ty == "String" {
-        quote! { , request: &str }
+        quote! { , _request: &str }
     } else {
         let ty = syn_type(&ty);
-        quote! { , request: &#ty }
+        quote! { , _request: &#ty }
     }
 }
 

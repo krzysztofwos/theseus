@@ -7,15 +7,19 @@ pub trait Workspace: Send + Sync {
     /// Write one generated file to disk.
     async fn write_file(
         &self,
-        request: &theseus_modeling::GeneratedFile,
-    ) -> anyhow::Result<()>;
+        _request: &theseus_modeling::GeneratedFile,
+    ) -> anyhow::Result<()> {
+        Err(Unimplemented("workspace.write_file").into())
+    }
 }
 
 /// Compile-checks the workspace and reports the outcome.
 #[async_trait::async_trait]
 pub trait Toolchain: Send + Sync {
     /// Compile-check the workspace and report the outcome.
-    async fn check(&self) -> anyhow::Result<String>;
+    async fn check(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("toolchain.check").into())
+    }
 }
 
 /// Composition root: the model plus the wired outbound ports.
@@ -49,17 +53,25 @@ pub struct PatchRequest {
 /// The `ImplementRequest` request.
 #[derive(Debug, Clone)]
 pub struct ImplementRequest {
-    /// Name of the operation to implement.
+    /// Name of the operation — or, with `port`, the port method — to implement.
     pub method: String,
     /// The handler body to splice into the impl.
     pub body: String,
+    /// Name of the port whose adapter method to implement.
+    pub port: Option<String>,
+    /// The adapter type to target when the file holds more than one.
+    pub adapter: Option<String>,
 }
 
 /// The `ShowRequest` request.
 #[derive(Debug, Clone)]
 pub struct ShowRequest {
-    /// Name of the operation whose handler to show.
+    /// Name of the operation — or, with `port`, the port method — to show.
     pub method: String,
+    /// Name of the port whose adapter method to show.
+    pub port: Option<String>,
+    /// The adapter type to target when the file holds more than one.
+    pub adapter: Option<String>,
 }
 
 /// The `CalcRequest` request.
@@ -139,7 +151,7 @@ pub trait TheseusService: Send + Sync {
         Err(Unimplemented("coverage").into())
     }
 
-    /// Splice an authored handler for an operation and compile-check it.
+    /// Splice an authored handler or adapter method and compile-check it.
     async fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
         Err(Unimplemented("implement").into())
     }
@@ -197,14 +209,16 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "description" : "Report which operations have no authored handler.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "implement", "description" :
-        "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the handler in place. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+        "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
-        "string" }, "body" : { "type" : "string" } }, "required" : ["method", "body"] }
-        }), serde_json::json!({ "name" : "show", "description" :
-        "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
+        "string" }, "body" : { "type" : "string" }, "port" : { "type" : "string" },
+        "adapter" : { "type" : "string" } }, "required" : ["method", "body"] } }),
+        serde_json::json!({ "name" : "show", "description" :
+        "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). With `port`, `method` names one of that port's methods and the adapter method shows instead — `adapter` picks the implementing type when the file holds more than one. For a method with no authored source yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
-        "string" } }, "required" : ["method"] } }), serde_json::json!({ "name" : "check",
-        "description" :
+        "string" }, "port" : { "type" : "string" }, "adapter" : { "type" : "string" } },
+        "required" : ["method"] } }), serde_json::json!({ "name" : "check", "description"
+        :
         "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
         "input_schema" : { "type" : "object", "properties" : {} } })
     ]
@@ -260,6 +274,14 @@ pub(crate) fn parse_implement_request_input(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `body`"))?,
+        port: serde_json::from_value(
+                input.get("port").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `port` field is invalid: {error}"))?,
+        adapter: serde_json::from_value(
+                input.get("adapter").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `adapter` field is invalid: {error}"))?,
     })
 }
 pub(crate) fn parse_show_request_input(
@@ -271,6 +293,14 @@ pub(crate) fn parse_show_request_input(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `method`"))?,
+        port: serde_json::from_value(
+                input.get("port").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `port` field is invalid: {error}"))?,
+        adapter: serde_json::from_value(
+                input.get("adapter").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `adapter` field is invalid: {error}"))?,
     })
 }
 

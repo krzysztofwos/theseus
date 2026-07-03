@@ -71,14 +71,16 @@ pub fn command() -> Command {
         .subcommand(
             Command::new("implement")
                 .about(
-                    "Splice an authored handler for an operation and compile-check it.",
+                    "Splice an authored handler or adapter method and compile-check it.",
                 )
                 .arg(
                     Arg::new("method")
                         .long("method")
                         .action(ArgAction::Set)
                         .required(true)
-                        .help("Name of the operation to implement."),
+                        .help(
+                            "Name of the operation — or, with `port`, the port method — to implement.",
+                        ),
                 )
                 .arg(
                     Arg::new("body")
@@ -86,6 +88,20 @@ pub fn command() -> Command {
                         .action(ArgAction::Set)
                         .required(true)
                         .help("The handler body to splice into the impl."),
+                )
+                .arg(
+                    Arg::new("port")
+                        .long("port")
+                        .action(ArgAction::Set)
+                        .help("Name of the port whose adapter method to implement."),
+                )
+                .arg(
+                    Arg::new("adapter")
+                        .long("adapter")
+                        .action(ArgAction::Set)
+                        .help(
+                            "The adapter type to target when the file holds more than one.",
+                        ),
                 ),
         )
         .subcommand(
@@ -96,7 +112,23 @@ pub fn command() -> Command {
                         .long("method")
                         .action(ArgAction::Set)
                         .required(true)
-                        .help("Name of the operation whose handler to show."),
+                        .help(
+                            "Name of the operation — or, with `port`, the port method — to show.",
+                        ),
+                )
+                .arg(
+                    Arg::new("port")
+                        .long("port")
+                        .action(ArgAction::Set)
+                        .help("Name of the port whose adapter method to show."),
+                )
+                .arg(
+                    Arg::new("adapter")
+                        .long("adapter")
+                        .action(ArgAction::Set)
+                        .help(
+                            "The adapter type to target when the file holds more than one.",
+                        ),
                 ),
         )
         .subcommand(
@@ -171,6 +203,8 @@ fn parse_implement_request(
     Ok(theseus::ImplementRequest {
         method: arg("method").unwrap_or_default(),
         body: arg("body").unwrap_or_default(),
+        port: arg("port"),
+        adapter: arg("adapter"),
     })
 }
 
@@ -178,6 +212,8 @@ fn parse_show_request(matches: &ArgMatches) -> anyhow::Result<theseus::ShowReque
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::ShowRequest {
         method: arg("method").unwrap_or_default(),
+        port: arg("port"),
+        adapter: arg("adapter"),
     })
 }
 

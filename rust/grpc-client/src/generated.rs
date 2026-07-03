@@ -108,6 +108,8 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .implement(proto::ImplementRequest {
                 method: request.method,
                 body: request.body,
+                port: request.port,
+                adapter: request.adapter,
             })
             .await
             .map_err(|status| failed("implement", status))?;
@@ -120,6 +122,8 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .clone()
             .show(proto::ShowRequest {
                 method: request.method,
+                port: request.port,
+                adapter: request.adapter,
             })
             .await
             .map_err(|status| failed("show", status))?;

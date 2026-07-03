@@ -16,9 +16,15 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
             let method_name = format_ident!("{}", method.name);
             let param = request_param(&method.request, model);
             let response = response_type(&method.response, model);
+            // Each method defaults to the typed unimplemented error, the gate
+            // the service trait holds: an adapter authors what it implements,
+            // and a method it leaves on the default reports at the boundary.
+            let name = format!("{}.{}", port.name, method.name);
             quote! {
                 #method_doc
-                async fn #method_name(&self #param) -> anyhow::Result<#response>;
+                async fn #method_name(&self #param) -> anyhow::Result<#response> {
+                    Err(Unimplemented(#name).into())
+                }
             }
         })
         .collect();
@@ -293,7 +299,7 @@ mod tests {
         // The struct renders locally, and the port trait names it directly rather
         // than reaching for a twin in the engine crate.
         assert!(rendered.contains("pub struct Payload"));
-        assert!(rendered.contains("async fn send(&self, request: &Payload)"));
+        assert!(rendered.contains("async fn send(&self, _request: &Payload)"));
         assert!(!rendered.contains("theseus_modeling::Payload"));
     }
 }

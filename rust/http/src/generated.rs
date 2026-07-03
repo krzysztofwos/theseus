@@ -61,6 +61,14 @@ fn parse_implement_request_http(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `body`"))?,
+        port: serde_json::from_value(
+                input.get("port").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `port` field is invalid: {error}"))?,
+        adapter: serde_json::from_value(
+                input.get("adapter").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `adapter` field is invalid: {error}"))?,
     })
 }
 
@@ -73,6 +81,14 @@ fn parse_show_request_http(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `method`"))?,
+        port: serde_json::from_value(
+                input.get("port").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `port` field is invalid: {error}"))?,
+        adapter: serde_json::from_value(
+                input.get("adapter").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `adapter` field is invalid: {error}"))?,
     })
 }
 

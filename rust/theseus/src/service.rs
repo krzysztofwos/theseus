@@ -8,7 +8,9 @@
 //! inbound binaries (`theseus-cli`, and the agent and MCP adapters to come).
 
 use anyhow::Context;
-use theseus_model::{authored_impl_path, authored_impls, crate_is_scaffolded, generated_files};
+use theseus_model::{
+    adapter_impl_path, authored_impl_path, authored_impls, crate_is_scaffolded, generated_files,
+};
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
     coverage, describe, handler_source, query, scaffold_files, verify,
@@ -97,11 +99,28 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        let path = handler_path(self.model, &request.method)?;
-        let source = tokio::fs::read_to_string(workspace_root().join(&path))
-            .await
-            .with_context(|| format!("reading {path}"))?;
-        Ok(handler_source(self.model, &source, &request.method)?)
+        match &request.port {
+            Some(port) => {
+                let path = adapter_path(self.model, port)?;
+                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                    .await
+                    .with_context(|| format!("reading {path}"))?;
+                Ok(theseus_modeling::adapter_source(
+                    self.model,
+                    &source,
+                    port,
+                    &request.method,
+                    request.adapter.as_deref(),
+                )?)
+            }
+            None => {
+                let path = handler_path(self.model, &request.method)?;
+                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                    .await
+                    .with_context(|| format!("reading {path}"))?;
+                Ok(handler_source(self.model, &source, &request.method)?)
+            }
+        }
     }
 
     async fn check(&self) -> anyhow::Result<String> {
@@ -125,17 +144,43 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
-        let path = handler_path(self.model, &request.method)?;
-        let source = tokio::fs::read_to_string(workspace_root().join(&path))
-            .await
-            .with_context(|| format!("reading {path}"))?;
-        let spliced = theseus_modeling::implement(
-            self.model,
-            &source,
-            &request.method,
-            &request.body,
-            "crate::generated::",
-        )?;
+        let (wrote, path, spliced) = match &request.port {
+            Some(port) => {
+                let path = adapter_path(self.model, port)?;
+                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                    .await
+                    .with_context(|| format!("reading {path}"))?;
+                let spliced = theseus_modeling::implement_adapter(
+                    self.model,
+                    &source,
+                    port,
+                    &request.method,
+                    request.adapter.as_deref(),
+                    &request.body,
+                    "crate::generated::",
+                )?;
+                let wrote = format!("the adapter method `{port}.{}`", request.method);
+                (wrote, path, spliced)
+            }
+            None => {
+                let path = handler_path(self.model, &request.method)?;
+                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                    .await
+                    .with_context(|| format!("reading {path}"))?;
+                let spliced = theseus_modeling::implement(
+                    self.model,
+                    &source,
+                    &request.method,
+                    &request.body,
+                    "crate::generated::",
+                )?;
+                (
+                    format!("the handler for `{}`", request.method),
+                    path,
+                    spliced,
+                )
+            }
+        };
         self.workspace
             .write_file(&GeneratedFile {
                 path: path.clone(),
@@ -144,8 +189,7 @@ impl TheseusService for Ctx<'_> {
             .await?;
         let outcome = self.toolchain.check().await?;
         Ok(format!(
-            "wrote the handler for `{}` into {path}. Rebuild to load it.\n{outcome}",
-            request.method
+            "wrote {wrote} into {path}. Rebuild to load it.\n{outcome}"
         ))
     }
 
@@ -174,6 +218,15 @@ pub(crate) fn apply_patch(
         anyhow::bail!("patch needs at least one edit");
     }
     Ok(apply_edits(model, &request.edit))
+}
+
+/// The authored adapters file holding the impls for `port`: the `lib.rs` of the
+/// crate whose service carries the port.
+pub(crate) fn adapter_path(model: &Model, port: &str) -> anyhow::Result<String> {
+    let service = model
+        .service_of_port(port)
+        .with_context(|| format!("no port named `{port}`"))?;
+    Ok(adapter_impl_path(model, service))
 }
 
 /// The authored impl file holding the handler for `method`: the `service.rs` of
@@ -389,6 +442,74 @@ mod tests {
         .await
         .expect("the check tool runs");
         assert_eq!(result, "the workspace compiles (stub)");
+    }
+
+    #[tokio::test]
+    async fn the_show_tool_reads_a_port_adapter_method() {
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call(
+            "show",
+            &serde_json::json!({ "method": "check", "port": "toolchain" }),
+        )
+        .await
+        .expect("the show tool runs");
+        assert!(
+            result.contains("async fn check"),
+            "the adapter source should appear: {result}"
+        );
+        assert!(
+            result.contains("cargo"),
+            "the authored adapter body should appear: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_adapter_implement_is_refused_without_the_gate() {
+        let input = serde_json::json!({
+            "method": "check", "port": "toolchain", "body": "todo!()"
+        });
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("implement", &input)
+        .await
+        .expect_err("the gate refuses the write");
+        assert!(
+            error.downcast_ref::<Refused>().is_some(),
+            "the refusal should carry the typed gate error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_adapter_implement_writes_through_the_gate() {
+        // The no-op workspace discards the spliced source, so this touches no files.
+        let input = serde_json::json!({
+            "method": "check", "port": "toolchain", "body": "todo!()"
+        });
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        )
+        .call("implement", &input)
+        .await
+        .expect("the implement tool runs");
+        assert!(
+            result.contains("wrote the adapter method `toolchain.check`"),
+            "the tool should report the adapter write: {result}"
+        );
     }
 
     #[tokio::test]

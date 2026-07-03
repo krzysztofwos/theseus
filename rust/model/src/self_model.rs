@@ -162,14 +162,44 @@ pub fn theseus_model() -> Model {
         .struct_type(
             "ImplementRequest",
             &[
-                ("method", "String", "Name of the operation to implement."),
+                (
+                    "method",
+                    "String",
+                    "Name of the operation — or, with `port`, the port method — to implement.",
+                ),
                 ("body", "String", "The handler body to splice into the impl."),
+                (
+                    "port",
+                    "Option<String>",
+                    "Name of the port whose adapter method to implement.",
+                ),
+                (
+                    "adapter",
+                    "Option<String>",
+                    "The adapter type to target when the file holds more than one.",
+                ),
             ],
         )
         .foreign_type("HandlerSource", "String")
         .struct_type(
             "ShowRequest",
-            &[("method", "String", "Name of the operation whose handler to show.")],
+            &[
+                (
+                    "method",
+                    "String",
+                    "Name of the operation — or, with `port`, the port method — to show.",
+                ),
+                (
+                    "port",
+                    "Option<String>",
+                    "Name of the port whose adapter method to show.",
+                ),
+                (
+                    "adapter",
+                    "Option<String>",
+                    "The adapter type to target when the file holds more than one.",
+                ),
+            ],
         )
         .foreign_type("CheckReport", "String")
         .struct_type(
@@ -235,12 +265,12 @@ pub fn theseus_model() -> Model {
                 .tool("Report which operations have no authored handler.")
                 .operation(
                     "implement",
-                    "Splice an authored handler for an operation and compile-check it.",
+                    "Splice an authored handler or adapter method and compile-check it.",
                     "ImplementRequest",
                     "ImplementResult",
                 )
                 .tool(
-                    "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the handler in place. Author it after `patch` adds the operation (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
+                    "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
                 )
                 .operation(
                     "show",
@@ -249,7 +279,7 @@ pub fn theseus_model() -> Model {
                     "HandlerSource",
                 )
                 .tool(
-                    "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). For an operation with no handler yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
+                    "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). With `port`, `method` names one of that port's methods and the adapter method shows instead — `adapter` picks the implementing type when the file holds more than one. For a method with no authored source yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
                 )
                 .operation(
                     "check",

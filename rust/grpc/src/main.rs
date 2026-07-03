@@ -104,6 +104,8 @@ mod tests {
             .implement(tonic::Request::new(proto::ImplementRequest {
                 method: "verify".to_string(),
                 body: "todo!()".to_string(),
+                port: None,
+                adapter: None,
             }))
             .await
             .expect_err("the gate refuses");

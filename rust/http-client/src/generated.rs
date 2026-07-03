@@ -101,7 +101,10 @@ impl theseus::TheseusService for HttpTheseusClient {
         let (status, body) = self
             .post(
                 "implement",
-                serde_json::json!({ "method" : request.method, "body" : request.body }),
+                serde_json::json!(
+                    { "method" : request.method, "body" : request.body, "port" : request
+                    .port, "adapter" : request.adapter }
+                ),
             )
             .await?;
         checked("implement", status, &body)?;
@@ -110,7 +113,13 @@ impl theseus::TheseusService for HttpTheseusClient {
 
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {
         let (status, body) = self
-            .post("show", serde_json::json!({ "method" : request.method }))
+            .post(
+                "show",
+                serde_json::json!(
+                    { "method" : request.method, "port" : request.port, "adapter" :
+                    request.adapter }
+                ),
+            )
             .await?;
         checked("show", status, &body)?;
         Ok(body)

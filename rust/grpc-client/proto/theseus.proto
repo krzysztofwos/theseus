@@ -51,10 +51,14 @@ message CoverageReport {
 }
 
 message ImplementRequest {
-  // Name of the operation to implement.
+  // Name of the operation — or, with `port`, the port method — to implement.
   string method = 1;
   // The handler body to splice into the impl.
   string body = 2;
+  // Name of the port whose adapter method to implement.
+  optional string port = 3;
+  // The adapter type to target when the file holds more than one.
+  optional string adapter = 4;
 }
 
 message ImplementResult {
@@ -62,8 +66,12 @@ message ImplementResult {
 }
 
 message ShowRequest {
-  // Name of the operation whose handler to show.
+  // Name of the operation — or, with `port`, the port method — to show.
   string method = 1;
+  // Name of the port whose adapter method to show.
+  optional string port = 2;
+  // The adapter type to target when the file holds more than one.
+  optional string adapter = 3;
 }
 
 message HandlerSource {
@@ -136,7 +144,7 @@ service Theseus {
   rpc Patch (PatchRequest) returns (PatchResult);
   // Report which operations have an authored handler.
   rpc Coverage (Empty) returns (CoverageReport);
-  // Splice an authored handler for an operation and compile-check it.
+  // Splice an authored handler or adapter method and compile-check it.
   rpc Implement (ImplementRequest) returns (ImplementResult);
   // Show an operation's current handler source.
   rpc Show (ShowRequest) returns (HandlerSource);

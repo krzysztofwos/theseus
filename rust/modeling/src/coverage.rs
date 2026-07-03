@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use syn::{ImplItem, Item};
+use syn::ImplItem;
 
 use crate::{
     codegen::pascal_case,
@@ -90,16 +90,7 @@ pub(crate) fn implemented_methods(
 ) -> Result<BTreeSet<String>, CoverageError> {
     let file = syn::parse_file(source).map_err(|error| CoverageError::Parse(error.to_string()))?;
     let mut names = BTreeSet::new();
-    for item in &file.items {
-        let Item::Impl(block) = item else { continue };
-        let names_the_trait = block
-            .trait_
-            .as_ref()
-            .and_then(|(_, path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == trait_name);
-        if !names_the_trait {
-            continue;
-        }
+    for block in crate::implement::trait_impls(&file, trait_name) {
         for impl_item in &block.items {
             if let ImplItem::Fn(method) = impl_item {
                 names.insert(method.sig.ident.to_string());

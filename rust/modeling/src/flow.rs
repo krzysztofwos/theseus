@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
-use syn::{ImplItem, Item};
+use syn::ImplItem;
 
 /// Why flows could not be extracted.
 #[derive(Debug, thiserror::Error)]
@@ -30,16 +30,7 @@ pub fn handler_flows(
 ) -> Result<BTreeMap<String, BTreeSet<String>>, FlowError> {
     let file = syn::parse_file(source).map_err(|error| FlowError::Parse(error.to_string()))?;
     let mut flows = BTreeMap::new();
-    for item in &file.items {
-        let Item::Impl(block) = item else { continue };
-        let names_the_trait = block
-            .trait_
-            .as_ref()
-            .and_then(|(_, path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == trait_name);
-        if !names_the_trait {
-            continue;
-        }
+    for block in crate::implement::trait_impls(&file, trait_name) {
         for impl_item in &block.items {
             if let ImplItem::Fn(method) = impl_item {
                 let mut reached = BTreeSet::new();
@@ -52,8 +43,8 @@ pub fn handler_flows(
 }
 
 /// Walk a token stream for `self . <port>` triples, descending into every
-/// group. Reading tokens rather than expressions keeps a reach visible in
-/// argument position and inside macro bodies alike.
+/// group. The scan reads tokens, so a reach stays visible in argument position
+/// and inside macro bodies alike.
 fn collect_reaches(tokens: TokenStream, ports: &BTreeSet<String>, reached: &mut BTreeSet<String>) {
     let mut after_self = false;
     let mut after_dot = false;

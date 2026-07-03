@@ -131,10 +131,7 @@ fn locate_port_method<'a>(
     method_name: &str,
 ) -> Result<(&'a Port, &'a Method), ImplementError> {
     let port = model
-        .services
-        .iter()
-        .flat_map(|service| service.outbound.iter())
-        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
+        .ports()
         .find(|port| port.name == port_name)
         .ok_or_else(|| ImplementError::UnknownPort(port_name.to_string()))?;
     let method = port
@@ -196,18 +193,7 @@ fn adapter_impls(
 ) -> Result<Vec<AdapterImpl>, ImplementError> {
     let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
     let mut impls = Vec::new();
-    for item in &file.items {
-        let syn::Item::Impl(block) = item else {
-            continue;
-        };
-        let names_the_trait = block
-            .trait_
-            .as_ref()
-            .and_then(|(_, path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == trait_name);
-        if !names_the_trait {
-            continue;
-        }
+    for block in trait_impls(&file, trait_name) {
         let self_type = match block.self_ty.as_ref() {
             syn::Type::Path(path) => path
                 .path
@@ -305,26 +291,37 @@ fn locate<'a>(
         .ok_or_else(|| ImplementError::UnknownOperation(op_name.to_string()))
 }
 
-/// The byte range of the `op_name` method in the `impl <trait_name> for …` block,
-/// or `None` when the block has no such method.
+/// Every `impl <trait_name> for …` block in a parsed file. The one scan that
+/// coverage, flow extraction, and both splice paths locate trait impls through,
+/// so they agree on which impls count.
+pub(crate) fn trait_impls<'a>(file: &'a syn::File, trait_name: &str) -> Vec<&'a syn::ItemImpl> {
+    file.items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(block) => Some(block),
+            _ => None,
+        })
+        .filter(|block| {
+            block
+                .trait_
+                .as_ref()
+                .and_then(|(_, path, _)| path.segments.last())
+                .is_some_and(|segment| segment.ident == trait_name)
+        })
+        .collect()
+}
+
+/// The byte range of the `method` in the `impl <trait_name> for …` block, or
+/// `None` when the block has no such method. The range covers the whole item,
+/// including any attributes and doc comments on it, so a replacement rewrites
+/// them along with the body.
 fn method_range(
     source: &str,
     trait_name: &str,
     method: &str,
 ) -> Result<Option<Range<usize>>, ImplementError> {
     let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
-    for item in &file.items {
-        let syn::Item::Impl(block) = item else {
-            continue;
-        };
-        let names_the_trait = block
-            .trait_
-            .as_ref()
-            .and_then(|(_, path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == trait_name);
-        if !names_the_trait {
-            continue;
-        }
+    for block in trait_impls(&file, trait_name) {
         for impl_item in &block.items {
             if let syn::ImplItem::Fn(function) = impl_item
                 && function.sig.ident == method
@@ -336,19 +333,17 @@ fn method_range(
     Ok(None)
 }
 
-/// Insert `method` just inside the `impl <trait_name> for …` block.
+/// Insert `method` just inside the `impl <trait_name> for …` block, located by
+/// its exact brace span.
 fn splice_after_header(
     source: &str,
     trait_name: &str,
     method: &str,
 ) -> Result<String, ImplementError> {
-    let header = format!("impl {trait_name} for");
-    let header_at = source
-        .find(&header)
-        .ok_or_else(|| ImplementError::NoImplBlock(trait_name.to_string()))?;
-    let brace_at = source[header_at..]
-        .find('{')
-        .map(|offset| header_at + offset + 1)
+    let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
+    let brace_at = trait_impls(&file, trait_name)
+        .first()
+        .map(|block| block.brace_token.span.open().byte_range().end)
         .ok_or_else(|| ImplementError::NoImplBlock(trait_name.to_string()))?;
 
     let mut out = String::with_capacity(source.len() + method.len() + 1);

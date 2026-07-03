@@ -7,9 +7,9 @@
 //! INTERNAL any other error. The typed wire eliminates the malformed-request
 //! class an HTTP body carries — a request that decodes is a request that parses.
 
-mod generated;
-
-use generated::{GrpcCalculator, proto::calculator_server::CalculatorServer};
+use theseus_calculator_grpc::generated::{
+    GrpcCalculator, proto::calculator_server::CalculatorServer,
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -29,7 +29,9 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::generated::{GrpcCalculator, proto, proto::calculator_server::Calculator as _};
+    use theseus_calculator_grpc::generated::{
+        GrpcCalculator, proto, proto::calculator_server::Calculator as _,
+    };
 
     #[tokio::test]
     async fn a_result_maps_to_ok() {

@@ -1418,6 +1418,7 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
         })
         .collect();
 
+    let parsed = render_client_parsed(service, model);
     let doc_a = doc("The service contract carried over HTTP: each call posts its request as");
     let doc_b = doc("a JSON body, and the reply's status maps back onto the contract's error");
     let doc_c = doc("classes. A composition root wires it where an in-process adapter would");
@@ -1476,13 +1477,7 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
             }
         }
 
-        fn parsed<T: serde::de::DeserializeOwned>(
-            operation: &'static str,
-            body: &str,
-        ) -> anyhow::Result<T> {
-            serde_json::from_str(body)
-                .map_err(|error| anyhow::anyhow!("`{operation}` reply did not parse: {error}"))
-        }
+        #parsed
     }
 }
 
@@ -1548,6 +1543,7 @@ fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) 
         .collect();
 
     let conversions = render_grpc_client_enum_conversions(service, model);
+    let parsed = render_client_parsed(service, model);
     let doc_proto = doc("The wire types and client stub the build compiles from the proto.");
     let doc_a = doc("The service contract carried over gRPC: each call converts its request");
     let doc_b = doc("to the wire's message, and a status maps back onto the contract's error");
@@ -1594,6 +1590,21 @@ fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) 
             }
         }
 
+        #parsed
+    }
+}
+
+/// Render the JSON reply parser a client uses for foreign-typed responses, when
+/// the contract has any — a label past `Empty` and the string wrappers.
+fn render_client_parsed(service: &Service, model: &Model) -> TokenStream {
+    let has_json_response = service
+        .operations
+        .iter()
+        .any(|op| op.response != "Empty" && rust_type(&op.response, model) != "String");
+    if !has_json_response {
+        return quote! {};
+    }
+    quote! {
         fn parsed<T: serde::de::DeserializeOwned>(
             operation: &'static str,
             body: &str,

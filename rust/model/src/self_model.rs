@@ -351,7 +351,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["workspace"])
                 .tool(
-                    "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback.",
+                    "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback. Tracked files only: a file created after the snapshot survives a rollback.",
                 )
                 .operation(
                     "rollback",

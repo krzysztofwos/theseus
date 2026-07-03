@@ -47,8 +47,16 @@ impl FsWorkspace {
 impl Workspace for FsWorkspace {
     async fn restore(&self, request: &str) -> anyhow::Result<String> {
         let output = tokio::process::Command::new("git")
-            .args(["restore", "--source", request, "--worktree", "--", "."])
-            .current_dir(workspace_root())
+            .args([
+                "restore",
+                "--source",
+                request,
+                "--staged",
+                "--worktree",
+                "--",
+                ".",
+            ])
+            .current_dir(&self.root)
             .kill_on_drop(true)
             .output()
             .await
@@ -61,9 +69,11 @@ impl Workspace for FsWorkspace {
     }
 
     async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        // The stash commit is unreferenced: it lives for the gc grace period,
+        // which covers a session's checkpoint-and-rollback horizon.
         let output = tokio::process::Command::new("git")
             .args(["stash", "create", request])
-            .current_dir(workspace_root())
+            .current_dir(&self.root)
             .kill_on_drop(true)
             .output()
             .await
@@ -107,9 +117,11 @@ impl Workspace for FsWorkspace {
 
 /// A workspace port carrying a write permission. A permitted write passes
 /// through to the wrapped port and a refused one reports the contract's
-/// [`Refused`], so every operation that reaches disk through the port is gated
-/// the same way. It wraps an owned adapter inside a [`Standalone`] and a
-/// borrowed one inside a session, the same gate either way.
+/// [`Refused`], so every mutation that reaches the tree through the port is
+/// gated the same way — `snapshot` passes ungated, a capture of the tree
+/// standing where a read would. It wraps an owned adapter inside a
+/// [`Standalone`] and a borrowed one inside a session, the same gate either
+/// way.
 pub struct GatedWorkspace<W> {
     pub workspace: W,
     pub allow_writes: bool,
@@ -133,23 +145,6 @@ impl<W: Workspace> Workspace for GatedWorkspace<W> {
             return Err(Refused.into());
         }
         self.workspace.write_file(file).await
-    }
-}
-
-/// A borrowed adapter serves the port its target serves, so a wrapper generic
-/// over the port holds a borrow as readily as an owned adapter.
-#[async_trait::async_trait]
-impl<T: Workspace + ?Sized> Workspace for &T {
-    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
-        (**self).write_file(file).await
-    }
-
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
-        (**self).snapshot(request).await
-    }
-
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
-        (**self).restore(request).await
     }
 }
 

@@ -28,11 +28,42 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
             }
         })
         .collect();
+    // A borrowed adapter serves the port its target serves. The forwarding
+    // renders with the trait, so a port grown by a patch reaches through a
+    // borrow — the session's gated composition — without an authored edit.
+    let forwards: Vec<TokenStream> = port
+        .methods
+        .iter()
+        .map(|method| {
+            let method_name = format_ident!("{}", method.name);
+            let param = bound_request_param(&method.request, model);
+            let response = response_type(&method.response, model);
+            let args = if method.request == "Empty" {
+                quote! {}
+            } else {
+                quote! { request }
+            };
+            quote! {
+                async fn #method_name(&self #param) -> anyhow::Result<#response> {
+                    (**self).#method_name(#args).await
+                }
+            }
+        })
+        .collect();
+    let forward_doc = doc("A borrowed adapter serves the port its target serves, so a wrapper");
+    let forward_doc_b = doc("generic over the port holds a borrow as readily as an owned adapter.");
     quote! {
         #trait_doc
         #[async_trait::async_trait]
         pub trait #trait_name: Send + Sync {
             #(#methods)*
+        }
+
+        #forward_doc
+        #forward_doc_b
+        #[async_trait::async_trait]
+        impl<T: #trait_name + ?Sized> #trait_name for &T {
+            #(#forwards)*
         }
     }
 }
@@ -476,10 +507,13 @@ mod tests {
                 ),
             );
         let rendered = render_module_for_crate(&model, "app");
-        // The struct renders locally, and the port trait names it directly rather
-        // than reaching for a twin in the engine crate.
+        // The struct renders locally, and the port trait names it by its local
+        // name.
         assert!(rendered.contains("pub struct Payload"));
         assert!(rendered.contains("async fn send(&self, _request: &Payload)"));
+        // The borrowed forwarder renders with the trait, one forward per method.
+        assert!(rendered.contains("impl<T: Sink + ?Sized> Sink for &T"));
+        assert!(rendered.contains("(**self).send(request).await"));
         assert!(!rendered.contains("theseus_modeling::Payload"));
     }
 }

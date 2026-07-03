@@ -98,7 +98,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .map(|port| render_port_trait(port, model))
         .collect();
     // A modeled turn budget renders as the loop's constant, so the budget is a
-    // patchable fact of the model rather than a number in the authored loop.
+    // patchable fact of the model.
     let turn_budgets: Vec<TokenStream> = interior
         .iter()
         .filter_map(|inbound| inbound.turns)
@@ -270,11 +270,6 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
     out
 }
 
-/// Summarize what a crate's generated file holds, naming only the parts present.
-/// A service-hosting crate carries the request types and the service contract,
-/// and with outbound dependencies the port traits and the composition root. A
-/// crate hosting a CLI inbound carries the command surface, the request parsers,
-/// the parsed invocation, and dispatch.
 /// The wire surfaces a crate hosts, gathered for the module doc summary.
 struct Surfaces {
     interior: bool,
@@ -286,6 +281,7 @@ struct Surfaces {
     tool_catalog: bool,
 }
 
+/// Summarize what a crate's generated file holds, naming only the parts present.
 fn module_doc_summary(services: &[&Service], ports: &[&Port], surfaces: &Surfaces) -> String {
     let mut concerns: Vec<&str> = Vec::new();
     if !services.is_empty() {
@@ -469,13 +465,10 @@ fn proto_snake_case(name: &str) -> String {
     out
 }
 
-/// The crate-path prefix request types and the service trait take inside an
-/// inbound adapter: empty when the adapter shares the service's crate, otherwise
-/// the service's crate module path followed by `::`, so a standalone adapter names
-/// types it imports from elsewhere.
 /// The paths an adapter names a service's contract with: the crate prefix for
-/// its types, the service trait, and the boundary error types every transport
-/// maps.
+/// its types (empty when the adapter shares the service's crate, otherwise the
+/// service's crate module path followed by `::`), the service trait, and the
+/// boundary error types every transport maps.
 struct ContractPaths {
     prefix: String,
     service_trait: syn::Type,
@@ -601,17 +594,28 @@ pub(crate) fn handler_signature(op: &Operation, model: &Model, request_path: &st
 }
 
 /// The `, request: &T` fragment for a method, or empty for an `Empty` request.
-/// `String` requests borrow as `&str`, the idiomatic borrowed form.
+/// `String` requests borrow as `&str`, the idiomatic borrowed form. The
+/// underscore form suits a defaulted declaration; the bound form binds the
+/// value a forwarding body passes on.
 fn request_param(label: &str, model: &Model) -> TokenStream {
+    typed_request_param(label, model, format_ident!("_request"))
+}
+
+/// The bound `, request: &T` fragment for a forwarding method body.
+fn bound_request_param(label: &str, model: &Model) -> TokenStream {
+    typed_request_param(label, model, format_ident!("request"))
+}
+
+fn typed_request_param(label: &str, model: &Model, name: proc_macro2::Ident) -> TokenStream {
     if label == "Empty" {
         return quote! {};
     }
     let ty = rust_type(label, model);
     if ty == "String" {
-        quote! { , _request: &str }
+        quote! { , #name: &str }
     } else {
         let ty = syn_type(&ty);
-        quote! { , _request: &#ty }
+        quote! { , #name: &#ty }
     }
 }
 

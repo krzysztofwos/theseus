@@ -33,16 +33,10 @@ pub fn adapter_impl_path(model: &Model, service: &Service) -> String {
 /// The authored adapters file of an inbound's interior ports: the `adapters.rs`
 /// of the crate that hosts the inbound.
 pub fn inbound_adapter_impl_path(model: &Model, inbound: &theseus_modeling::Inbound) -> String {
-    let dir = model
-        .crate_named(&inbound.crate_name)
-        .map(|node| node.dir.as_str())
-        .unwrap_or_else(|| {
-            panic!(
-                "inbound `{}` names unknown crate `{}`",
-                inbound.name, inbound.crate_name
-            )
-        });
-    format!("rust/{dir}/src/adapters.rs")
+    format!(
+        "rust/{}/src/adapters.rs",
+        dir_of(model, &inbound.crate_name)
+    )
 }
 
 /// The authored impl path of every service, paired with the service name.
@@ -56,8 +50,8 @@ pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
 
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
 /// A crate added to the model is registered before its skeleton is written, so
-/// its generated code waits for `scaffold` rather than landing in a directory
-/// the workspace cannot yet build.
+/// its generated code waits for `scaffold` to lay the directory the workspace
+/// can build.
 pub fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
     match file
         .path
@@ -71,15 +65,16 @@ pub fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool
 
 /// The directory under `rust/` of the crate a service lives in.
 fn crate_dir<'a>(model: &'a Model, service: &Service) -> &'a str {
+    dir_of(model, &service.crate_name)
+}
+
+/// The directory under `rust/` of a named crate. Patch refuses an edit naming
+/// an unmodeled crate (PATCH017), so a model that reaches here resolves.
+fn dir_of<'a>(model: &'a Model, crate_name: &str) -> &'a str {
     model
-        .crate_named(&service.crate_name)
+        .crate_named(crate_name)
         .map(|node| node.dir.as_str())
-        .unwrap_or_else(|| {
-            panic!(
-                "service `{}` names unknown crate `{}`",
-                service.name, service.crate_name
-            )
-        })
+        .unwrap_or_else(|| panic!("crate `{crate_name}` is not modeled"))
 }
 
 /// The leading comment block of the projected self-model source.

@@ -23,6 +23,26 @@ pub trait Workspace: Send + Sync {
     }
 }
 
+/// A borrowed adapter serves the port its target serves, so a wrapper
+/// generic over the port holds a borrow as readily as an owned adapter.
+#[async_trait::async_trait]
+impl<T: Workspace + ?Sized> Workspace for &T {
+    async fn write_file(
+        &self,
+        request: &theseus_modeling::GeneratedFile,
+    ) -> anyhow::Result<()> {
+        (**self).write_file(request).await
+    }
+
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        (**self).snapshot(request).await
+    }
+
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        (**self).restore(request).await
+    }
+}
+
 /// Compile-checks the workspace and reports the outcome.
 #[async_trait::async_trait]
 pub trait Toolchain: Send + Sync {
@@ -34,6 +54,19 @@ pub trait Toolchain: Send + Sync {
     /// Run the workspace tests and report the outcome.
     async fn test(&self) -> anyhow::Result<String> {
         Err(Unimplemented("toolchain.test").into())
+    }
+}
+
+/// A borrowed adapter serves the port its target serves, so a wrapper
+/// generic over the port holds a borrow as readily as an owned adapter.
+#[async_trait::async_trait]
+impl<T: Toolchain + ?Sized> Toolchain for &T {
+    async fn check(&self) -> anyhow::Result<String> {
+        (**self).check().await
+    }
+
+    async fn test(&self) -> anyhow::Result<String> {
+        (**self).test().await
     }
 }
 
@@ -368,7 +401,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "snapshot", "description" :
-        "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback.",
+        "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback. Tracked files only: a file created after the snapshot survives a rollback.",
         "input_schema" : { "type" : "object", "properties" : { "label" : { "type" :
         "string" } }, "required" : ["label"] } }), serde_json::json!({ "name" :
         "rollback", "description" :

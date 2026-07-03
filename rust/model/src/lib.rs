@@ -32,6 +32,21 @@ pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
+/// A crate added to the model is registered before its skeleton is written, so
+/// its generated code waits for `scaffold` rather than landing in a directory
+/// the workspace cannot yet build.
+pub fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
+    match file
+        .path
+        .strip_prefix("rust/")
+        .and_then(|rest| rest.split_once('/'))
+    {
+        Some((dir, _)) => root.join("rust").join(dir).join("Cargo.toml").exists(),
+        None => true,
+    }
+}
+
 /// The directory under `rust/` of the crate a service lives in.
 fn crate_dir<'a>(model: &'a Model, service: &Service) -> &'a str {
     model

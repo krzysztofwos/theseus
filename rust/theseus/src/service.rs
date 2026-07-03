@@ -8,7 +8,7 @@
 //! inbound binaries (`theseus-cli`, and the agent and MCP adapters to come).
 
 use anyhow::Context;
-use theseus_model::{authored_impl_path, authored_impls, generated_files};
+use theseus_model::{authored_impl_path, authored_impls, crate_is_scaffolded, generated_files};
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
     coverage, describe, handler_source, query, scaffold_files, verify,
@@ -183,21 +183,6 @@ pub(crate) fn handler_path(model: &Model, method: &str) -> anyhow::Result<String
         .service_of_operation(method)
         .with_context(|| format!("no operation named `{method}`"))?;
     Ok(authored_impl_path(model, service))
-}
-
-/// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
-/// A crate added to the model is registered before its skeleton is written, so
-/// its generated code waits for `scaffold` rather than landing in a directory
-/// the workspace cannot yet build.
-pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) -> bool {
-    match file
-        .path
-        .strip_prefix("rust/")
-        .and_then(|rest| rest.split_once('/'))
-    {
-        Some((dir, _)) => root.join("rust").join(dir).join("Cargo.toml").exists(),
-        None => true,
-    }
 }
 
 #[cfg(test)]

@@ -10,13 +10,13 @@
 //! the same way. Both the agent loop and an external host over MCP drive the
 //! same `Session`, so they see one tool surface with one set of semantics.
 
-use theseus_model::generated_files;
+use theseus_model::{crate_is_scaffolded, generated_files};
 use theseus_modeling::Model;
 
 use crate::{
     GatedWorkspace,
     generated::{Ctx, Toolchain, Workspace, dispatch_tool},
-    service::{apply_patch, crate_is_scaffolded},
+    service::apply_patch,
     workspace_root,
 };
 

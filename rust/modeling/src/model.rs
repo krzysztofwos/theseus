@@ -90,6 +90,13 @@ impl Model {
             .find(|service| service.outbound.iter().any(|p| p.name == port))
     }
 
+    /// The inbound whose interior ports include `port`.
+    pub fn inbound_of_port(&self, port: &str) -> Option<&Inbound> {
+        self.inbounds
+            .iter()
+            .find(|inbound| inbound.outbound.iter().any(|p| p.name == port))
+    }
+
     /// Look up a service by name.
     pub fn service_named(&self, name: &str) -> Option<&Service> {
         self.services.iter().find(|service| service.name == name)

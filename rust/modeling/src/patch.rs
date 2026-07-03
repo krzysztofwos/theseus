@@ -309,7 +309,7 @@ fn plan_add(
             parse_shape(shape).map_err(shape_refused)?;
         }
         NodeKind::Port => {
-            attaches_to_service(model, &parent)?;
+            attaches_to_port_owner(model, &parent)?;
             free(port_exists(model, name), "port", name)?;
             allow_keys(attrs, &["summary", "target"])?;
         }
@@ -510,14 +510,24 @@ fn apply_add(
                 .expect("shape validated during planning"),
         }),
         NodeKind::Port => {
-            let service =
-                target_service_index(model, parent).expect("service resolved in planning");
-            model.services[service].outbound.push(Port {
+            let port = Port {
                 name: name.to_string(),
                 summary: attr(attrs, "summary").unwrap_or_default().to_string(),
                 target: attr(attrs, "target").map(str::to_string),
                 methods: Vec::new(),
-            });
+            };
+            if let Target::Inbound(inbound) = parent {
+                let inbound = model
+                    .inbounds
+                    .iter_mut()
+                    .find(|i| &i.name == inbound)
+                    .expect("inbound resolved in planning");
+                inbound.outbound.push(port);
+            } else {
+                let service =
+                    target_service_index(model, parent).expect("service resolved in planning");
+                model.services[service].outbound.push(port);
+            }
         }
         NodeKind::Method => {
             if let Target::Port(port) = parent
@@ -572,6 +582,9 @@ fn apply_remove(model: &mut Model, target: &Target) {
         Target::Port(name) => {
             for service in &mut model.services {
                 service.outbound.retain(|port| &port.name != name);
+            }
+            for inbound in &mut model.inbounds {
+                inbound.outbound.retain(|port| &port.name != name);
             }
         }
         Target::Method { port, name } => {
@@ -669,6 +682,14 @@ fn apply_rename(model: &mut Model, target: &Target, to: &str) {
             for port in ports_mut(model) {
                 if &port.name == name {
                     port.name = to.to_string();
+                }
+            }
+            // An operation's declared flow follows the renamed port.
+            for op in operations_mut(model) {
+                for used in &mut op.uses {
+                    if used == name {
+                        *used = to.to_string();
+                    }
                 }
             }
         }
@@ -1143,7 +1164,9 @@ fn port_exists(model: &Model, name: &str) -> bool {
     model
         .services
         .iter()
-        .any(|service| service.outbound.iter().any(|port| port.name == name))
+        .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
+        .any(|port| port.name == name)
 }
 
 fn service_exists(model: &Model, name: &str) -> bool {
@@ -1194,6 +1217,21 @@ fn attaches_to_service(model: &Model, parent: &Target) -> Result<(), Vec<Diagnos
     }
 }
 
+/// A port attaches to a service, to an inbound — the loop's interior — or to
+/// the model root, which places it on the first service.
+fn attaches_to_port_owner(model: &Model, parent: &Target) -> Result<(), Vec<Diagnostic>> {
+    match parent {
+        Target::Inbound(name) if inbound_exists(model, name) => Ok(()),
+        _ => attaches_to_service(model, parent).map_err(|_| {
+            vec![diagnostic(
+                "PATCH006",
+                "a port attaches to the model root, a service, or an inbound",
+                "pass --parent model:<model>, service:<model>:<name>, or inbound:<model>:<name>",
+            )]
+        }),
+    }
+}
+
 /// The index of the service an operation or port attaches to: the one a service
 /// handle names, or the first service under the model root.
 fn target_service_index(model: &Model, parent: &Target) -> Option<usize> {
@@ -1213,6 +1251,7 @@ fn method_of<'a>(model: &'a Model, port: &str, name: &str) -> Option<&'a Method>
         .services
         .iter()
         .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
         .find(|p| p.name == port)
         .and_then(|p| p.methods.iter().find(|m| m.name == name))
 }
@@ -1236,10 +1275,11 @@ fn operations_mut(model: &mut Model) -> impl Iterator<Item = &mut Operation> {
 }
 
 fn ports_mut(model: &mut Model) -> impl Iterator<Item = &mut Port> {
-    model
-        .services
+    let (services, inbounds) = (&mut model.services, &mut model.inbounds);
+    services
         .iter_mut()
         .flat_map(|service| service.outbound.iter_mut())
+        .chain(inbounds.iter_mut().flat_map(|i| i.outbound.iter_mut()))
 }
 
 fn port_mut<'a>(model: &'a mut Model, name: &str) -> Option<&'a mut Port> {
@@ -1960,6 +2000,67 @@ mod tests {
             },
         );
         assert_eq!(code(&outcome), "PATCH010");
+    }
+
+    #[test]
+    fn a_port_attaches_to_an_inbound_and_grows_a_method() {
+        let base = sample_model().inbound("agent", Transport::Agent, "Sample", "sample-agent");
+        let model = accept(
+            &base,
+            add(
+                "inbound:sample:agent",
+                "port",
+                "llm",
+                &[("summary", "Completes one turn.")],
+            ),
+        );
+        assert_eq!(model.inbounds[0].outbound.len(), 1);
+
+        let model = accept(
+            &model,
+            add(
+                "port:sample:llm",
+                "method",
+                "complete",
+                &[
+                    ("summary", "Complete one turn."),
+                    ("request", "String"),
+                    ("response", "String"),
+                ],
+            ),
+        );
+        assert_eq!(model.inbounds[0].outbound[0].methods.len(), 1);
+
+        // The interior port removes like a service port.
+        let model = accept(
+            &model,
+            Edit::Remove {
+                target: "port:sample:llm".to_string(),
+            },
+        );
+        assert!(model.inbounds[0].outbound.is_empty());
+    }
+
+    #[test]
+    fn renaming_a_port_carries_the_uses_edges() {
+        let base = sample_model();
+        // The sample model's `store` port; point an operation's flow at it.
+        let model = accept(
+            &base,
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("uses".to_string(), "store".to_string())].into(),
+            },
+        );
+        let model = accept(
+            &model,
+            Edit::Rename {
+                target: "port:sample:store".to_string(),
+                to: "vault".to_string(),
+            },
+        );
+        assert_eq!(model.operation("greet").unwrap().uses, vec!["vault"]);
+        assert!(model.services[0].outbound.iter().any(|p| p.name == "vault"));
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub use flow::{FlowError, handler_flows};
 pub use hash::model_hash;
 pub use implement::{ImplementError, adapter_source, handler_source, implement, implement_adapter};
 pub use model::{
-    Client, CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef,
+    Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
     TypeShape, Variant,
 };
 pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};

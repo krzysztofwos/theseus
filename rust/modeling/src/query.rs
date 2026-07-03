@@ -170,6 +170,7 @@ fn all_handles(model: &Model) -> Vec<Handle> {
         .services
         .iter()
         .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
     {
         let target = Target::Port(port.name.clone());
         handles.push(handle(
@@ -288,6 +289,11 @@ mod tests {
                 .services
                 .iter()
                 .map(|s| s.outbound.len())
+                .sum::<usize>()
+            + model
+                .inbounds
+                .iter()
+                .map(|i| i.outbound.len())
                 .sum::<usize>();
         assert_eq!(outcome.handles.len(), expected);
         assert_eq!(outcome.model_hash, model_hash(&model));

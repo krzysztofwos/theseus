@@ -134,6 +134,7 @@ fn locate_port_method<'a>(
         .services
         .iter()
         .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
         .find(|port| port.name == port_name)
         .ok_or_else(|| ImplementError::UnknownPort(port_name.to_string()))?;
     let method = port

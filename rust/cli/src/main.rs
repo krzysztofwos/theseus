@@ -47,7 +47,13 @@ async fn main() -> anyhow::Result<()> {
 
     // A remote composition: the generated HTTP client stands where the local
     // composition root would, and every subcommand drives the remote instance.
+    // The remote instance owns its own calculator wiring, so the two flags name
+    // conflicting compositions.
     if let Some(url) = matches.get_one::<String>("remote") {
+        anyhow::ensure!(
+            matches.get_one::<String>("calculator").is_none(),
+            "--remote drives a whole remote instance; --calculator wires a local composition. Pass one or the other"
+        );
         return run(&HttpTheseusClient::new(url.clone()), invocation).await;
     }
 

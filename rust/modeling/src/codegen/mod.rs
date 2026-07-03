@@ -78,12 +78,38 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .iter()
         .flat_map(|service| service.outbound.iter())
         .collect();
+    // An inbound's own outbound ports — its loop's interior — render into the
+    // inbound's crate the way a service's ports render into its own.
+    let interior: Vec<&Inbound> = model
+        .inbounds
+        .iter()
+        .filter(|inbound| inbound.crate_name == crate_name)
+        .collect();
+    let interior_ports: Vec<&Port> = interior
+        .iter()
+        .flat_map(|inbound| inbound.outbound.iter())
+        .collect();
     // A service-targeting port reuses its target service's trait, so only a
     // method-bearing port contributes a trait of its own.
     let port_traits: Vec<TokenStream> = ports
         .iter()
+        .chain(&interior_ports)
         .filter(|port| port.target.is_none())
         .map(|port| render_port_trait(port, model))
+        .collect();
+    // A modeled turn budget renders as the loop's constant, so the budget is a
+    // patchable fact of the model rather than a number in the authored loop.
+    let turn_budgets: Vec<TokenStream> = interior
+        .iter()
+        .filter_map(|inbound| inbound.turns)
+        .map(|turns| {
+            let value = proc_macro2::Literal::usize_unsuffixed(turns as usize);
+            let budget_doc = doc("The most turns the loop runs before giving up.");
+            quote! {
+                #budget_doc
+                pub const TURN_BUDGET: usize = #value;
+            }
+        })
         .collect();
     let composition_root = if ports.is_empty() {
         quote! {}
@@ -102,10 +128,17 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .collect();
     // The typed error the trait defaults return, rendered once beside the traits
     // so the generated contract stays self-contained.
-    let unimplemented = if service_traits.is_empty() {
+    let unimplemented = if service_traits.is_empty() && interior_ports.is_empty() {
         quote! {}
     } else {
         render_unimplemented()
+    };
+    // The gate's error belongs to a service contract; a crate holding only a
+    // loop's interior defaults its port methods and needs no refusal.
+    let refused = if service_traits.is_empty() {
+        quote! {}
+    } else {
+        contract::render_refused()
     };
     // A service driven by an agent or MCP inbound carries a tool catalog and the
     // dispatch behind it, both rendered from each exposed operation's contract,
@@ -134,7 +167,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         }
         _ => quote! {},
     };
-    let requests = render_request_structs(&services, model);
+    let requests = render_request_structs(&services, &interior_ports, model);
     // An inbound adapter hosted in this crate renders its wire surface, even when
     // the service it drives lives in another crate: a CLI inbound the command
     // surface, request parsers, parsed invocation, and dispatch; an HTTP inbound
@@ -199,9 +232,11 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         #command_import
 
         #(#port_traits)*
+        #(#turn_budgets)*
         #composition_root
         #requests
         #unimplemented
+        #refused
         #(#service_traits)*
         #standalone
         #tool_catalog
@@ -227,6 +262,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
                 http_client: has_http_client,
                 grpc_client: has_grpc_client,
                 tool_catalog: has_tool_catalog,
+                interior: !interior_ports.is_empty() || !turn_budgets.is_empty(),
             }
         )
     ));
@@ -241,6 +277,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
 /// the parsed invocation, and dispatch.
 /// The wire surfaces a crate hosts, gathered for the module doc summary.
 struct Surfaces {
+    interior: bool,
     cli: bool,
     http: bool,
     grpc: bool,
@@ -256,6 +293,9 @@ fn module_doc_summary(services: &[&Service], ports: &[&Port], surfaces: &Surface
     }
     if !ports.is_empty() {
         concerns.push("the outbound port traits and composition roots");
+    }
+    if surfaces.interior {
+        concerns.push("the loop's port contract and turn budget");
     }
     if surfaces.tool_catalog {
         concerns.push("the agent tool catalog and dispatch");

@@ -185,10 +185,14 @@ pub(super) fn port_trait_path(port: &Port, model: &Model, current_crate: &str) -
 /// methods — as a plain record. The parser that builds one from a transport's
 /// input is the inbound adapter's wire-to-domain conversion, rendered with that
 /// adapter, so the struct itself stays transport-neutral.
-pub(super) fn render_request_structs(services: &[&Service], model: &Model) -> TokenStream {
+pub(super) fn render_request_structs(
+    services: &[&Service],
+    extra_ports: &[&Port],
+    model: &Model,
+) -> TokenStream {
     let mut seen: Vec<&str> = Vec::new();
     let mut structs: Vec<TokenStream> = Vec::new();
-    for label in referenced_labels(services) {
+    for label in referenced_labels(services, extra_ports) {
         if seen.contains(&label) {
             continue;
         }
@@ -202,9 +206,13 @@ pub(super) fn render_request_structs(services: &[&Service], model: &Model) -> To
     quote! { #(#structs)* }
 }
 
-/// Every type label a service references at its boundaries: each operation's
-/// request, and each port method's request and response.
-pub(super) fn referenced_labels<'a>(services: &[&'a Service]) -> Vec<&'a str> {
+/// Every type label a service references at its boundaries — each operation's
+/// request, and each port method's request and response — plus the boundaries of
+/// `extra_ports`, the ports hung on an inbound hosted in the crate.
+pub(super) fn referenced_labels<'a>(
+    services: &[&'a Service],
+    extra_ports: &[&'a Port],
+) -> Vec<&'a str> {
     let mut labels = Vec::new();
     for service in services {
         for op in &service.operations {
@@ -215,6 +223,12 @@ pub(super) fn referenced_labels<'a>(services: &[&'a Service]) -> Vec<&'a str> {
                 labels.push(method.request.as_str());
                 labels.push(method.response.as_str());
             }
+        }
+    }
+    for port in extra_ports {
+        for method in &port.methods {
+            labels.push(method.request.as_str());
+            labels.push(method.response.as_str());
         }
     }
     labels
@@ -291,16 +305,13 @@ pub(super) fn render_service_trait(service: &Service, model: &Model) -> TokenStr
     }
 }
 
-/// Render the typed errors a contract's boundary reports: `Unimplemented`, the
-/// trait default's error, and `Refused`, a write gate's error. Both render with
-/// the contract, so a transport adapter downcasts them to map an outcome in its
-/// own vocabulary, and a wire client reconstructs them from the status coming
-/// back.
+/// Render `Unimplemented`, the trait default's error. It renders with every
+/// contract that defaults a method, so a transport adapter downcasts it to map
+/// the outcome in its own vocabulary, and a wire client reconstructs it from
+/// the status coming back.
 pub(super) fn render_unimplemented() -> TokenStream {
     let doc_a = doc("An operation with no authored handler, the trait default's error. A");
     let doc_b = doc("transport adapter downcasts it to map the outcome in its own vocabulary.");
-    let doc_c = doc("A write refused by a permission gate. A transport adapter downcasts it");
-    let doc_d = doc("to map the refusal in its own vocabulary.");
     quote! {
         #doc_a
         #doc_b
@@ -314,9 +325,18 @@ pub(super) fn render_unimplemented() -> TokenStream {
         }
 
         impl std::error::Error for Unimplemented {}
+    }
+}
 
-        #doc_c
-        #doc_d
+/// Render `Refused`, a write gate's error. It renders with a service contract —
+/// the boundary a gate guards — so an adapter downcasts it and a wire client
+/// reconstructs it from the status coming back.
+pub(super) fn render_refused() -> TokenStream {
+    let doc_a = doc("A write refused by a permission gate. A transport adapter downcasts it");
+    let doc_b = doc("to map the refusal in its own vocabulary.");
+    quote! {
+        #doc_a
+        #doc_b
         #[derive(Debug)]
         pub struct Refused;
 
@@ -410,6 +430,39 @@ mod tests {
         );
         assert!(rendered.contains("self.ctx().run(request).await"));
         assert!(rendered.contains("self.ctx().status().await"));
+    }
+
+    #[test]
+    fn an_inbound_interior_renders_into_its_own_crate() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 1, &[])
+            .crate_node("loop", "loop", 2, &["app"])
+            .struct_type("Turn", &[("system", "String", "The framing.")])
+            .foreign_type("Reply", "crate::agent::Reply")
+            .service(
+                Service::new("App")
+                    .crate_name("app")
+                    .operation("run", "Run.", "Empty", "String"),
+            )
+            .inbound("agent", crate::model::Transport::Agent, "App", "loop")
+            .turns(32)
+            .inbound_port(Port::new("llm", "Completes one turn.").method(
+                "complete",
+                "Complete one turn.",
+                "Turn",
+                "Reply",
+            ));
+        let rendered = render_module_for_crate(&model, "loop");
+        // The loop's crate carries the port trait, its request struct, the typed
+        // default, and the budget. The service's crate carries none of it.
+        assert!(rendered.contains("pub trait Llm"));
+        assert!(rendered.contains("Err(Unimplemented(\"llm.complete\").into())"));
+        assert!(rendered.contains("pub struct Turn"));
+        assert!(rendered.contains("crate::agent::Reply"));
+        assert!(rendered.contains("pub const TURN_BUDGET: usize = 32;"));
+        let service_side = render_module_for_crate(&model, "app");
+        assert!(!service_side.contains("trait Llm"));
+        assert!(!service_side.contains("TURN_BUDGET"));
     }
 
     #[test]

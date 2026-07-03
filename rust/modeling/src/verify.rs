@@ -364,16 +364,19 @@ fn check_implementation_coverage(
 fn check_port_targets(model: &Model) -> Result<String, String> {
     let services: BTreeSet<&str> = model.services.iter().map(|s| s.name.as_str()).collect();
     let mut bound = 0;
-    for service in &model.services {
-        for port in &service.outbound {
-            if let Some(target) = &port.target {
-                bound += 1;
-                if !services.contains(target.as_str()) {
-                    return Err(format!(
-                        "port `{}` targets service `{target}`, which the model does not define",
-                        port.name
-                    ));
-                }
+    for port in model
+        .services
+        .iter()
+        .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
+    {
+        if let Some(target) = &port.target {
+            bound += 1;
+            if !services.contains(target.as_str()) {
+                return Err(format!(
+                    "port `{}` targets service `{target}`, which the model does not define",
+                    port.name
+                ));
             }
         }
     }
@@ -428,12 +431,15 @@ fn check_type_references(model: &Model) -> Result<String, String> {
         referenced.push(&op.request);
         referenced.push(&op.response);
     }
-    for service in &model.services {
-        for port in &service.outbound {
-            for method in &port.methods {
-                referenced.push(&method.request);
-                referenced.push(&method.response);
-            }
+    for port in model
+        .services
+        .iter()
+        .flat_map(|service| service.outbound.iter())
+        .chain(model.inbounds.iter().flat_map(|i| i.outbound.iter()))
+    {
+        for method in &port.methods {
+            referenced.push(&method.request);
+            referenced.push(&method.response);
         }
     }
     for type_def in &model.types {
@@ -883,6 +889,22 @@ mod tests {
         // No impl block at all: coverage reports the gap, flow stays quiet.
         let detail = flow_conformance(&flow_model(), from("")).unwrap();
         assert!(detail.contains("0 declared flow edge(s)"), "{detail}");
+    }
+
+    #[test]
+    fn an_inbound_port_with_a_dangling_type_is_detected() {
+        let model = Model::new("Sample")
+            .service(Service::new("Sample"))
+            .inbound("agent", crate::model::Transport::Agent, "Sample", "agent")
+            .inbound_port(
+                crate::model::Port::new("llm", "Completes one turn.").method(
+                    "complete",
+                    "Complete one turn.",
+                    "Ghost",
+                    "String",
+                ),
+            );
+        assert!(check_type_references(&model).is_err());
     }
 
     #[test]

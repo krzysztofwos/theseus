@@ -10,6 +10,7 @@ mod dsl;
 mod gate;
 mod hash;
 mod implement;
+mod label;
 mod model;
 mod patch;
 mod path;

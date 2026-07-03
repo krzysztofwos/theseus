@@ -8,7 +8,7 @@ pub struct HttpReply {
     pub body: String,
 }
 
-fn parse_queryrequest_http(
+fn parse_query_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::QueryRequest> {
     Ok(theseus::QueryRequest {
@@ -27,7 +27,7 @@ fn parse_queryrequest_http(
     })
 }
 
-fn parse_patchrequest_http(
+fn parse_patch_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::PatchRequest> {
     Ok(theseus::PatchRequest {
@@ -47,7 +47,7 @@ fn parse_patchrequest_http(
     })
 }
 
-fn parse_implementrequest_http(
+fn parse_implement_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::ImplementRequest> {
     Ok(theseus::ImplementRequest {
@@ -64,7 +64,7 @@ fn parse_implementrequest_http(
     })
 }
 
-fn parse_showrequest_http(
+fn parse_show_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::ShowRequest> {
     Ok(theseus::ShowRequest {
@@ -76,7 +76,7 @@ fn parse_showrequest_http(
     })
 }
 
-fn parse_calcrequest_http(
+fn parse_calc_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::CalcRequest> {
     Ok(theseus::CalcRequest {
@@ -111,33 +111,33 @@ pub async fn handle(
         "verify" => reply_json(service.verify().await),
         "generate" => reply_json(service.generate().await),
         "query" => {
-            match parse_queryrequest_http(input) {
+            match parse_query_request_http(input) {
                 Ok(request) => reply_json(service.query(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "patch" => {
-            match parse_patchrequest_http(input) {
+            match parse_patch_request_http(input) {
                 Ok(request) => reply_json(service.patch(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "coverage" => reply_json(service.coverage().await),
         "implement" => {
-            match parse_implementrequest_http(input) {
+            match parse_implement_request_http(input) {
                 Ok(request) => reply_text(service.implement(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "show" => {
-            match parse_showrequest_http(input) {
+            match parse_show_request_http(input) {
                 Ok(request) => reply_text(service.show(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "check" => reply_text(service.check().await),
         "calc" => {
-            match parse_calcrequest_http(input) {
+            match parse_calc_request_http(input) {
                 Ok(request) => reply_text(service.calc(request).await),
                 Err(error) => error_body(400, &error),
             }

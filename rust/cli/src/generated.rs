@@ -140,7 +140,7 @@ pub fn command() -> Command {
         )
 }
 
-fn parse_queryrequest(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
+fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::QueryRequest {
         find: arg("find"),
@@ -149,7 +149,7 @@ fn parse_queryrequest(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequ
     })
 }
 
-fn parse_patchrequest(matches: &ArgMatches) -> anyhow::Result<theseus::PatchRequest> {
+fn parse_patch_request(matches: &ArgMatches) -> anyhow::Result<theseus::PatchRequest> {
     Ok(theseus::PatchRequest {
         edit: matches
             .get_many::<String>("edit")
@@ -164,7 +164,7 @@ fn parse_patchrequest(matches: &ArgMatches) -> anyhow::Result<theseus::PatchRequ
     })
 }
 
-fn parse_implementrequest(
+fn parse_implement_request(
     matches: &ArgMatches,
 ) -> anyhow::Result<theseus::ImplementRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
@@ -174,14 +174,14 @@ fn parse_implementrequest(
     })
 }
 
-fn parse_showrequest(matches: &ArgMatches) -> anyhow::Result<theseus::ShowRequest> {
+fn parse_show_request(matches: &ArgMatches) -> anyhow::Result<theseus::ShowRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::ShowRequest {
         method: arg("method").unwrap_or_default(),
     })
 }
 
-fn parse_calcrequest(matches: &ArgMatches) -> anyhow::Result<theseus::CalcRequest> {
+fn parse_calc_request(matches: &ArgMatches) -> anyhow::Result<theseus::CalcRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::CalcRequest {
         op: arg("op").unwrap_or_default(),
@@ -211,15 +211,15 @@ impl Invocation {
             Some(("model", _)) => Ok(Invocation::Model),
             Some(("verify", _)) => Ok(Invocation::Verify),
             Some(("generate", _)) => Ok(Invocation::Generate),
-            Some(("query", sub)) => Ok(Invocation::Query(parse_queryrequest(sub)?)),
-            Some(("patch", sub)) => Ok(Invocation::Patch(parse_patchrequest(sub)?)),
+            Some(("query", sub)) => Ok(Invocation::Query(parse_query_request(sub)?)),
+            Some(("patch", sub)) => Ok(Invocation::Patch(parse_patch_request(sub)?)),
             Some(("coverage", _)) => Ok(Invocation::Coverage),
             Some(("implement", sub)) => {
-                Ok(Invocation::Implement(parse_implementrequest(sub)?))
+                Ok(Invocation::Implement(parse_implement_request(sub)?))
             }
-            Some(("show", sub)) => Ok(Invocation::Show(parse_showrequest(sub)?)),
+            Some(("show", sub)) => Ok(Invocation::Show(parse_show_request(sub)?)),
             Some(("check", _)) => Ok(Invocation::Check),
-            Some(("calc", sub)) => Ok(Invocation::Calc(parse_calcrequest(sub)?)),
+            Some(("calc", sub)) => Ok(Invocation::Calc(parse_calc_request(sub)?)),
             Some(("scaffold", _)) => Ok(Invocation::Scaffold),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }

@@ -37,6 +37,7 @@ use theseus_kernel::{Category, CategoryBuilder, FunctorBuilder};
 
 use crate::{
     codegen::GeneratedFile,
+    label::container_inner,
     model::{Model, TypeShape},
 };
 
@@ -279,7 +280,12 @@ fn check_type_references(model: &Model) -> Result<String, String> {
                 referenced.extend(fields.iter().map(|field| field.ty.as_str()))
             }
             TypeShape::Newtype(inner) => referenced.push(inner),
-            TypeShape::Enum { .. } | TypeShape::Foreign(_) => {}
+            TypeShape::Enum { variants, .. } => {
+                for variant in variants {
+                    referenced.extend(variant.fields.iter().map(|field| field.ty.as_str()));
+                }
+            }
+            TypeShape::Foreign(_) => {}
         }
     }
 
@@ -311,14 +317,6 @@ fn type_label_resolves(label: &str, defined: &BTreeSet<&str>) -> bool {
         return type_label_resolves(inner, defined);
     }
     defined.contains(label)
-}
-
-/// The element type of an `Option<…>` or `Vec<…>` label, when the label is one.
-fn container_inner(label: &str) -> Option<&str> {
-    label
-        .strip_prefix("Option<")
-        .or_else(|| label.strip_prefix("Vec<"))
-        .and_then(|rest| rest.strip_suffix('>'))
 }
 
 /// The type labels a model may use without defining them: the unit marker, and

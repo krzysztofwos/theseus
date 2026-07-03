@@ -197,7 +197,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
     ]
 }
 
-fn parse_queryrequest_input(input: &serde_json::Value) -> anyhow::Result<QueryRequest> {
+fn parse_query_request_input(input: &serde_json::Value) -> anyhow::Result<QueryRequest> {
     Ok(QueryRequest {
         find: serde_json::from_value(
                 input.get("find").cloned().unwrap_or(serde_json::Value::Null),
@@ -214,7 +214,7 @@ fn parse_queryrequest_input(input: &serde_json::Value) -> anyhow::Result<QueryRe
     })
 }
 
-fn parse_patchrequest_input(input: &serde_json::Value) -> anyhow::Result<PatchRequest> {
+fn parse_patch_request_input(input: &serde_json::Value) -> anyhow::Result<PatchRequest> {
     Ok(PatchRequest {
         edit: match input.get("edit") {
             None => Default::default(),
@@ -232,7 +232,7 @@ fn parse_patchrequest_input(input: &serde_json::Value) -> anyhow::Result<PatchRe
     })
 }
 
-fn parse_implementrequest_input(
+fn parse_implement_request_input(
     input: &serde_json::Value,
 ) -> anyhow::Result<ImplementRequest> {
     Ok(ImplementRequest {
@@ -249,7 +249,7 @@ fn parse_implementrequest_input(
     })
 }
 
-fn parse_showrequest_input(input: &serde_json::Value) -> anyhow::Result<ShowRequest> {
+fn parse_show_request_input(input: &serde_json::Value) -> anyhow::Result<ShowRequest> {
     Ok(ShowRequest {
         method: input
             .get("method")
@@ -274,20 +274,22 @@ pub async fn dispatch_tool(
         "query" => {
             Ok(
                 serde_json::to_string(
-                    &service.query(parse_queryrequest_input(input)?).await?,
+                    &service.query(parse_query_request_input(input)?).await?,
                 )?,
             )
         }
         "patch" => {
             Ok(
                 serde_json::to_string(
-                    &service.patch(parse_patchrequest_input(input)?).await?,
+                    &service.patch(parse_patch_request_input(input)?).await?,
                 )?,
             )
         }
         "coverage" => Ok(serde_json::to_string(&service.coverage().await?)?),
-        "implement" => Ok(service.implement(parse_implementrequest_input(input)?).await?),
-        "show" => Ok(service.show(parse_showrequest_input(input)?).await?),
+        "implement" => {
+            Ok(service.implement(parse_implement_request_input(input)?).await?)
+        }
+        "show" => Ok(service.show(parse_show_request_input(input)?).await?),
         "check" => Ok(service.check().await?),
         other => {
             anyhow::bail!(

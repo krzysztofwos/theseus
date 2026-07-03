@@ -30,6 +30,21 @@ pub fn adapter_impl_path(model: &Model, service: &Service) -> String {
     format!("rust/{}/src/lib.rs", crate_dir(model, service))
 }
 
+/// The authored adapters file of an inbound's interior ports: the `adapters.rs`
+/// of the crate that hosts the inbound.
+pub fn inbound_adapter_impl_path(model: &Model, inbound: &theseus_modeling::Inbound) -> String {
+    let dir = model
+        .crate_named(&inbound.crate_name)
+        .map(|node| node.dir.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "inbound `{}` names unknown crate `{}`",
+                inbound.name, inbound.crate_name
+            )
+        });
+    format!("rust/{dir}/src/adapters.rs")
+}
+
 /// The authored impl path of every service, paired with the service name.
 pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
     model

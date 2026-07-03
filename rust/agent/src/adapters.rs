@@ -1,9 +1,12 @@
-//! The Anthropic model adapter: drives the agent loop with a real model over the
-//! Messages API, behind the agent's [`Llm`] port.
+//! The [`Llm`] port's authored adapters: the Anthropic model adapter and the
+//! offline stub.
 //!
-//! It renders the conversation and the tool catalog into a `/v1/messages` request
-//! and reads the reply's content blocks back into [`Reply`] — text and the native
-//! `tool_use` blocks the loop dispatches.
+//! The Anthropic adapter drives the agent loop with a real model over the
+//! Messages API — it renders the conversation and the tool catalog into a
+//! `/v1/messages` request and reads the reply's content blocks back into
+//! [`Reply`], text and the native `tool_use` blocks the loop dispatches. The
+//! offline stub replays a scripted conversation, so the loop runs with no
+//! network.
 
 use anyhow::Context;
 use serde_json::{Value, json};
@@ -128,4 +131,30 @@ fn string_field(block: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+/// A model that replays a fixed script of replies, ignoring the conversation, so
+/// the loop runs with no network. The offline stub for the binary and tests.
+pub struct OfflineLlm {
+    replies: std::sync::Mutex<std::collections::VecDeque<Reply>>,
+}
+
+impl OfflineLlm {
+    pub fn new(replies: impl IntoIterator<Item = Reply>) -> Self {
+        Self {
+            replies: std::sync::Mutex::new(replies.into_iter().collect()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Llm for OfflineLlm {
+    async fn complete(&self, _request: &Turn) -> anyhow::Result<Reply> {
+        use anyhow::Context;
+        self.replies
+            .lock()
+            .expect("the offline script lock is not poisoned")
+            .pop_front()
+            .context("the offline model ran out of replies")
+    }
 }

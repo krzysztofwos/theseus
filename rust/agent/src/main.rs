@@ -11,17 +11,16 @@
 //! `--resume`. A failed rebuild feeds the compiler's output back into the running
 //! loop instead, so the model can repair the workspace from the old binary.
 
+mod adapters;
 mod agent;
-mod anthropic;
 mod generated;
 
 use std::{path::PathBuf, process::Command};
 
+use adapters::{AnthropicLlm, OfflineLlm};
 use agent::{
-    Message, OfflineLlm, Outcome, Reply, answer_restart, load_transcript, opening, run_agent,
-    save_transcript,
+    Message, Outcome, Reply, answer_restart, load_transcript, opening, run_agent, save_transcript,
 };
-use anthropic::AnthropicLlm;
 use generated::Llm;
 use theseus::{CargoToolchain, FsWorkspace, Session, workspace_root};
 use theseus_model::theseus_model;

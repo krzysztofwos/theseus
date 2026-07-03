@@ -10,6 +10,7 @@
 use anyhow::Context;
 use theseus_model::{
     adapter_impl_path, authored_impl_path, authored_impls, crate_is_scaffolded, generated_files,
+    inbound_adapter_impl_path,
 };
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
@@ -235,10 +236,13 @@ pub(crate) fn apply_patch(
 /// The authored adapters file holding the impls for `port`: the `lib.rs` of the
 /// crate whose service carries the port.
 pub(crate) fn adapter_path(model: &Model, port: &str) -> anyhow::Result<String> {
-    let service = model
-        .service_of_port(port)
+    if let Some(service) = model.service_of_port(port) {
+        return Ok(adapter_impl_path(model, service));
+    }
+    let inbound = model
+        .inbound_of_port(port)
         .with_context(|| format!("no port named `{port}`"))?;
-    Ok(adapter_impl_path(model, service))
+    Ok(inbound_adapter_impl_path(model, inbound))
 }
 
 /// The authored impl file holding the handler for `method`: the `service.rs` of
@@ -478,6 +482,27 @@ mod tests {
         assert!(
             result.contains("cargo"),
             "the authored adapter body should appear: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_show_tool_reads_an_inbound_interior_adapter() {
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call(
+            "show",
+            &serde_json::json!({ "method": "complete", "port": "llm", "adapter": "OfflineLlm" }),
+        )
+        .await
+        .expect("the show tool reads the interior adapter");
+        assert!(
+            result.contains("async fn complete"),
+            "the adapter source should appear: {result}"
         );
     }
 

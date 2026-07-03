@@ -241,32 +241,6 @@ pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Resu
     Ok(messages)
 }
 
-/// A model that replays a fixed script of replies, ignoring the conversation, so
-/// the loop runs with no network. The offline stub for the binary and tests.
-pub struct OfflineLlm {
-    replies: std::sync::Mutex<std::collections::VecDeque<Reply>>,
-}
-
-impl OfflineLlm {
-    pub fn new(replies: impl IntoIterator<Item = Reply>) -> Self {
-        Self {
-            replies: std::sync::Mutex::new(replies.into_iter().collect()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl Llm for OfflineLlm {
-    async fn complete(&self, _request: &Turn) -> anyhow::Result<Reply> {
-        use anyhow::Context;
-        self.replies
-            .lock()
-            .expect("the offline script lock is not poisoned")
-            .pop_front()
-            .context("the offline model ran out of replies")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -275,6 +249,7 @@ mod tests {
     use theseus_modeling::GeneratedFile;
 
     use super::*;
+    use crate::adapters::OfflineLlm;
 
     /// A workspace that writes nowhere. The loop's read-only tools never reach it.
     struct NoopWorkspace;

@@ -1,21 +1,22 @@
-//! Handler bodies: read and write the authored operation handlers.
+//! Authored bodies: read and write the handlers and adapter methods.
 //!
-//! [`handler_source`] returns an operation's current handler text. [`implement`]
-//! renders the handler signature from the model, wraps a caller body, and writes
-//! the method into the source implementing the service trait — inserting it when
-//! the operation is on its `unimplemented` default, replacing it in place when a
-//! handler is already there. The signature carries absolute paths, so the written
-//! method needs no imports. Both locate a method by its exact source span, so the
-//! rest of the authored file is preserved byte for byte.
+//! [`handler_source`] returns an operation's current handler text and
+//! [`implement`] writes one into the source implementing the service trait.
+//! [`adapter_source`] and [`implement_adapter`] do the same for a port method's
+//! adapter — the impl of the port's trait in the crate's authored adapters
+//! file, named by adapter when the file holds more than one. Every signature
+//! renders from the model with absolute paths, so a written method needs no
+//! imports, and every method is located by its exact source span, so the rest
+//! of the authored file is preserved byte for byte.
 
 use std::ops::Range;
 
 use syn::spanned::Spanned;
 
 use crate::{
-    codegen::handler_signature,
+    codegen::{adapter_signature, handler_signature, pascal_case},
     coverage::service_trait_name,
-    model::{Model, Operation, Service},
+    model::{Method, Model, Operation, Port, Service},
 };
 
 /// Why a handler could not be read or written.
@@ -30,6 +31,207 @@ pub enum ImplementError {
     /// The authored impl did not parse as Rust.
     #[error("parsing the authored impl: {0}")]
     Parse(String),
+    /// The model has no port by that name.
+    #[error("no port named `{0}`")]
+    UnknownPort(String),
+    /// The port has no method by that name.
+    #[error("port `{port}` has no method named `{method}`")]
+    UnknownPortMethod { port: String, method: String },
+    /// The authored file holds more than one adapter for the port's trait.
+    #[error("adapters {adapters} implement `{trait_name}` here; name one with `adapter`")]
+    AmbiguousAdapter {
+        trait_name: String,
+        adapters: String,
+    },
+    /// The named adapter does not implement the port's trait in the file.
+    #[error("no adapter `{adapter}` implements `{trait_name}` in the authored file")]
+    UnknownAdapter { trait_name: String, adapter: String },
+}
+
+/// The current adapter method text for a port method: the authored method when
+/// one exists, otherwise the signature it would have, marked as falling through
+/// to the trait default. `adapter` names the implementing type when the file
+/// holds more than one adapter for the port's trait.
+pub fn adapter_source(
+    model: &Model,
+    impl_source: &str,
+    port_name: &str,
+    method_name: &str,
+    adapter: Option<&str>,
+) -> Result<String, ImplementError> {
+    let (port, method) = locate_port_method(model, port_name, method_name)?;
+    let trait_name = pascal_case(&port.name);
+    let target = choose_adapter(impl_source, &trait_name, method_name, adapter)?;
+    match target.method {
+        Some(range) => Ok(impl_source[range].to_string()),
+        None => {
+            let signature = adapter_signature(method, model, "");
+            Ok(format!(
+                "{signature} {{
+    // unimplemented — falls through to the trait default
+}}"
+            ))
+        }
+    }
+}
+
+/// Write an adapter method for a port into `impl_source`, returning the new
+/// source. The method is inserted when the adapter leaves it on the trait
+/// default and replaced in place when it is authored. `adapter` names the
+/// implementing type when the file holds more than one adapter for the port's
+/// trait, and `request_path` prefixes the model's own types so the written
+/// method compiles without imports.
+pub fn implement_adapter(
+    model: &Model,
+    impl_source: &str,
+    port_name: &str,
+    method_name: &str,
+    adapter: Option<&str>,
+    body: &str,
+    request_path: &str,
+) -> Result<String, ImplementError> {
+    let (port, method) = locate_port_method(model, port_name, method_name)?;
+    let trait_name = pascal_case(&port.name);
+    let signature = adapter_signature(method, model, request_path);
+    let target = choose_adapter(impl_source, &trait_name, method_name, adapter)?;
+    match target.method {
+        Some(range) => {
+            let method = format!(
+                "{signature} {{
+{body}
+    }}"
+            );
+            let mut out = String::with_capacity(impl_source.len() + method.len());
+            out.push_str(&impl_source[..range.start]);
+            out.push_str(&method);
+            out.push_str(&impl_source[range.end..]);
+            Ok(out)
+        }
+        None => {
+            let method = format!(
+                "
+    {signature} {{
+{body}
+    }}
+"
+            );
+            let mut out = String::with_capacity(impl_source.len() + method.len());
+            out.push_str(&impl_source[..target.body_start]);
+            out.push_str(&method);
+            out.push_str(&impl_source[target.body_start..]);
+            Ok(out)
+        }
+    }
+}
+
+/// The port and method a `port.method` pair resolves to.
+fn locate_port_method<'a>(
+    model: &'a Model,
+    port_name: &str,
+    method_name: &str,
+) -> Result<(&'a Port, &'a Method), ImplementError> {
+    let port = model
+        .services
+        .iter()
+        .flat_map(|service| service.outbound.iter())
+        .find(|port| port.name == port_name)
+        .ok_or_else(|| ImplementError::UnknownPort(port_name.to_string()))?;
+    let method = port
+        .methods
+        .iter()
+        .find(|method| method.name == method_name)
+        .ok_or_else(|| ImplementError::UnknownPortMethod {
+            port: port_name.to_string(),
+            method: method_name.to_string(),
+        })?;
+    Ok((port, method))
+}
+
+/// One adapter impl of a port's trait: the implementing type's name, the
+/// position just inside its opening brace, and the target method's span when
+/// the adapter authors it.
+struct AdapterImpl {
+    self_type: String,
+    body_start: usize,
+    method: Option<Range<usize>>,
+}
+
+/// The adapter impl a splice targets: the named one, or the only one.
+fn choose_adapter(
+    source: &str,
+    trait_name: &str,
+    method: &str,
+    adapter: Option<&str>,
+) -> Result<AdapterImpl, ImplementError> {
+    let mut impls = adapter_impls(source, trait_name, method)?;
+    match adapter {
+        Some(name) => impls
+            .into_iter()
+            .find(|block| block.self_type == name)
+            .ok_or_else(|| ImplementError::UnknownAdapter {
+                trait_name: trait_name.to_string(),
+                adapter: name.to_string(),
+            }),
+        None => match impls.len() {
+            0 => Err(ImplementError::NoImplBlock(trait_name.to_string())),
+            1 => Ok(impls.remove(0)),
+            _ => Err(ImplementError::AmbiguousAdapter {
+                trait_name: trait_name.to_string(),
+                adapters: impls
+                    .iter()
+                    .map(|block| block.self_type.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }),
+        },
+    }
+}
+
+/// Every impl of `trait_name` in `source`, with the `method` span each authors.
+fn adapter_impls(
+    source: &str,
+    trait_name: &str,
+    method: &str,
+) -> Result<Vec<AdapterImpl>, ImplementError> {
+    let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
+    let mut impls = Vec::new();
+    for item in &file.items {
+        let syn::Item::Impl(block) = item else {
+            continue;
+        };
+        let names_the_trait = block
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| path.segments.last())
+            .is_some_and(|segment| segment.ident == trait_name);
+        if !names_the_trait {
+            continue;
+        }
+        let self_type = match block.self_ty.as_ref() {
+            syn::Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default(),
+            other => quote::quote!(#other).to_string(),
+        };
+        let found = block.items.iter().find_map(|impl_item| {
+            if let syn::ImplItem::Fn(function) = impl_item
+                && function.sig.ident == method
+            {
+                Some(function.span().byte_range())
+            } else {
+                None
+            }
+        });
+        impls.push(AdapterImpl {
+            self_type,
+            body_start: block.brace_token.span.open().byte_range().end,
+            method: found,
+        });
+    }
+    Ok(impls)
 }
 
 /// The current handler text for `op_name`: the authored method when one exists,
@@ -219,6 +421,106 @@ mod tests {
             handler_source(&sample_model(), IMPL, "nope").unwrap_err(),
             ImplementError::UnknownOperation(_)
         ));
+    }
+
+    /// Two adapters of the `store` port's trait, one method authored in each.
+    const ADAPTERS: &str = "#[async_trait::async_trait]\nimpl Store for FsStore {\n    async fn read(&self) -> anyhow::Result<String> {\n        Ok(String::new())\n    }\n}\n\n#[async_trait::async_trait]\nimpl Store for NoopStore {\n    async fn read(&self) -> anyhow::Result<String> {\n        Ok(String::new())\n    }\n}\n";
+
+    /// The sample model with two methods on its `store` port.
+    fn port_model() -> Model {
+        let mut model = sample_model();
+        let port = &mut model.services[0].outbound[0];
+        port.methods.push(crate::model::Method {
+            name: "read".to_string(),
+            summary: "Read.".to_string(),
+            request: "Empty".to_string(),
+            response: "String".to_string(),
+        });
+        port.methods.push(crate::model::Method {
+            name: "write".to_string(),
+            summary: "Write.".to_string(),
+            request: "String".to_string(),
+            response: "Empty".to_string(),
+        });
+        model
+    }
+
+    #[test]
+    fn an_adapter_method_replaces_in_the_named_adapter() {
+        let out = implement_adapter(
+            &port_model(),
+            ADAPTERS,
+            "store",
+            "read",
+            Some("NoopStore"),
+            "        todo!(\"noop\")",
+            "crate::generated::",
+        )
+        .unwrap();
+        assert!(parses(&out), "{out}");
+        // The named adapter changed and the other kept its body.
+        let fs_at = out.find("impl Store for FsStore").unwrap();
+        let noop_at = out.find("impl Store for NoopStore").unwrap();
+        assert!(out[noop_at..].contains("todo!(\"noop\")"));
+        assert!(out[fs_at..noop_at].contains("Ok(String::new())"));
+    }
+
+    #[test]
+    fn an_unauthored_adapter_method_is_inserted_with_its_signature() {
+        let out = implement_adapter(
+            &port_model(),
+            ADAPTERS,
+            "store",
+            "write",
+            Some("FsStore"),
+            "        Ok(())",
+            "crate::generated::",
+        )
+        .unwrap();
+        assert!(parses(&out), "{out}");
+        assert!(out.contains("async fn write(&self, request: &str) -> anyhow::Result<()>"));
+    }
+
+    #[test]
+    fn two_adapters_need_a_name() {
+        let error = implement_adapter(
+            &port_model(),
+            ADAPTERS,
+            "store",
+            "read",
+            None,
+            "        Ok(String::new())",
+            "",
+        )
+        .unwrap_err();
+        assert!(matches!(error, ImplementError::AmbiguousAdapter { .. }));
+        assert!(error.to_string().contains("FsStore, NoopStore"), "{error}");
+    }
+
+    #[test]
+    fn adapter_lookups_are_refused_with_the_reason() {
+        let model = port_model();
+        assert!(matches!(
+            implement_adapter(&model, ADAPTERS, "nope", "read", None, "", "").unwrap_err(),
+            ImplementError::UnknownPort(_)
+        ));
+        assert!(matches!(
+            implement_adapter(&model, ADAPTERS, "store", "nope", None, "", "").unwrap_err(),
+            ImplementError::UnknownPortMethod { .. }
+        ));
+        assert!(matches!(
+            implement_adapter(&model, ADAPTERS, "store", "read", Some("Ghost"), "", "")
+                .unwrap_err(),
+            ImplementError::UnknownAdapter { .. }
+        ));
+    }
+
+    #[test]
+    fn views_an_unauthored_adapter_method_as_its_signature() {
+        let view =
+            adapter_source(&port_model(), ADAPTERS, "store", "write", Some("FsStore")).unwrap();
+        assert!(view.contains("async fn write(&self, request: &str)"));
+        assert!(view.contains("falls through to the trait default"));
     }
 
     #[test]

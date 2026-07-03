@@ -24,7 +24,7 @@ mod test_support;
 pub use codegen::{GeneratedFile, render_cli_module, render_module_for_crate, render_proto};
 pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use hash::model_hash;
-pub use implement::{ImplementError, handler_source, implement};
+pub use implement::{ImplementError, adapter_source, handler_source, implement, implement_adapter};
 pub use model::{
     Client, CrateNode, Field, Method, Model, Operation, Port, Service, Transport, TypeDef,
     TypeShape, Variant,

@@ -76,6 +76,13 @@ impl Model {
         self.operations().into_iter().find(|op| op.name == name)
     }
 
+    /// The service whose outbound ports include `port`.
+    pub fn service_of_port(&self, port: &str) -> Option<&Service> {
+        self.services
+            .iter()
+            .find(|service| service.outbound.iter().any(|p| p.name == port))
+    }
+
     /// Look up a service by name.
     pub fn service_named(&self, name: &str) -> Option<&Service> {
         self.services.iter().find(|service| service.name == name)

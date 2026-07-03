@@ -2148,6 +2148,7 @@ dependencies = [
 name = "theseus-model"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "theseus-modeling",
 ]
 

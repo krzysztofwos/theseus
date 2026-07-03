@@ -88,6 +88,7 @@ impl Toolchain for CargoToolchain {
         let output = tokio::process::Command::new("cargo")
             .args(["check", "--workspace", "--quiet"])
             .current_dir(workspace_root())
+            .kill_on_drop(true)
             .output()
             .await
             .context("running `cargo check --workspace`")?;
@@ -112,7 +113,7 @@ impl Toolchain for CargoToolchain {
 /// The head of a diagnostic stream, capped so the report stays readable as a
 /// tool result. The first diagnostics carry the signal, so the cap keeps the
 /// head and counts what it drops.
-fn head(diagnostics: &str) -> String {
+pub fn head(diagnostics: &str) -> String {
     const CAP: usize = 8_000;
     match diagnostics.char_indices().nth(CAP) {
         None => diagnostics.to_string(),

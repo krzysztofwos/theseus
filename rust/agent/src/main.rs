@@ -72,7 +72,7 @@ async fn drive(
     loop {
         match run_agent(llm, session, messages).await? {
             Outcome::Answered(text) => return Ok(text),
-            Outcome::Restart(transcript) => match rebuild() {
+            Outcome::Restart(transcript) => match rebuild().await {
                 Ok(()) => {
                     save_transcript(&session_path(), &transcript)?;
                     return Err(resume_exec(allow_writes));
@@ -87,18 +87,20 @@ async fn drive(
 }
 
 /// Build the agent and its dependency graph, returning the compiler's output on
-/// failure.
-fn rebuild() -> Result<(), String> {
-    let output = Command::new("cargo")
+/// failure. The child dies with a dropped future.
+async fn rebuild() -> Result<(), String> {
+    let output = tokio::process::Command::new("cargo")
         .args(["build", "-p", "theseus-agent"])
         .current_dir(workspace_root())
+        .kill_on_drop(true)
         .output()
+        .await
         .map_err(|error| format!("running `cargo build`: {error}"))?;
     if output.status.success() {
         return Ok(());
     }
     let diagnostics = String::from_utf8_lossy(&output.stderr);
-    Err(head(diagnostics.trim()))
+    Err(theseus::head(diagnostics.trim()))
 }
 
 /// Replace this process with a fresh run of the agent, resuming the persisted
@@ -117,19 +119,6 @@ fn resume_exec(allow_writes: bool) -> anyhow::Error {
 /// The persisted transcript's path, in the workspace's scratch directory.
 fn session_path() -> PathBuf {
     workspace_root().join(".theseus/session.json")
-}
-
-/// The head of a diagnostic stream, capped so the tool result stays readable.
-fn head(diagnostics: &str) -> String {
-    const CAP: usize = 8_000;
-    match diagnostics.char_indices().nth(CAP) {
-        None => diagnostics.to_string(),
-        Some((byte, _)) => format!(
-            "{}\n… truncated ({} more bytes)",
-            &diagnostics[..byte],
-            diagnostics.len() - byte
-        ),
-    }
 }
 
 /// How the agent starts: a fresh conversation over a message, or a resumed one

@@ -8,7 +8,10 @@
 use anyhow::Context;
 use serde_json::{Value, json};
 
-use crate::agent::{Block, Llm, Message, Reply, Role, ToolUse};
+use crate::{
+    agent::{Block, Message, Reply, Role, ToolUse},
+    generated::{Llm, Turn},
+};
 
 /// A model backed by the Anthropic Messages API, configured from the environment.
 pub struct AnthropicLlm {
@@ -36,19 +39,15 @@ impl AnthropicLlm {
     }
 }
 
+#[async_trait::async_trait]
 impl Llm for AnthropicLlm {
-    async fn complete(
-        &self,
-        system: &str,
-        messages: &[Message],
-        tools: &[Value],
-    ) -> anyhow::Result<Reply> {
+    async fn complete(&self, request: &Turn) -> anyhow::Result<Reply> {
         let body = json!({
             "model": self.model,
             "max_tokens": 4096,
-            "system": system,
-            "tools": tools,
-            "messages": messages.iter().map(api_message).collect::<Vec<_>>(),
+            "system": request.system,
+            "tools": request.tools,
+            "messages": request.messages.iter().map(api_message).collect::<Vec<_>>(),
         });
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         let response = self

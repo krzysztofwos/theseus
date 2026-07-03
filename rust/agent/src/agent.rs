@@ -3,8 +3,9 @@
 //! Each turn the model is handed the conversation and the tool catalog. It either
 //! calls tools — run against the session, their results fed back — or answers and
 //! ends. The session holds the working model, so the model sees its own edits. The
-//! [`Llm`] port is the only thing the offline stub and a real model adapter differ
-//! on; the same loop drives both.
+//! generated [`Llm`] port is the only thing the offline stub and a real model
+//! adapter differ on; the same loop drives both, for as many turns as the modeled
+//! [`TURN_BUDGET`] allows.
 //!
 //! One tool belongs to the loop, not the session: [`RESTART_TOOL`]. A solo call
 //! ends the run as [`Outcome::Restart`], and the caller rebuilds the binary and
@@ -12,16 +13,14 @@
 //! thing the edits changed, so re-entry is the loop's own affordance, the way an
 //! external host restarts the MCP server.
 
-use std::{future::Future, path::Path};
+use std::path::Path;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use theseus::Session;
 
-/// The most turns the loop runs before giving up. Generous enough that a few
-/// exploratory tool calls do not exhaust the budget before the model can answer.
-const MAX_TURNS: usize = 32;
+use crate::generated::{Llm, TURN_BUDGET, Turn};
 
 /// The framing handed to the model.
 const SYSTEM: &str = "You are Theseus, a self-modeling tool. Inspect and edit your \
@@ -54,7 +53,7 @@ pub struct ToolUse {
 }
 
 /// The author of a conversation message.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Role {
     User,
     Assistant,
@@ -62,7 +61,7 @@ pub enum Role {
 
 /// A content block within a message. A model adapter reads these to build its API
 /// request.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Block {
     Text(String),
     ToolUse(ToolUse),
@@ -75,7 +74,7 @@ pub enum Block {
 /// A message in the running conversation. A model adapter reads it to build its
 /// API request. The transcript — the message list — serializes as JSON, so a
 /// session survives the rebuild that a restart runs.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub blocks: Vec<Block>,
@@ -102,6 +101,7 @@ pub enum Outcome {
 
 /// The model's reply to one turn: any text it wrote, and the tools it wants to run.
 /// An empty `tool_uses` means the model is done and `text` is the final answer.
+#[derive(Clone, Debug)]
 pub struct Reply {
     pub text: String,
     pub tool_uses: Vec<ToolUse>,
@@ -117,17 +117,6 @@ impl Reply {
     }
 }
 
-/// The model port: complete one turn from the conversation and the tool catalog.
-/// The agent's offline stub and a real model adapter both implement it.
-pub trait Llm {
-    fn complete(
-        &self,
-        system: &str,
-        messages: &[Message],
-        tools: &[Value],
-    ) -> impl Future<Output = anyhow::Result<Reply>>;
-}
-
 /// Run the agent loop: the model calls tools against `session` until it answers
 /// or asks to restart. The transcript starts from [`opening`] on a fresh run, or
 /// from a persisted session passed through [`answer_restart`] on a resumed one.
@@ -141,8 +130,13 @@ pub async fn run_agent(
     // `AGENT_TRACE` set in the environment streams each turn's tool calls and
     // results to stderr, so a run can be watched without touching the answer.
     let trace = std::env::var("AGENT_TRACE").is_ok();
-    for turn in 1..=MAX_TURNS {
-        let reply = llm.complete(SYSTEM, &messages, &tools).await?;
+    for turn in 1..=TURN_BUDGET {
+        let request = Turn {
+            system: SYSTEM.to_string(),
+            messages: messages.clone(),
+            tools: tools.clone(),
+        };
+        let reply = llm.complete(&request).await?;
         if trace && !reply.text.is_empty() {
             eprintln!("[turn {turn}] say: {}", reply.text);
         }
@@ -204,7 +198,7 @@ other calls, then call it alone"
             blocks: results,
         });
     }
-    anyhow::bail!("the agent did not finish within {MAX_TURNS} turns")
+    anyhow::bail!("the agent did not finish within {TURN_BUDGET} turns")
 }
 
 /// Write the transcript as JSON, creating its directory.
@@ -261,13 +255,9 @@ impl OfflineLlm {
     }
 }
 
+#[async_trait::async_trait]
 impl Llm for OfflineLlm {
-    async fn complete(
-        &self,
-        _system: &str,
-        _messages: &[Message],
-        _tools: &[Value],
-    ) -> anyhow::Result<Reply> {
+    async fn complete(&self, _request: &Turn) -> anyhow::Result<Reply> {
         use anyhow::Context;
         self.replies
             .lock()

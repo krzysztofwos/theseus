@@ -83,9 +83,11 @@ const SELF_MODEL_HEADER: &str = concat!(
 pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
-    // Every crate that hosts a service, a CLI, HTTP, or gRPC inbound, or a
-    // client adapter gets a generated file. An agent or MCP inbound drives the
-    // tool surface rendered with its service's crate, so its own crate gets none.
+    // Every crate that hosts a service, a CLI, HTTP, or gRPC inbound, an inbound
+    // with an interior of its own — a loop's ports or turn budget — or a client
+    // adapter gets a generated file. An agent or MCP inbound with no interior
+    // drives the tool surface rendered with its service's crate, so its own
+    // crate gets none.
     let hosting = model
         .services
         .iter()
@@ -98,7 +100,8 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
                     matches!(
                         inbound.transport,
                         Transport::Cli | Transport::Http | Transport::Grpc
-                    )
+                    ) || !inbound.outbound.is_empty()
+                        || inbound.turns.is_some()
                 })
                 .map(|inbound| inbound.crate_name.as_str()),
         )

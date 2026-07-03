@@ -152,6 +152,17 @@ pub fn theseus_model() -> Model {
                 ("write", "bool", "Apply the edit by reprojecting the model."),
             ],
         )
+        .foreign_type("Transcript", "Vec<crate::agent::Message>")
+        .foreign_type("ToolCatalog", "Vec<serde_json::Value>")
+        .foreign_type("Reply", "crate::agent::Reply")
+        .struct_type(
+            "Turn",
+            &[
+                ("system", "String", "The framing handed to the model."),
+                ("messages", "Transcript", "The conversation so far."),
+                ("tools", "ToolCatalog", "The tool catalog the model may call."),
+            ],
+        )
         .foreign_type("ModelDocument", "String")
         .foreign_type("VerifyReport", "theseus_modeling::VerifyReport")
         .foreign_type("GeneratedFiles", "Vec<theseus_modeling::GeneratedFile>")
@@ -373,6 +384,16 @@ pub fn theseus_model() -> Model {
         )
         .inbound("theseus", Transport::Cli, "Theseus", "theseus-cli")
         .inbound("agent", Transport::Agent, "Theseus", "theseus-agent")
+        .turns(32)
+        .inbound_port(
+            Port::new("llm", "Completes one turn of the conversation.")
+                .method(
+                    "complete",
+                    "Complete one turn from the transcript and the tool catalog.",
+                    "Turn",
+                    "Reply",
+                ),
+        )
         .inbound("mcp", Transport::Mcp, "Theseus", "theseus-mcp")
         .inbound("http", Transport::Http, "Theseus", "theseus-http")
         .inbound("grpc", Transport::Grpc, "Theseus", "theseus-grpc")

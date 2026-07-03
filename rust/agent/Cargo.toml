@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,6 +20,3 @@ theseus = { path = "../theseus" }
 theseus-calculator = { path = "../calculator" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }
-
-[dev-dependencies]
-async-trait = { workspace = true }

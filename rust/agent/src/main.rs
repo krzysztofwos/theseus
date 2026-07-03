@@ -13,14 +13,16 @@
 
 mod agent;
 mod anthropic;
+mod generated;
 
 use std::{path::PathBuf, process::Command};
 
 use agent::{
-    Llm, Message, OfflineLlm, Outcome, Reply, answer_restart, load_transcript, opening, run_agent,
+    Message, OfflineLlm, Outcome, Reply, answer_restart, load_transcript, opening, run_agent,
     save_transcript,
 };
 use anthropic::AnthropicLlm;
+use generated::Llm;
 use theseus::{CargoToolchain, FsWorkspace, Session, workspace_root};
 use theseus_model::theseus_model;
 

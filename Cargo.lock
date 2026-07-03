@@ -2020,6 +2020,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-calculator-grpc-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "prost",
+ "protox",
+ "serde",
+ "serde_json",
+ "theseus-calculator",
+ "theseus-calculator-grpc",
+ "theseus-modeling",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "theseus-cli"
 version = "0.1.0"
 dependencies = [
@@ -2028,6 +2048,8 @@ dependencies = [
  "serde_json",
  "theseus",
  "theseus-calculator",
+ "theseus-calculator-grpc-client",
+ "theseus-http-client",
  "theseus-model",
  "theseus-modeling",
  "tokio",

@@ -600,10 +600,11 @@ fn render_tool_dispatch(
                 }
                 None => quote! { service.#method().await? },
             };
-            let render = if rust_type(&op.response, model) == "String" {
-                quote! { Ok(#call) }
-            } else {
-                quote! { Ok(serde_json::to_string(&#call)?) }
+            let render = match response_kind(op, model) {
+                ResponseKind::Text => quote! { Ok(#call) },
+                ResponseKind::Empty | ResponseKind::Json => {
+                    quote! { Ok(serde_json::to_string(&#call)?) }
+                }
             };
             quote! { #name => #render, }
         })
@@ -650,17 +651,8 @@ fn render_tool_dispatch(
 /// conversion is rendered with the dispatch, so the struct itself stays
 /// transport-neutral.
 fn render_tool_parsers(operations: &[&Operation], model: &Model) -> TokenStream {
-    let mut seen: Vec<&str> = Vec::new();
-    let parsers: Vec<TokenStream> = operations
-        .iter()
-        .filter_map(|op| request_type(op, model))
-        .filter(|def| {
-            let fresh = !seen.contains(&def.name.as_str());
-            if fresh {
-                seen.push(&def.name);
-            }
-            fresh
-        })
+    let parsers: Vec<TokenStream> = distinct_request_types(operations, model)
+        .into_iter()
         .map(|def| {
             let TypeShape::Struct(fields) = &def.shape else {
                 return quote! {};
@@ -724,25 +716,18 @@ fn tool_field_init(field: &Field) -> TokenStream {
 /// does not parse, 404 an unknown operation, 501 an operation with no authored
 /// handler, 403 a refused write, and 500 any other error.
 fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> TokenStream {
-    let prefix = service_path_prefix(inbound, service, model);
-    let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
-    let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
-    let refused_path = syn_type(&format!("{prefix}Refused"));
+    let ContractPaths {
+        prefix,
+        service_trait: trait_path,
+        unimplemented: unimplemented_path,
+        refused: refused_path,
+    } = contract_paths(&inbound.crate_name, service, model);
 
     // A parser per distinct request struct, building the request from the call's
     // JSON body — the same wire conversion the tool dispatch renders.
-    let mut seen: Vec<&str> = Vec::new();
-    let parsers: Vec<TokenStream> = service
-        .operations
-        .iter()
-        .filter_map(|op| request_type(op, model))
-        .filter(|def| {
-            let fresh = !seen.contains(&def.name.as_str());
-            if fresh {
-                seen.push(&def.name);
-            }
-            fresh
-        })
+    let operations: Vec<&Operation> = service.operations.iter().collect();
+    let parsers: Vec<TokenStream> = distinct_request_types(&operations, model)
+        .into_iter()
         .map(|def| {
             let TypeShape::Struct(fields) = &def.shape else {
                 return quote! {};
@@ -764,10 +749,9 @@ fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> To
         .map(|op| {
             let name = op.name.as_str();
             let method = format_ident!("{}", op.name);
-            let render = if rust_type(&op.response, model) == "String" {
-                format_ident!("reply_text")
-            } else {
-                format_ident!("reply_json")
+            let render = match response_kind(op, model) {
+                ResponseKind::Text => format_ident!("reply_text"),
+                ResponseKind::Empty | ResponseKind::Json => format_ident!("reply_json"),
             };
             match request_type(op, model) {
                 Some(def) => {
@@ -1144,10 +1128,12 @@ fn proto_type(label: &str, model: &Model) -> String {
 /// authored handler, PERMISSION_DENIED a refused write, INTERNAL any other
 /// error.
 fn render_grpc_module(inbound: &Inbound, service: &Service, model: &Model) -> TokenStream {
-    let prefix = service_path_prefix(inbound, service, model);
-    let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
-    let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
-    let refused_path = syn_type(&format!("{prefix}Refused"));
+    let ContractPaths {
+        prefix,
+        service_trait: trait_path,
+        unimplemented: unimplemented_path,
+        refused: refused_path,
+    } = contract_paths(&inbound.crate_name, service, model);
     let package = proto_package(model, service);
     let server_mod = format_ident!("{}_server", proto_snake_case(&service.name));
     let server_trait = format_ident!("{}", pascal_case(&service.name));
@@ -1181,18 +1167,20 @@ fn render_grpc_module(inbound: &Inbound, service: &Service, model: &Model) -> To
                 Some(_) => format_ident!("request"),
                 None => format_ident!("_request"),
             };
-            let respond = if op.response == "Empty" {
-                quote! { Ok(_) => Ok(tonic::Response::new(proto::#response_msg {})), }
-            } else if rust_type(&op.response, model) == "String" {
-                quote! { Ok(value) => Ok(tonic::Response::new(proto::#response_msg { value })), }
-            } else {
+            let respond = match response_kind(op, model) {
+                ResponseKind::Empty => {
+                    quote! { Ok(_) => Ok(tonic::Response::new(proto::#response_msg {})), }
+                }
+                ResponseKind::Text => {
+                    quote! { Ok(value) => Ok(tonic::Response::new(proto::#response_msg { value })), }
+                }
                 // A foreign-typed response carries its JSON rendering.
-                quote! {
+                ResponseKind::Json => quote! {
                     Ok(value) => match serde_json::to_string(&value) {
                         Ok(json) => Ok(tonic::Response::new(proto::#response_msg { json })),
                         Err(error) => Err(tonic::Status::internal(error.to_string())),
                     },
-                }
+                },
             };
             quote! {
                 async fn #method(
@@ -1364,10 +1352,12 @@ fn render_grpc_enum_conversions(service: &Service, model: &Model) -> TokenStream
 /// reply's status back onto the contract's error classes, so the classes the
 /// server mapped onto the wire survive the crossing back.
 fn render_http_client_module(client: &Client, service: &Service, model: &Model) -> TokenStream {
-    let prefix = host_path_prefix(&client.crate_name, service, model);
-    let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
-    let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
-    let refused_path = syn_type(&format!("{prefix}Refused"));
+    let ContractPaths {
+        prefix,
+        service_trait: trait_path,
+        unimplemented: unimplemented_path,
+        refused: refused_path,
+    } = contract_paths(&client.crate_name, service, model);
     let name = format_ident!("Http{}Client", pascal_case(&service.name));
 
     let methods: Vec<TokenStream> = service
@@ -1398,21 +1388,19 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
                 None => (quote! {}, quote! { serde_json::json!({}) }),
             };
             let response = response_type(&op.response, model);
-            let finish = if op.response == "Empty" {
-                quote! {
+            let finish = match response_kind(op, model) {
+                ResponseKind::Empty => quote! {
                     checked(#op_name, status, &body)?;
                     Ok(())
-                }
-            } else if rust_type(&op.response, model) == "String" {
-                quote! {
+                },
+                ResponseKind::Text => quote! {
                     checked(#op_name, status, &body)?;
                     Ok(body)
-                }
-            } else {
-                quote! {
+                },
+                ResponseKind::Json => quote! {
                     checked(#op_name, status, &body)?;
                     parsed(#op_name, &body)
-                }
+                },
             };
             quote! {
                 async fn #method(&self #param) -> anyhow::Result<#response> {
@@ -1490,10 +1478,12 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
 /// the wire's generated stub — each call converts its request to the proto
 /// message, and a status maps back onto the contract's error classes.
 fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) -> TokenStream {
-    let prefix = host_path_prefix(&client.crate_name, service, model);
-    let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
-    let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
-    let refused_path = syn_type(&format!("{prefix}Refused"));
+    let ContractPaths {
+        prefix,
+        service_trait: trait_path,
+        unimplemented: unimplemented_path,
+        refused: refused_path,
+    } = contract_paths(&client.crate_name, service, model);
     let name = format_ident!("Grpc{}Client", pascal_case(&service.name));
     let package = proto_package(model, service);
     let client_mod = format_ident!("{}_client", proto_snake_case(&service.name));
@@ -1524,15 +1514,13 @@ fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) 
                 None => (quote! {}, quote! { proto::#request_msg {} }),
             };
             let response = response_type(&op.response, model);
-            let finish = if op.response == "Empty" {
-                quote! {
+            let finish = match response_kind(op, model) {
+                ResponseKind::Empty => quote! {
                     reply.into_inner();
                     Ok(())
-                }
-            } else if rust_type(&op.response, model) == "String" {
-                quote! { Ok(reply.into_inner().value) }
-            } else {
-                quote! { parsed(#op_name, &reply.into_inner().json) }
+                },
+                ResponseKind::Text => quote! { Ok(reply.into_inner().value) },
+                ResponseKind::Json => quote! { parsed(#op_name, &reply.into_inner().json) },
             };
             quote! {
                 async fn #method(&self #param) -> anyhow::Result<#response> {
@@ -1606,7 +1594,7 @@ fn render_client_parsed(service: &Service, model: &Model) -> TokenStream {
     let has_json_response = service
         .operations
         .iter()
-        .any(|op| op.response != "Empty" && rust_type(&op.response, model) != "String");
+        .any(|op| matches!(response_kind(op, model), ResponseKind::Json));
     if !has_json_response {
         return quote! {};
     }
@@ -1915,8 +1903,59 @@ fn render_unimplemented() -> TokenStream {
 /// inbound adapter: empty when the adapter shares the service's crate, otherwise
 /// the service's crate module path followed by `::`, so a standalone adapter names
 /// types it imports from elsewhere.
-fn service_path_prefix(inbound: &Inbound, service: &Service, model: &Model) -> String {
-    host_path_prefix(&inbound.crate_name, service, model)
+/// The paths an adapter names a service's contract with: the crate prefix for
+/// its types, the service trait, and the boundary error types every transport
+/// maps.
+struct ContractPaths {
+    prefix: String,
+    service_trait: syn::Type,
+    unimplemented: syn::Type,
+    refused: syn::Type,
+}
+
+fn contract_paths(host_crate: &str, service: &Service, model: &Model) -> ContractPaths {
+    let prefix = host_path_prefix(host_crate, service, model);
+    ContractPaths {
+        service_trait: syn_type(&format!("{prefix}{}Service", pascal_case(&service.name))),
+        unimplemented: syn_type(&format!("{prefix}Unimplemented")),
+        refused: syn_type(&format!("{prefix}Refused")),
+        prefix,
+    }
+}
+
+/// How an operation's response crosses a wire: nothing, a string carried as
+/// text, or a value carried as its JSON rendering. The one rule every
+/// transport's renderer reads.
+enum ResponseKind {
+    Empty,
+    Text,
+    Json,
+}
+
+fn response_kind(op: &Operation, model: &Model) -> ResponseKind {
+    if op.response == "Empty" {
+        ResponseKind::Empty
+    } else if rust_type(&op.response, model) == "String" {
+        ResponseKind::Text
+    } else {
+        ResponseKind::Json
+    }
+}
+
+/// The distinct request structs a set of operations takes, in first-use
+/// order — the set a surface renders one parser for.
+fn distinct_request_types<'a>(operations: &[&Operation], model: &'a Model) -> Vec<&'a TypeDef> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut types = Vec::new();
+    for op in operations {
+        if let Some(def) = request_type(op, model)
+            && !seen.contains(&def.name.as_str())
+        {
+            seen.push(&def.name);
+            types.push(def);
+        }
+    }
+    types
 }
 
 /// The crate-path prefix an adapter hosted in `host_crate` names the service's
@@ -1945,8 +1984,11 @@ fn parser_fn(def: &TypeDef) -> proc_macro2::Ident {
 /// live in a crate other than the one that defines them.
 fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) -> TokenStream {
     let bin = &inbound.name;
-    let prefix = service_path_prefix(inbound, service, model);
-    let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
+    let ContractPaths {
+        prefix,
+        service_trait: trait_path,
+        ..
+    } = contract_paths(&inbound.crate_name, service, model);
 
     let subcommands: Vec<TokenStream> = service
         .operations
@@ -2027,10 +2069,11 @@ fn render_inbound_module(inbound: &Inbound, service: &Service, model: &Model) ->
                     quote! { service.#method().await? },
                 ),
             };
-            let render = if rust_type(&op.response, model) == "String" {
-                quote! { println!("{}", #call) }
-            } else {
-                quote! { println!("{}", serde_json::to_string_pretty(&#call)?) }
+            let render = match response_kind(op, model) {
+                ResponseKind::Text => quote! { println!("{}", #call) },
+                ResponseKind::Empty | ResponseKind::Json => {
+                    quote! { println!("{}", serde_json::to_string_pretty(&#call)?) }
+                }
             };
             quote! { #pattern => #render, }
         })

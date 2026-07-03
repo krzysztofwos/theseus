@@ -280,10 +280,13 @@ fn plan_add(
         NodeKind::Inbound => {
             under_root(&parent, kind)?;
             free(inbound_exists(model, name), "inbound", name)?;
-            allow_keys(attrs, &["transport", "service", "crate"])?;
+            allow_keys(attrs, &["transport", "service", "crate", "turns"])?;
             parse_transport(required(attrs, "transport")?).map_err(transport_refused)?;
             required(attrs, "service")?;
             required(attrs, "crate")?;
+            if let Some(turns) = attr(attrs, "turns") {
+                parse_turns(turns).map_err(turns_refused)?;
+            }
         }
         NodeKind::Client => {
             under_root(&parent, kind)?;
@@ -413,6 +416,11 @@ fn plan_set(
             if let Some(transport) = attr(attrs, "transport") {
                 parse_transport(transport).map_err(transport_refused)?;
             }
+            if let Some(turns) = attr(attrs, "turns")
+                && !turns.is_empty()
+            {
+                parse_turns(turns).map_err(turns_refused)?;
+            }
         }
         _ => {}
     }
@@ -468,6 +476,9 @@ fn apply_add(
             outbound: Vec::new(),
         }),
         NodeKind::Inbound => model.inbounds.push(Inbound {
+            outbound: Vec::new(),
+            turns: attr(attrs, "turns")
+                .map(|turns| parse_turns(turns).expect("turns validated during planning")),
             name: name.to_string(),
             transport: parse_transport(attr(attrs, "transport").unwrap_or("Cli"))
                 .expect("transport validated during planning"),
@@ -752,6 +763,11 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String
                     attr(attrs, "transport").and_then(|v| parse_transport(v).ok())
                 {
                     inbound.transport = transport;
+                }
+                // The `turns` attribute is the loop's turn budget. Empty clears it.
+                if let Some(turns) = attr(attrs, "turns") {
+                    inbound.turns = (!turns.is_empty())
+                        .then(|| parse_turns(turns).expect("turns validated during planning"));
                 }
             }
         }
@@ -1060,7 +1076,8 @@ fn required<'a>(
 fn settable_keys(target: &Target) -> &'static [&'static str] {
     match target {
         Target::Crate(_) => &["dir", "layer"],
-        Target::Inbound(_) | Target::Client(_) => &["transport", "service", "crate"],
+        Target::Inbound(_) => &["transport", "service", "crate", "turns"],
+        Target::Client(_) => &["transport", "service", "crate"],
         Target::Operation(_) => &["summary", "request", "response", "uses", "tool"],
         Target::Method { .. } => &["summary", "request", "response"],
         Target::Port(_) => &["summary"],
@@ -1432,6 +1449,27 @@ fn layer_refused(error: LayerError) -> Vec<Diagnostic> {
         "PATCH014",
         error.to_string(),
         "pass --set layer=<integer>",
+    )]
+}
+
+/// A turn budget that does not parse as a positive integer.
+#[derive(Debug, thiserror::Error)]
+#[error("`{0}` is not a turn budget (a positive integer)")]
+struct TurnsError(String);
+
+/// Parse an inbound's turn budget, a positive integer.
+fn parse_turns(text: &str) -> Result<u32, TurnsError> {
+    match text.parse() {
+        Ok(0) | Err(_) => Err(TurnsError(text.to_string())),
+        Ok(turns) => Ok(turns),
+    }
+}
+
+fn turns_refused(error: TurnsError) -> Vec<Diagnostic> {
+    vec![diagnostic(
+        "PATCH016",
+        error.to_string(),
+        "pass turns=<positive integer>, or empty to clear the budget",
     )]
 }
 
@@ -1922,6 +1960,40 @@ mod tests {
             },
         );
         assert_eq!(code(&outcome), "PATCH010");
+    }
+
+    #[test]
+    fn set_an_inbounds_turn_budget_and_clear_it() {
+        let base = sample_model().inbound("agent", Transport::Agent, "Sample", "sample-agent");
+
+        let model = accept(
+            &base,
+            Edit::Set {
+                target: "inbound:sample:agent".to_string(),
+                attrs: [("turns".to_string(), "48".to_string())].into(),
+            },
+        );
+        assert_eq!(model.inbounds[0].turns, Some(48));
+
+        // Empty clears the budget; a non-numeric budget is refused with a repair.
+        let model = accept(
+            &model,
+            Edit::Set {
+                target: "inbound:sample:agent".to_string(),
+                attrs: [("turns".to_string(), String::new())].into(),
+            },
+        );
+        assert_eq!(model.inbounds[0].turns, None);
+
+        let (outcome, _) = apply_edit(
+            &base,
+            &Edit::Set {
+                target: "inbound:sample:agent".to_string(),
+                attrs: [("turns".to_string(), "many".to_string())].into(),
+            },
+        );
+        assert!(!outcome.ok);
+        assert_eq!(code(&outcome), "PATCH016");
     }
 
     #[test]

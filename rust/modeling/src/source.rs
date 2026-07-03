@@ -44,7 +44,9 @@ fn render_imports(model: &Model) -> TokenStream {
     if !model.inbounds.is_empty() || !model.clients.is_empty() {
         names.push("Transport");
     }
-    if model.services.iter().any(|s| !s.outbound.is_empty()) {
+    let has_ports = model.services.iter().any(|s| !s.outbound.is_empty())
+        || model.inbounds.iter().any(|i| !i.outbound.is_empty());
+    if has_ports {
         names.push("Port");
     }
     let has_foreign_enum = model
@@ -83,7 +85,18 @@ fn render_inbound(inbound: &Inbound) -> TokenStream {
     let transport = format_ident!("{}", format!("{:?}", inbound.transport));
     let service = &inbound.service;
     let crate_name = &inbound.crate_name;
-    quote! { .inbound(#name, Transport::#transport, #service, #crate_name) }
+    let turns = match inbound.turns {
+        Some(turns) => {
+            let turns = proc_macro2::Literal::u32_unsuffixed(turns);
+            quote! { .turns(#turns) }
+        }
+        None => quote! {},
+    };
+    let ports = inbound.outbound.iter().map(|port| {
+        let port = port_expression(port);
+        quote! { .inbound_port(#port) }
+    });
+    quote! { .inbound(#name, Transport::#transport, #service, #crate_name) #turns #(#ports)* }
 }
 
 fn render_client(client: &Client) -> TokenStream {
@@ -186,6 +199,12 @@ fn render_operation(op: &Operation) -> TokenStream {
 }
 
 fn render_port(port: &Port) -> TokenStream {
+    let expression = port_expression(port);
+    quote! { .port(#expression) }
+}
+
+/// The `Port::new(..)` builder expression a port renders as, wherever it hangs.
+fn port_expression(port: &Port) -> TokenStream {
     let name = &port.name;
     let summary = &port.summary;
     let targeting = match &port.target {
@@ -193,7 +212,7 @@ fn render_port(port: &Port) -> TokenStream {
         None => quote! {},
     };
     let methods = port.methods.iter().map(render_method);
-    quote! { .port(Port::new(#name, #summary) #targeting #(#methods)*) }
+    quote! { Port::new(#name, #summary) #targeting #(#methods)* }
 }
 
 fn render_method(method: &Method) -> TokenStream {
@@ -234,6 +253,29 @@ mod tests {
         let source = render_model_source(&model, "", "sample_model");
         assert!(
             source.contains(r#".uses(&["workspace", "toolchain"])"#),
+            "{source}"
+        );
+    }
+
+    #[test]
+    fn render_emits_the_inbound_interior() {
+        use crate::model::{Port, Service, Transport};
+        let model = crate::model::Model::new("Sample")
+            .service(Service::new("Sample"))
+            .inbound("agent", Transport::Agent, "Sample", "sample-agent")
+            .turns(32)
+            .inbound_port(Port::new("llm", "Completes one turn.").method(
+                "complete",
+                "Complete one turn.",
+                "Turn",
+                "Reply",
+            ));
+        let source = render_model_source(&model, "", "sample_model");
+        assert!(source.contains(".turns(32)"), "{source}");
+        assert!(source.contains(".inbound_port("), "{source}");
+        assert!(source.contains("Port::new(\"llm\""), "{source}");
+        assert!(
+            source.contains("use theseus_modeling::{Model, Port, Service, Transport};"),
             "{source}"
         );
     }

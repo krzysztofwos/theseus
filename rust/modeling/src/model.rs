@@ -44,6 +44,13 @@ pub struct Inbound {
     pub service: String,
     /// Cargo package name of the crate that hosts the adapter.
     pub crate_name: String,
+    /// The adapter's own outbound ports — the loop's interior. An agent inbound
+    /// carries the model port its loop drives, so the port contract renders into
+    /// the inbound's crate the way a service's ports render into its own.
+    pub outbound: Vec<Port>,
+    /// The most turns the adapter's loop runs before giving up, when the
+    /// transport is a conversation loop.
+    pub turns: Option<u32>,
 }
 
 /// A client adapter: a transport that reaches a service from the outside — the

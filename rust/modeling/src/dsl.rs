@@ -36,7 +36,27 @@ impl Model {
             transport,
             service: service.to_string(),
             crate_name: crate_name.to_string(),
+            outbound: Vec::new(),
+            turns: None,
         });
+        self
+    }
+
+    /// Give the most recently added inbound an outbound port of its own — the
+    /// loop's interior contract, rendered into the inbound's crate.
+    pub fn inbound_port(mut self, port: Port) -> Self {
+        if let Some(inbound) = self.inbounds.last_mut() {
+            inbound.outbound.push(port);
+        }
+        self
+    }
+
+    /// Give the most recently added inbound a turn budget: the most turns its
+    /// loop runs before giving up.
+    pub fn turns(mut self, turns: u32) -> Self {
+        if let Some(inbound) = self.inbounds.last_mut() {
+            inbound.turns = Some(turns);
+        }
         self
     }
 

@@ -69,7 +69,7 @@ pub struct GatedWorkspace<'a> {
 impl Workspace for GatedWorkspace<'_> {
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         if !self.allow_writes {
-            return Err(theseus_modeling::Refused.into());
+            return Err(Refused.into());
         }
         self.workspace.write_file(file).await
     }

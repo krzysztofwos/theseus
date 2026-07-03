@@ -8,5 +8,5 @@
 mod generated;
 mod service;
 
-pub use generated::{CalculatorService, Operands, Unimplemented};
+pub use generated::{CalculatorService, Operands, Refused, Unimplemented};
 pub use service::Calculator;

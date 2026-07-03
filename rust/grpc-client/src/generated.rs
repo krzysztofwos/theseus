@@ -195,7 +195,7 @@ fn edit_to_proto(value: theseus_modeling::Edit) -> proto::Edit {
 fn failed(operation: &'static str, status: tonic::Status) -> anyhow::Error {
     match status.code() {
         tonic::Code::Unimplemented => theseus::Unimplemented(operation).into(),
-        tonic::Code::PermissionDenied => theseus_modeling::Refused.into(),
+        tonic::Code::PermissionDenied => theseus::Refused.into(),
         _ => anyhow::anyhow!("`{operation}` failed: {status}"),
     }
 }

@@ -139,7 +139,7 @@ fn checked(operation: &'static str, status: u16, body: &str) -> anyhow::Result<(
     match status {
         200 => Ok(()),
         501 => Err(theseus::Unimplemented(operation).into()),
-        403 => Err(theseus_modeling::Refused.into()),
+        403 => Err(theseus::Refused.into()),
         _ => anyhow::bail!("`{operation}` replied {status}: {body}"),
     }
 }

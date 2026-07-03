@@ -86,6 +86,19 @@ impl std::fmt::Display for Unimplemented {
 
 impl std::error::Error for Unimplemented {}
 
+/// A write refused by a permission gate. A transport adapter downcasts it
+/// to map the refusal in its own vocabulary.
+#[derive(Debug)]
+pub struct Refused;
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "writes are not permitted; grant write permission to apply this edit")
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// The inbound service contract: one method per operation, each defaulting
 /// to `unimplemented`. The authored impl overrides what it implements.
 #[async_trait::async_trait]

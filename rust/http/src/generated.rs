@@ -193,7 +193,7 @@ fn reply_json<T: serde::Serialize>(result: anyhow::Result<T>) -> HttpReply {
 fn error_reply(error: &anyhow::Error) -> HttpReply {
     let status = if error.downcast_ref::<theseus::Unimplemented>().is_some() {
         501
-    } else if error.downcast_ref::<theseus_modeling::Refused>().is_some() {
+    } else if error.downcast_ref::<theseus::Refused>().is_some() {
         403
     } else {
         500

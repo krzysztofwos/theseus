@@ -93,7 +93,7 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
 fn failed(operation: &'static str, status: tonic::Status) -> anyhow::Error {
     match status.code() {
         tonic::Code::Unimplemented => theseus_calculator::Unimplemented(operation).into(),
-        tonic::Code::PermissionDenied => theseus_modeling::Refused.into(),
+        tonic::Code::PermissionDenied => theseus_calculator::Refused.into(),
         _ => anyhow::anyhow!("`{operation}` failed: {status}"),
     }
 }

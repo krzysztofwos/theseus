@@ -194,10 +194,10 @@ pub(crate) fn crate_is_scaffolded(root: &std::path::Path, file: &GeneratedFile) 
 #[cfg(test)]
 mod tests {
     use theseus_model::theseus_model;
-    use theseus_modeling::{GeneratedFile, Refused};
+    use theseus_modeling::GeneratedFile;
 
     use crate::{
-        generated::{Toolchain, Workspace, tool_catalog},
+        generated::{Refused, Toolchain, Workspace, tool_catalog},
         session::Session,
     };
 

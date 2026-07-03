@@ -721,6 +721,7 @@ fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> To
     let prefix = service_path_prefix(inbound, service, model);
     let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
     let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
+    let refused_path = syn_type(&format!("{prefix}Refused"));
 
     // A parser per distinct request struct, building the request from the call's
     // JSON body — the same wire conversion the tool dispatch renders.
@@ -856,7 +857,7 @@ fn render_http_module(inbound: &Inbound, service: &Service, model: &Model) -> To
         fn error_reply(error: &anyhow::Error) -> HttpReply {
             let status = if error.downcast_ref::<#unimplemented_path>().is_some() {
                 501
-            } else if error.downcast_ref::<theseus_modeling::Refused>().is_some() {
+            } else if error.downcast_ref::<#refused_path>().is_some() {
                 403
             } else {
                 500
@@ -1140,6 +1141,7 @@ fn render_grpc_module(inbound: &Inbound, service: &Service, model: &Model) -> To
     let prefix = service_path_prefix(inbound, service, model);
     let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
     let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
+    let refused_path = syn_type(&format!("{prefix}Refused"));
     let package = proto_package(model, service);
     let server_mod = format_ident!("{}_server", proto_snake_case(&service.name));
     let server_trait = format_ident!("{}", pascal_case(&service.name));
@@ -1229,7 +1231,7 @@ fn render_grpc_module(inbound: &Inbound, service: &Service, model: &Model) -> To
         fn status(error: &anyhow::Error) -> tonic::Status {
             if error.downcast_ref::<#unimplemented_path>().is_some() {
                 tonic::Status::unimplemented(error.to_string())
-            } else if error.downcast_ref::<theseus_modeling::Refused>().is_some() {
+            } else if error.downcast_ref::<#refused_path>().is_some() {
                 tonic::Status::permission_denied(error.to_string())
             } else {
                 tonic::Status::internal(error.to_string())
@@ -1359,6 +1361,7 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
     let prefix = host_path_prefix(&client.crate_name, service, model);
     let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
     let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
+    let refused_path = syn_type(&format!("{prefix}Refused"));
     let name = format_ident!("Http{}Client", pascal_case(&service.name));
 
     let methods: Vec<TokenStream> = service
@@ -1468,7 +1471,7 @@ fn render_http_client_module(client: &Client, service: &Service, model: &Model) 
             match status {
                 200 => Ok(()),
                 501 => Err(#unimplemented_path(operation).into()),
-                403 => Err(theseus_modeling::Refused.into()),
+                403 => Err(#refused_path.into()),
                 _ => anyhow::bail!("`{operation}` replied {status}: {body}"),
             }
         }
@@ -1484,6 +1487,7 @@ fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) 
     let prefix = host_path_prefix(&client.crate_name, service, model);
     let trait_path = syn_type(&format!("{prefix}{}Service", pascal_case(&service.name)));
     let unimplemented_path = syn_type(&format!("{prefix}Unimplemented"));
+    let refused_path = syn_type(&format!("{prefix}Refused"));
     let name = format_ident!("Grpc{}Client", pascal_case(&service.name));
     let package = proto_package(model, service);
     let client_mod = format_ident!("{}_client", proto_snake_case(&service.name));
@@ -1581,7 +1585,7 @@ fn render_grpc_client_module(client: &Client, service: &Service, model: &Model) 
         fn failed(operation: &'static str, status: tonic::Status) -> anyhow::Error {
             match status.code() {
                 tonic::Code::Unimplemented => #unimplemented_path(operation).into(),
-                tonic::Code::PermissionDenied => theseus_modeling::Refused.into(),
+                tonic::Code::PermissionDenied => #refused_path.into(),
                 _ => anyhow::anyhow!("`{operation}` failed: {status}"),
             }
         }
@@ -1859,12 +1863,16 @@ fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
     }
 }
 
-/// Render the typed error the trait defaults return, so a transport adapter can
-/// downcast an operation left on its default and map the outcome in its own
-/// vocabulary — the coverage gate surfacing at the wire.
+/// Render the typed errors a contract's boundary reports: `Unimplemented`, the
+/// trait default's error, and `Refused`, a write gate's error. Both render with
+/// the contract, so a transport adapter downcasts them to map an outcome in its
+/// own vocabulary, and a wire client reconstructs them from the status coming
+/// back.
 fn render_unimplemented() -> TokenStream {
     let doc_a = doc("An operation with no authored handler, the trait default's error. A");
     let doc_b = doc("transport adapter downcasts it to map the outcome in its own vocabulary.");
+    let doc_c = doc("A write refused by a permission gate. A transport adapter downcasts it");
+    let doc_d = doc("to map the refusal in its own vocabulary.");
     quote! {
         #doc_a
         #doc_b
@@ -1878,6 +1886,22 @@ fn render_unimplemented() -> TokenStream {
         }
 
         impl std::error::Error for Unimplemented {}
+
+        #doc_c
+        #doc_d
+        #[derive(Debug)]
+        pub struct Refused;
+
+        impl std::fmt::Display for Refused {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    f,
+                    "writes are not permitted; grant write permission to apply this edit"
+                )
+            }
+        }
+
+        impl std::error::Error for Refused {}
     }
 }
 

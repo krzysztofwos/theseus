@@ -233,7 +233,7 @@ fn edit_from_proto(value: proto::Edit) -> Result<theseus_modeling::Edit, tonic::
 fn status(error: &anyhow::Error) -> tonic::Status {
     if error.downcast_ref::<theseus::Unimplemented>().is_some() {
         tonic::Status::unimplemented(error.to_string())
-    } else if error.downcast_ref::<theseus_modeling::Refused>().is_some() {
+    } else if error.downcast_ref::<theseus::Refused>().is_some() {
         tonic::Status::permission_denied(error.to_string())
     } else {
         tonic::Status::internal(error.to_string())

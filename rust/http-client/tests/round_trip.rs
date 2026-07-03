@@ -49,7 +49,7 @@ async fn the_wire_crossing_preserves_the_contract() {
         .await
         .expect_err("the gate refuses");
     assert!(
-        error.downcast_ref::<theseus_modeling::Refused>().is_some(),
+        error.downcast_ref::<theseus::Refused>().is_some(),
         "the refusal should come back typed: {error}"
     );
 }

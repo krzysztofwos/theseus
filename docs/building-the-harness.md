@@ -42,7 +42,7 @@ Decision: keep phase 1 moving by modeling the `llm` port at the minimal honest g
 
 ### Recovery — a bad write bricks the protocol binary
 
-Re-pointing the method meant another `patch --write`, but the first one had already reprojected a `generated.rs` that does not compile (the `theseus_modeling::LlmRequest` reference). Because `query`, `patch`, and `generate` *are* the `theseus` binary, and the binary no longer builds, the protocol is unavailable to fix the model it just broke. `patch --write` has no compile gate.
+Re-pointing the method meant another `patch --write`, but the first one had already reprojected a `generated.rs` that does not compile (the `theseus_modeling::LlmRequest` reference). Because `query`, `patch`, and `generate` _are_ the `theseus` binary, and the binary no longer builds, the protocol is unavailable to fix the model it just broke. `patch --write` has no compile gate.
 
 Recovery is `git checkout -- rust/cli/src/generated.rs rust/model/src/self_model.rs`: the reprojected files are version-controlled, so reverting them restores the last compiling model and the protocol with it. This is a real property of a self-rewriting tool — keep the projection under version control, and a self-inflicted break is one checkout away from recovery.
 
@@ -162,3 +162,43 @@ With both, the loop closes from the outside. The agent `patch`es an operation in
 It runs. Asked to add a `greet` operation, the agent attached it to the service and watched the edit reproject the self-model, the trait contract, and the CLI command surface together. It read back `fn greet(&self) -> anyhow::Result<String>`, wrote a one-line body into the service impl, and verified: fifteen operations, all implemented. No one edited the code by hand.
 
 This is the plank replaced. The ship kept its shape — every check still passes — while a piece of it was taken out and put back by something other than the shipwright. The model describes the tool, the tool regenerates from the model, and an agent drives that loop from either side of one surface. Theseus extends itself.
+
+### The build gate returns as a port
+
+`patch --write` could reproject a `generated.rs` that no longer compiles, and nothing said so until a human ran cargo. The workspace's toolchain is now a modeled outbound port beside the filesystem: a `check` operation compile-checks the workspace through it, and `implement` runs the same check after every splice, so the agent that wrote a body reads its compile errors as the tool result and revises in place. The gate that once lived in the compiler's refusal to build an unimplemented trait, and moved to `verify`'s coverage check, now also answers at the moment of writing.
+
+### The catalog belongs to the model
+
+Which operations an agent may call was a hand-written list. It is now a fact of the model: an operation's `tool` attribute is its agent-facing description, `patch` sets or withdraws it, and the tool catalog and the dispatch behind it render from the operations that carry one. The agent and MCP inbounds share both through one `Session` — a working copy of the model over the gated workspace — so exposing an operation is a model edit that reaches every agent surface at the next rebuild, and the loop's own `patch` can perform it.
+
+### The drydock
+
+An applied edit changes the workspace, but the process holding the conversation still runs the old code. The loop grew one tool of its own: `restart`, answered by the loop rather than the session. A solo `restart` ends the run, the caller rebuilds the workspace, persists the transcript to `.theseus/session.json`, and re-enters it in the new binary with `--resume` — which answers the pending call and carries on the same conversation. The ship is rebuilt in dry dock with the crew aboard: the agent patched an operation in, implemented its handler, checked, restarted, and then called the operation it had just given itself, live, in one conversation.
+
+### The contract goes async
+
+The service and port traits were synchronous, and every inbound that wanted to serve concurrently fought that. The contract is now async end to end — the generated traits through `async-trait` so they stay usable as trait objects, the adapters on `tokio`'s process and filesystem primitives, every binary on an async runtime — while the engine beneath stays synchronous pure computation. The seam moved one layer down and the composition sandwich (sync core, async edges, sync stubs) dissolved.
+
+### Four transports, one contract
+
+Two server inbounds joined the CLI: every operation over `POST /{operation}` with a status map derived from the outcome's structure, and a gRPC service whose proto contract — the `Edit` enum as a `oneof` over its verbs — renders from the model and compiles in the build. Their mirrors followed: generated HTTP and gRPC clients that implement the same `TheseusService` trait over the wire, mapping statuses back onto the typed error classes, so `Unimplemented` and `Refused` survive a round trip over a real socket — proven by tests that assert the downcast on the far side. With the client standing where the composition root stood, `theseus --remote <URL>` drives a remote instance through every subcommand unchanged, and the calculator port takes a gRPC client in place of the in-process adapter under `--calculator`. The transport is a deployment decision the model already knew how to make.
+
+### The bootstrap regenerator
+
+An edit that changes a renderer together with authored code consuming the renderer's new output can wedge the tree: `generate` runs inside the binary the workspace builds, and the files that would fix the compile are files only the broken build can produce. A `bootstrap` binary now stands beneath the workspace — its build reaches only the engine and the model, the two crates that compile with no generated file — and writes every generated file back to a buildable state, where the modeled `generate` takes over again. The fixed point keeps a ladder out of its own hole.
+
+### The adapters join the authored leaves
+
+`implement` wrote operation handlers and nothing else, so an agent could grow the service's surface but not its edges. Port traits now default every method to the typed `unimplemented` error — the same gate move the service trait made — so a port grows a method without breaking its adapters, and `implement --port` splices an adapter method into the crate's authored adapters file, `--adapter` naming the type when the file holds more than one. The proof ran live: asked to give itself the ability to run tests, the agent patched a `test` operation and a `test` method onto the toolchain port in one edit, read the neighboring `check` adapter for the house pattern, authored the `cargo test` adapter and the handler, checked, restarted, and ran its own new tool: the tests pass. The one thing it could not reach was the owned composition root — a hand-written second impl that needed a three-line delegation added by hand. That root now renders from the model, generic over one adapter per port, its delegations regenerating with the contract, so the gap closed the way every gap here closes: the boilerplate became a projection.
+
+### The ninth check: flow
+
+The model knew an operation's name and types but not its flow — nothing said `calc` actually reaches the calculator. Operations now declare the ports their handlers use, and `verify`'s ninth check extracts each authored handler's `self.<port>` reaches from the source and holds the two edge sets to equality, a functor from the declared flow graph into the extracted one. A declared port the handler never touches and a touched port the operation never declares both fail, by name, without a rebuild. The declaration surfaced a fact the code had kept implicit: reads are unported — only writes cross a port — and five operations are pure.
+
+### The loop models itself
+
+The agent's own interior — the model port its loop drives, the turn budget that bounds it — was authored code the model could not see. An inbound now carries an interior of its own: the `agent` inbound declares an `llm` port (`complete(Turn) -> Reply`) and a `turns` budget, and both render into the agent crate's `generated.rs` — the port trait with typed defaults, the `Turn` request, and `TURN_BUDGET` — with the loop and its two adapters authored on top. The budget is a patchable fact: `set|inbound:theseus:agent|turns=48` reprojects the constant, and `verify` run from the old binary honestly reports the workspace has moved ahead of the process — the drift the `restart` tool exists to close.
+
+### The ship gains a hold ledger
+
+The last missing affordance for autonomy was recoverability: an agent that edits itself needs a way back. Asked to build one, the agent grew the workspace port two methods — `snapshot`, a git stash-commit of the working tree, and `restore`, gated like every write — with `snapshot` and `rollback` operations over them, declared flows, tool descriptions, and the adapters for both the filesystem workspace and the write gate, authored through its own `implement`. Everything compiled, verified, and survived a restart; the one seam it could not cross was the borrowed-port forwarding impl, two authored lines. The loop's interior became editable the same week: ports attach to inbounds through `patch`, `query` mints their handles, and `implement --port llm` reaches the loop's own adapters — so the next capability the agent grows may be a piece of its own harness.

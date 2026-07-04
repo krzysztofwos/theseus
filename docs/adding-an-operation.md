@@ -108,6 +108,7 @@ theseus verify
 #   ✓ generated code: in sync with model (drift gate)
 #   ✓ operations: every operation has an authored handler
 #   ✓ flow: every handler reaches exactly its declared ports
+#   ✓ interior: every loop adapter authors its port
 #   conformant: workspace matches its self-model
 ```
 
@@ -233,7 +234,7 @@ The result and the gates are identical. The protocol is the editor-free path use
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                                                      |
 | `coverage`                  | the derived list of operations still on their `unimplemented` default                                                                                                   |
-| `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, client services, generated drift, implementation coverage, flow conformance |
+| `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, client services, generated drift, implementation coverage, flow conformance, interior coverage |
 
 ### The edit vocabulary
 

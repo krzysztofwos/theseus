@@ -1,6 +1,6 @@
 //! Self-verification: does the workspace on disk conform to its self-model?
 //!
-//! Nine checks, all derived from the same [`Model`]:
+//! Ten checks, all derived from the same [`Model`]:
 //!
 //!   1. **Required dependencies** — every dependency the model declares is
 //!      actually present in the crates' `Cargo.toml`. Realized as a functor
@@ -24,6 +24,9 @@
 //!   9. **Flow conformance** — every authored handler reaches exactly the ports
 //!      its operation's `uses` edges declare. Realized as a functor from the
 //!      declared flow graph into the one extracted from the handlers.
+//!  10. **Interior coverage** — every adapter of an inbound's interior port
+//!      authors every port method, so no loop adapter silently falls to the
+//!      trait default when its port grows.
 //!
 //! Checks 1 and 2 read the real manifests, so they degrade gracefully under
 //! refactoring: rename a crate in the model and its manifest together and the
@@ -113,6 +116,7 @@ pub fn verify(
     workspace_root: &Path,
     generated: &[GeneratedFile],
     impls: &[(String, String)],
+    interior_impls: &[(String, String)],
 ) -> VerifyReport {
     let mut report = VerifyReport::new();
 
@@ -166,7 +170,75 @@ pub fn verify(
         check_flow_conformance(model, workspace_root, impls),
     );
 
+    report.record(
+        "interior: every loop adapter authors its port",
+        check_interior_coverage(model, workspace_root, interior_impls),
+    );
+
     report
+}
+
+/// Every adapter of an inbound's interior port must author every method the
+/// port declares. The loop's adapters are alternative full implementations —
+/// the offline stub answers where the real model would — so a method one of
+/// them leaves on the trait default is a runtime hole this check names before
+/// the loop finds it. `interior_impls` pairs each inbound with its authored
+/// adapters file.
+fn check_interior_coverage(
+    model: &Model,
+    root: &Path,
+    interior_impls: &[(String, String)],
+) -> Result<String, String> {
+    interior_coverage(model, |inbound| {
+        let path = interior_impls
+            .iter()
+            .find(|(name, _)| name == &inbound.name)
+            .map(|(_, path)| path.as_str())
+            .ok_or_else(|| format!("no adapters path for inbound `{}`", inbound.name))?;
+        fs::read_to_string(root.join(path)).map_err(|e| format!("reading {path}: {e}"))
+    })
+}
+
+/// The interior check over supplied sources, so the law is testable without a
+/// filesystem.
+fn interior_coverage<E: std::fmt::Display>(
+    model: &Model,
+    mut source_of: impl FnMut(&crate::model::Inbound) -> Result<String, E>,
+) -> Result<String, String> {
+    let mut adapters = 0;
+    let mut violations: Vec<String> = Vec::new();
+    for inbound in model.inbounds.iter().filter(|i| !i.outbound.is_empty()) {
+        let source = source_of(inbound).map_err(|e| e.to_string())?;
+        for port in inbound.outbound.iter().filter(|p| p.target.is_none()) {
+            let trait_name = crate::codegen::pascal_case(&port.name);
+            let impls = crate::coverage::adapter_methods(&source, &trait_name)
+                .map_err(|e| e.to_string())?;
+            if impls.is_empty() {
+                violations.push(format!(
+                    "no adapter implements `{trait_name}` for inbound `{}`",
+                    inbound.name
+                ));
+                continue;
+            }
+            adapters += impls.len();
+            for (adapter, authored) in &impls {
+                for method in &port.methods {
+                    if !authored.contains(&method.name) {
+                        violations.push(format!(
+                            "adapter `{adapter}` leaves `{}.{}` on the trait default",
+                            port.name, method.name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if !violations.is_empty() {
+        return Err(violations.join("; "));
+    }
+    Ok(format!(
+        "{adapters} interior adapter(s) author every port method"
+    ))
 }
 
 /// Every authored handler must reach exactly the ports its operation declares
@@ -896,6 +968,61 @@ mod tests {
                 ),
             );
         assert!(check_type_references(&model).is_err());
+    }
+
+    fn interior_model() -> Model {
+        Model::new("Sample")
+            .service(Service::new("Sample"))
+            .inbound("agent", crate::model::Transport::Agent, "Sample", "agent")
+            .inbound_port(
+                crate::model::Port::new("llm", "Completes one turn.").method(
+                    "complete",
+                    "Complete one turn.",
+                    "String",
+                    "String",
+                ),
+            )
+    }
+
+    #[test]
+    fn an_interior_adapter_authoring_its_port_conforms() {
+        let source = r#"
+            impl Llm for OfflineLlm {
+                async fn complete(&self, request: &str) -> anyhow::Result<String> { Ok(request.into()) }
+            }
+            impl Llm for AnthropicLlm {
+                async fn complete(&self, request: &str) -> anyhow::Result<String> { Ok(request.into()) }
+            }
+        "#;
+        let detail =
+            interior_coverage(&interior_model(), |_| Ok::<_, String>(source.to_string())).unwrap();
+        assert!(detail.contains("2 interior adapter(s)"), "{detail}");
+    }
+
+    #[test]
+    fn an_interior_adapter_on_the_default_is_named() {
+        let source = r#"
+            impl Llm for OfflineLlm {
+                async fn complete(&self, request: &str) -> anyhow::Result<String> { Ok(request.into()) }
+            }
+            impl Llm for AnthropicLlm {}
+        "#;
+        let error = interior_coverage(&interior_model(), |_| Ok::<_, String>(source.to_string()))
+            .unwrap_err();
+        assert!(
+            error.contains("adapter `AnthropicLlm` leaves `llm.complete` on the trait default"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_interior_port_with_no_adapter_fails() {
+        let error =
+            interior_coverage(&interior_model(), |_| Ok::<_, String>(String::new())).unwrap_err();
+        assert!(
+            error.contains("no adapter implements `Llm` for inbound `agent`"),
+            "{error}"
+        );
     }
 
     #[test]

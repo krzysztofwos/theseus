@@ -83,6 +83,30 @@ pub(crate) fn service_trait_name(service: &Service) -> String {
     format!("{}Service", pascal_case(&service.name))
 }
 
+/// Each adapter impl of a port trait in the source: the implementing type's
+/// name paired with the methods it authors. The interior-coverage check holds
+/// every adapter to its port's full method set through this view.
+pub fn adapter_methods(
+    source: &str,
+    trait_name: &str,
+) -> Result<Vec<(String, BTreeSet<String>)>, CoverageError> {
+    let file = syn::parse_file(source).map_err(|error| CoverageError::Parse(error.to_string()))?;
+    Ok(crate::implement::trait_impls(&file, trait_name)
+        .into_iter()
+        .map(|block| {
+            let authored = block
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ImplItem::Fn(method) => Some(method.sig.ident.to_string()),
+                    _ => None,
+                })
+                .collect();
+            (crate::implement::impl_self_type(block), authored)
+        })
+        .collect())
+}
+
 /// The method names of the `impl <trait_name> for …` block in the source.
 pub(crate) fn implemented_methods(
     source: &str,

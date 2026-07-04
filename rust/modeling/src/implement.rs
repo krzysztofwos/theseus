@@ -194,15 +194,7 @@ fn adapter_impls(
     let file = syn::parse_file(source).map_err(|error| ImplementError::Parse(error.to_string()))?;
     let mut impls = Vec::new();
     for block in trait_impls(&file, trait_name) {
-        let self_type = match block.self_ty.as_ref() {
-            syn::Type::Path(path) => path
-                .path
-                .segments
-                .last()
-                .map(|segment| segment.ident.to_string())
-                .unwrap_or_default(),
-            other => quote::quote!(#other).to_string(),
-        };
+        let self_type = impl_self_type(block);
         let found = block.items.iter().find_map(|impl_item| {
             if let syn::ImplItem::Fn(function) = impl_item
                 && function.sig.ident == method
@@ -309,6 +301,20 @@ pub(crate) fn trait_impls<'a>(file: &'a syn::File, trait_name: &str) -> Vec<&'a 
                 .is_some_and(|segment| segment.ident == trait_name)
         })
         .collect()
+}
+
+/// The implementing type's name of a trait impl: the last path segment of its
+/// self type, or the whole self type rendered when it is not a plain path.
+pub(crate) fn impl_self_type(block: &syn::ItemImpl) -> String {
+    match block.self_ty.as_ref() {
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default(),
+        other => quote::quote!(#other).to_string(),
+    }
 }
 
 /// The byte range of the `method` in the `impl <trait_name> for …` block, or

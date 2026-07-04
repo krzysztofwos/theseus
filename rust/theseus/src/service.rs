@@ -10,7 +10,7 @@
 use anyhow::Context;
 use theseus_model::{
     adapter_impl_path, authored_impl_path, authored_impls, crate_is_scaffolded, generated_files,
-    inbound_adapter_impl_path,
+    inbound_adapter_impl_path, interior_impls,
 };
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
@@ -54,6 +54,7 @@ impl TheseusService for Ctx<'_> {
                 &workspace_root(),
                 &generated_files(&model),
                 &authored_impls(&model),
+                &interior_impls(&model),
             )
         })
         .await?;

@@ -39,6 +39,22 @@ pub fn inbound_adapter_impl_path(model: &Model, inbound: &theseus_modeling::Inbo
     )
 }
 
+/// Each inbound carrying interior ports, paired with its authored adapters
+/// file, for the interior-coverage check.
+pub fn interior_impls(model: &Model) -> Vec<(String, String)> {
+    model
+        .inbounds
+        .iter()
+        .filter(|inbound| !inbound.outbound.is_empty())
+        .map(|inbound| {
+            (
+                inbound.name.clone(),
+                inbound_adapter_impl_path(model, inbound),
+            )
+        })
+        .collect()
+}
+
 /// The authored impl path of every service, paired with the service name.
 pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
     model
@@ -207,6 +223,7 @@ mod tests {
             &workspace_root(),
             &generated_files(&model),
             &authored_impls(&model),
+            &interior_impls(&model),
         );
         assert!(
             report.conformant,
@@ -227,6 +244,7 @@ mod tests {
             &workspace_root(),
             &generated_files(&model),
             &authored_impls(&model),
+            &interior_impls(&model),
         );
         assert!(!report.conformant);
     }

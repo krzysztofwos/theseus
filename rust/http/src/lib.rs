@@ -83,6 +83,12 @@ mod tests {
         }
     }
 
+    /// A checkpoint on its trait defaults, for handlers that never snapshot.
+    struct StubCheckpoint;
+
+    #[async_trait::async_trait]
+    impl theseus::Checkpoint for StubCheckpoint {}
+
     /// A toolchain that reports success without running a build.
     struct StubToolchain;
 
@@ -103,6 +109,7 @@ mod tests {
         let ctx = theseus::Ctx {
             model: &model,
             workspace: &workspace,
+            checkpoint: &StubCheckpoint,
             calculator: &theseus_calculator::Calculator,
             toolchain: &StubToolchain,
         };
@@ -142,6 +149,7 @@ mod tests {
         let ctx = theseus::Ctx {
             model: &model,
             workspace: &workspace,
+            checkpoint: &StubCheckpoint,
             calculator: &theseus_calculator::Calculator,
             toolchain: &StubToolchain,
         };

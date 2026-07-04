@@ -264,6 +264,12 @@ mod tests {
         }
     }
 
+    /// A checkpoint on its trait defaults, for a loop that never snapshots.
+    struct StubCheckpoint;
+
+    #[async_trait::async_trait]
+    impl theseus::Checkpoint for StubCheckpoint {}
+
     /// A toolchain that reports success without running a build, so the loop's
     /// tests stay in-process.
     struct StubToolchain;
@@ -301,6 +307,7 @@ mod tests {
         let mut session = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -320,6 +327,7 @@ mod tests {
         let mut session = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -362,6 +370,7 @@ mod tests {
         let mut session = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,

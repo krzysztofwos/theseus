@@ -17,7 +17,7 @@ mod generated;
 
 use clap::Arg;
 use generated::Invocation;
-use theseus::{CargoToolchain, Ctx, FsWorkspace, TheseusService};
+use theseus::{CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, TheseusService};
 use theseus_calculator::CalculatorService;
 use theseus_calculator_grpc_client::GrpcCalculatorClient;
 use theseus_http_client::HttpTheseusClient;
@@ -75,9 +75,11 @@ async fn main() -> anyhow::Result<()> {
             &local_calculator
         }
     };
+    let checkpoint = GitCheckpoint::at_repo_root();
     let ctx = Ctx {
         model: &model,
         workspace: &workspace,
+        checkpoint: &checkpoint,
         calculator,
         toolchain: &toolchain,
     };

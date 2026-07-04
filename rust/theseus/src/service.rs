@@ -28,11 +28,11 @@ use crate::{
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
     async fn rollback(&self, request: crate::generated::RollbackRequest) -> anyhow::Result<String> {
-        self.workspace.restore(&request.reference).await
+        self.checkpoint.restore(&request.reference).await
     }
 
     async fn snapshot(&self, request: crate::generated::SnapshotRequest) -> anyhow::Result<String> {
-        self.workspace.snapshot(&request.label).await
+        self.checkpoint.snapshot(&request.label).await
     }
 
     async fn test(&self) -> anyhow::Result<String> {
@@ -284,6 +284,13 @@ mod tests {
         }
     }
 
+    /// A checkpoint on its trait defaults: a test that never snapshots needs
+    /// no history, and one that calls it reads the typed unimplemented error.
+    struct StubCheckpoint;
+
+    #[async_trait::async_trait]
+    impl crate::generated::Checkpoint for StubCheckpoint {}
+
     /// A toolchain that reports success without running a build, so a `check`
     /// call stays in-process.
     struct StubToolchain;
@@ -300,6 +307,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -318,6 +326,7 @@ mod tests {
         let mut session = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -347,6 +356,7 @@ mod tests {
         let error = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -367,6 +377,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             true,
@@ -389,6 +400,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -408,6 +420,7 @@ mod tests {
         let error = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -428,6 +441,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             true,
@@ -450,6 +464,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -465,6 +480,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -490,6 +506,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -514,6 +531,7 @@ mod tests {
         let error = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -536,6 +554,7 @@ mod tests {
         let result = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             true,
@@ -554,6 +573,7 @@ mod tests {
         let error = Session::new(
             theseus_model(),
             &NoopWorkspace,
+            &StubCheckpoint,
             &theseus_calculator::Calculator,
             &StubToolchain,
             false,
@@ -589,6 +609,7 @@ mod tests {
             let mut session = Session::new(
                 theseus_model(),
                 &NoopWorkspace,
+                &StubCheckpoint,
                 &theseus_calculator::Calculator,
                 &StubToolchain,
                 false,

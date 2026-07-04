@@ -45,6 +45,72 @@ impl FsWorkspace {
 
 #[async_trait::async_trait]
 impl Workspace for FsWorkspace {
+    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
+        let path = self.root.join(&file.path);
+        // Scaffolding a new crate writes into a directory that does not exist yet.
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&path, &file.contents).await?;
+        Ok(())
+    }
+}
+
+/// A [`Checkpoint`] over the repository's git history: a snapshot is a stash
+/// commit of the working tree, and a restore points the tree back at one. The
+/// shared checkpoint adapter for the inbound binaries. Both operate on tracked
+/// files.
+pub struct GitCheckpoint {
+    root: PathBuf,
+}
+
+impl GitCheckpoint {
+    /// A checkpoint rooted at the repository root.
+    pub fn at_repo_root() -> Self {
+        Self {
+            root: workspace_root(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Checkpoint for GitCheckpoint {
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        // The stash commit is unreferenced: it lives for the gc grace period,
+        // which covers a session's checkpoint-and-rollback horizon.
+        let output = tokio::process::Command::new("git")
+            .args(["stash", "create", request])
+            .current_dir(&self.root)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running git stash create")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("{}", stderr.trim()));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stash_id = stdout.trim();
+        if stash_id.is_empty() {
+            // A clean tree snapshots HEAD.
+            let head = tokio::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&self.root)
+                .kill_on_drop(true)
+                .output()
+                .await
+                .context("running git rev-parse HEAD")?;
+            if !head.status.success() {
+                let stderr = String::from_utf8_lossy(&head.stderr);
+                return Err(anyhow::anyhow!("{}", stderr.trim()));
+            }
+            let head_id = String::from_utf8_lossy(&head.stdout);
+            Ok(head_id.trim().to_string())
+        } else {
+            Ok(stash_id.to_string())
+        }
+    }
+
     async fn restore(&self, request: &str) -> anyhow::Result<String> {
         let output = tokio::process::Command::new("git")
             .args([
@@ -67,61 +133,13 @@ impl Workspace for FsWorkspace {
         }
         Ok(format!("restored the working tree to {request}"))
     }
-
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
-        // The stash commit is unreferenced: it lives for the gc grace period,
-        // which covers a session's checkpoint-and-rollback horizon.
-        let output = tokio::process::Command::new("git")
-            .args(["stash", "create", request])
-            .current_dir(&self.root)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running git stash create")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("{}", stderr.trim()));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stash_id = stdout.trim();
-        if stash_id.is_empty() {
-            // A clean tree snapshots HEAD.
-            let head = tokio::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(workspace_root())
-                .kill_on_drop(true)
-                .output()
-                .await
-                .context("running git rev-parse HEAD")?;
-            if !head.status.success() {
-                let stderr = String::from_utf8_lossy(&head.stderr);
-                return Err(anyhow::anyhow!("{}", stderr.trim()));
-            }
-            let head_id = String::from_utf8_lossy(&head.stdout);
-            Ok(head_id.trim().to_string())
-        } else {
-            Ok(stash_id.to_string())
-        }
-    }
-
-    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
-        let path = self.root.join(&file.path);
-        // Scaffolding a new crate writes into a directory that does not exist yet.
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(&path, &file.contents).await?;
-        Ok(())
-    }
 }
 
 /// A workspace port carrying a write permission. A permitted write passes
 /// through to the wrapped port and a refused one reports the contract's
-/// [`Refused`], so every mutation that reaches the tree through the port is
-/// gated the same way — `snapshot` passes ungated, a capture of the tree
-/// standing where a read would. It wraps an owned adapter inside a
-/// [`Standalone`] and a borrowed one inside a session, the same gate either
-/// way.
+/// [`Refused`], so every operation that reaches disk through the port is gated
+/// the same way. It wraps an owned adapter inside a [`Standalone`] and a
+/// borrowed one inside a session, the same gate either way.
 pub struct GatedWorkspace<W> {
     pub workspace: W,
     pub allow_writes: bool,
@@ -129,22 +147,34 @@ pub struct GatedWorkspace<W> {
 
 #[async_trait::async_trait]
 impl<W: Workspace> Workspace for GatedWorkspace<W> {
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
-        if !self.allow_writes {
-            return Err(Refused.into());
-        }
-        self.workspace.restore(request).await
-    }
-
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
-        self.workspace.snapshot(request).await
-    }
-
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
         if !self.allow_writes {
             return Err(Refused.into());
         }
         self.workspace.write_file(file).await
+    }
+}
+
+/// A checkpoint port carrying the same write permission with its own policy:
+/// `snapshot` captures the tree and passes ungated, `restore` mutates it and
+/// is refused without permission. The asymmetry lives here, on the port whose
+/// contract it is.
+pub struct GatedCheckpoint<C> {
+    pub checkpoint: C,
+    pub allow_writes: bool,
+}
+
+#[async_trait::async_trait]
+impl<C: Checkpoint> Checkpoint for GatedCheckpoint<C> {
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        self.checkpoint.snapshot(request).await
+    }
+
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.checkpoint.restore(request).await
     }
 }
 
@@ -221,12 +251,23 @@ pub fn head(diagnostics: &str) -> String {
 
 /// The repository's own composition for the owned root: the local adapters,
 /// writes gated by `allow_writes`.
-impl Standalone<GatedWorkspace<FsWorkspace>, theseus_calculator::Calculator, CargoToolchain> {
+impl
+    Standalone<
+        GatedWorkspace<FsWorkspace>,
+        GatedCheckpoint<GitCheckpoint>,
+        theseus_calculator::Calculator,
+        CargoToolchain,
+    >
+{
     pub fn new(allow_writes: bool) -> Self {
         Self {
             model: theseus_model::theseus_model(),
             workspace: GatedWorkspace {
                 workspace: FsWorkspace::at_repo_root(),
+                allow_writes,
+            },
+            checkpoint: GatedCheckpoint {
+                checkpoint: GitCheckpoint::at_repo_root(),
                 allow_writes,
             },
             calculator: theseus_calculator::Calculator,

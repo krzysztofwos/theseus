@@ -14,8 +14,8 @@ use theseus_model::{crate_is_scaffolded, generated_files};
 use theseus_modeling::Model;
 
 use crate::{
-    GatedWorkspace,
-    generated::{Ctx, Toolchain, Workspace, dispatch_tool},
+    GatedCheckpoint, GatedWorkspace,
+    generated::{Checkpoint, Ctx, Toolchain, Workspace, dispatch_tool},
     service::apply_patch,
     workspace_root,
 };
@@ -26,6 +26,7 @@ use crate::{
 pub struct Session<'a> {
     model: Model,
     workspace: &'a dyn Workspace,
+    checkpoint: &'a dyn Checkpoint,
     calculator: &'a dyn theseus_calculator::CalculatorService,
     toolchain: &'a dyn Toolchain,
     allow_writes: bool,
@@ -36,6 +37,7 @@ impl<'a> Session<'a> {
     pub fn new(
         model: Model,
         workspace: &'a dyn Workspace,
+        checkpoint: &'a dyn Checkpoint,
         calculator: &'a dyn theseus_calculator::CalculatorService,
         toolchain: &'a dyn Toolchain,
         allow_writes: bool,
@@ -43,6 +45,7 @@ impl<'a> Session<'a> {
         Self {
             model,
             workspace,
+            checkpoint,
             calculator,
             toolchain,
             allow_writes,
@@ -66,9 +69,11 @@ impl<'a> Session<'a> {
             return self.patch(input).await;
         }
         let workspace = self.gate();
+        let checkpoint = self.checkpoint_gate();
         let ctx = Ctx {
             model: &self.model,
             workspace: &workspace,
+            checkpoint: &checkpoint,
             calculator: self.calculator,
             toolchain: self.toolchain,
         };
@@ -97,6 +102,14 @@ impl<'a> Session<'a> {
     fn gate(&self) -> GatedWorkspace<&'a dyn Workspace> {
         GatedWorkspace {
             workspace: self.workspace,
+            allow_writes: self.allow_writes,
+        }
+    }
+
+    /// The checkpoint port carrying the same permission with its own policy.
+    fn checkpoint_gate(&self) -> GatedCheckpoint<&'a dyn Checkpoint> {
+        GatedCheckpoint {
+            checkpoint: self.checkpoint,
             allow_writes: self.allow_writes,
         }
     }

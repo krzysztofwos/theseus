@@ -349,7 +349,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRequest",
                     "String",
                 )
-                .uses(&["workspace"])
+                .uses(&["checkpoint"])
                 .tool(
                     "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback. Tracked files only: a file created after the snapshot survives a rollback.",
                 )
@@ -359,21 +359,21 @@ pub fn theseus_model() -> Model {
                     "RollbackRequest",
                     "String",
                 )
-                .uses(&["workspace"])
+                .uses(&["checkpoint"])
                 .tool(
                     "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
                 )
                 .port(
-                    Port::new(
-                            "workspace",
-                            "Writes generated files and checkpoints the working tree.",
-                        )
+                    Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
                             "write_file",
                             "Write one generated file to disk.",
                             "GeneratedFile",
                             "Empty",
-                        )
+                        ),
+                )
+                .port(
+                    Port::new("checkpoint", "Checkpoints and restores the working tree.")
                         .method(
                             "snapshot",
                             "Checkpoint the working tree and return the snapshot id.",

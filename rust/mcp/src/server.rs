@@ -16,7 +16,7 @@ use rmcp::{
     service::RequestContext,
 };
 use serde_json::Value;
-use theseus::{CargoToolchain, FsWorkspace, Session};
+use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session};
 use theseus_modeling::Model;
 use tokio::sync::Mutex;
 
@@ -26,6 +26,7 @@ use tokio::sync::Mutex;
 pub struct TheseusMcp {
     model: Mutex<Model>,
     workspace: FsWorkspace,
+    checkpoint: GitCheckpoint,
     calculator: theseus_calculator::Calculator,
     toolchain: CargoToolchain,
     allow_writes: bool,
@@ -38,6 +39,7 @@ impl TheseusMcp {
         Self {
             model: Mutex::new(model),
             workspace: FsWorkspace::at_repo_root(),
+            checkpoint: GitCheckpoint::at_repo_root(),
             calculator: theseus_calculator::Calculator,
             toolchain: CargoToolchain,
             allow_writes,
@@ -83,6 +85,7 @@ impl ServerHandler for TheseusMcp {
         let mut session = Session::new(
             model.clone(),
             &self.workspace,
+            &self.checkpoint,
             &self.calculator,
             &self.toolchain,
             self.allow_writes,

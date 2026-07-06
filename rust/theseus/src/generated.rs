@@ -37,6 +37,11 @@ pub trait Checkpoint: Send + Sync {
     async fn restore(&self, _request: &str) -> anyhow::Result<String> {
         Err(Unimplemented("checkpoint.restore").into())
     }
+
+    /// Return a unified diff of the working tree against the given snapshot ref.
+    async fn diff(&self, _request: &str) -> anyhow::Result<String> {
+        Err(Unimplemented("checkpoint.diff").into())
+    }
 }
 
 /// A borrowed adapter serves the port its target serves, so a wrapper
@@ -49,6 +54,10 @@ impl<T: Checkpoint + ?Sized> Checkpoint for &T {
 
     async fn restore(&self, request: &str) -> anyhow::Result<String> {
         (**self).restore(request).await
+    }
+
+    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+        (**self).diff(request).await
     }
 }
 
@@ -262,6 +271,11 @@ pub trait TheseusService: Send + Sync {
     async fn rollback(&self, _request: RollbackRequest) -> anyhow::Result<String> {
         Err(Unimplemented("rollback").into())
     }
+
+    /// Show what changed in the working tree since a snapshot.
+    async fn diff(&self, _request: RollbackRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("diff").into())
+    }
 }
 
 /// An owned composition root: the service over one owned adapter per port,
@@ -372,6 +386,10 @@ for Standalone<
     async fn rollback(&self, request: RollbackRequest) -> anyhow::Result<String> {
         self.ctx().rollback(request).await
     }
+
+    async fn diff(&self, request: RollbackRequest) -> anyhow::Result<String> {
+        self.ctx().diff(request).await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -427,6 +445,10 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "string" } }, "required" : ["label"] } }), serde_json::json!({ "name" :
         "rollback", "description" :
         "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
+        "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
+        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
+        "diff", "description" :
+        "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
         "string" } }, "required" : ["reference"] } })
     ]
@@ -569,9 +591,10 @@ pub async fn dispatch_tool(
         "test" => Ok(service.test().await?),
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
         "rollback" => Ok(service.rollback(parse_rollback_request_input(input)?).await?),
+        "diff" => Ok(service.diff(parse_rollback_request_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check, test, snapshot, rollback"
+                "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check, test, snapshot, rollback, diff"
             )
         }
     }

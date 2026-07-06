@@ -27,6 +27,10 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn diff(&self, request: crate::generated::RollbackRequest) -> anyhow::Result<String> {
+        self.checkpoint.diff(&request.reference).await
+    }
+
     async fn rollback(&self, request: crate::generated::RollbackRequest) -> anyhow::Result<String> {
         self.checkpoint.restore(&request.reference).await
     }

@@ -203,6 +203,18 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("rollback", status))?;
         Ok(reply.into_inner().value)
     }
+
+    async fn diff(&self, request: theseus::RollbackRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .diff(proto::RollbackRequest {
+                reference: request.reference,
+            })
+            .await
+            .map_err(|status| failed("diff", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

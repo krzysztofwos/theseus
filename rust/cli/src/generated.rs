@@ -195,6 +195,17 @@ pub fn command() -> Command {
                         .help("The snapshot id to restore, as returned by `snapshot`."),
                 ),
         )
+        .subcommand(
+            Command::new("diff")
+                .about("Show what changed in the working tree since a snapshot.")
+                .arg(
+                    Arg::new("reference")
+                        .long("reference")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The snapshot id to restore, as returned by `snapshot`."),
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -284,6 +295,7 @@ pub enum Invocation {
     Test,
     Snapshot(theseus::SnapshotRequest),
     Rollback(theseus::RollbackRequest),
+    Diff(theseus::RollbackRequest),
 }
 
 impl Invocation {
@@ -310,6 +322,7 @@ impl Invocation {
             Some(("rollback", sub)) => {
                 Ok(Invocation::Rollback(parse_rollback_request(sub)?))
             }
+            Some(("diff", sub)) => Ok(Invocation::Diff(parse_rollback_request(sub)?)),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -359,6 +372,7 @@ pub async fn dispatch(
         Invocation::Rollback(request) => {
             println!("{}", service.rollback(request). await ?)
         }
+        Invocation::Diff(request) => println!("{}", service.diff(request). await ?),
     }
     Ok(())
 }

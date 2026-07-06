@@ -75,6 +75,21 @@ impl GitCheckpoint {
 
 #[async_trait::async_trait]
 impl Checkpoint for GitCheckpoint {
+    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("git")
+            .args(["diff", request])
+            .current_dir(&self.root)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running git diff")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("{}", stderr.trim()));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
         // The stash commit is unreferenced: it lives for the gc grace period,
         // which covers a session's checkpoint-and-rollback horizon.
@@ -166,6 +181,10 @@ pub struct GatedCheckpoint<C> {
 
 #[async_trait::async_trait]
 impl<C: Checkpoint> Checkpoint for GatedCheckpoint<C> {
+    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+        self.checkpoint.diff(request).await
+    }
+
     async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
         self.checkpoint.snapshot(request).await
     }

@@ -363,6 +363,16 @@ pub fn theseus_model() -> Model {
                 .tool(
                     "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
                 )
+                .operation(
+                    "diff",
+                    "Show what changed in the working tree since a snapshot.",
+                    "RollbackRequest",
+                    "String",
+                )
+                .uses(&["checkpoint"])
+                .tool(
+                    "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
@@ -383,6 +393,12 @@ pub fn theseus_model() -> Model {
                         .method(
                             "restore",
                             "Restore the working tree to a snapshot.",
+                            "String",
+                            "String",
+                        )
+                        .method(
+                            "diff",
+                            "Return a unified diff of the working tree against the given snapshot ref.",
                             "String",
                             "String",
                         ),

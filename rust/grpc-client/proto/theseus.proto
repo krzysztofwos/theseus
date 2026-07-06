@@ -174,4 +174,6 @@ service Theseus {
   rpc Snapshot (SnapshotRequest) returns (String);
   // Restore the working tree to a snapshot.
   rpc Rollback (RollbackRequest) returns (String);
+  // Show what changed in the working tree since a snapshot.
+  rpc Diff (RollbackRequest) returns (String);
 }

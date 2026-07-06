@@ -177,6 +177,14 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("rollback", status, &body)?;
         Ok(body)
     }
+
+    async fn diff(&self, request: theseus::RollbackRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("diff", serde_json::json!({ "reference" : request.reference }))
+            .await?;
+        checked("diff", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

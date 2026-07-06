@@ -196,6 +196,12 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
+        "diff" => {
+            match parse_rollback_request_http(input) {
+                Ok(request) => reply_text(service.diff(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
         other => {
             HttpReply {
                 status: 404,

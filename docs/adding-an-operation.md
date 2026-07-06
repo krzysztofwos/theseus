@@ -249,7 +249,7 @@ theseus patch --edit 'set|<handle>|k=v|…'
 
 Handles take the forms `op:theseus:<name>`, `type:theseus:<name>`, `port:theseus:<name>`, `crate:theseus:<name>`, `service:theseus:<name>`, `inbound:theseus:<name>`, and the nested `method:theseus:<port>.<name>`, `field:theseus:<type>.<name>`, `variant:theseus:<type>.<name>`, and `dep:theseus:<crate>.<dep>`. The model root is `model:theseus`. `kind` for an `add` is one of `operation`, `type`, `port`, `method`, `field`, `variant`, `crate`, `dep`, `service`, or `inbound` — the crate-and-service kinds are exercised in [building a calculator](building-a-calculator.md). A port attaches to a service or to an inbound — the agent loop's own `llm` port hangs on the `agent` inbound and is addressed by the same `port:theseus:llm` handle.
 
-An operation's `uses` attribute (comma-separated port names, empty to clear) declares its flow for the ninth check, and its `tool` attribute (empty to withdraw) is its agent tool description. An inbound's `turns` attribute is its loop's turn budget, rendered as the generated `TURN_BUDGET`.
+An operation's `uses` attribute (comma-separated port names, empty to clear) declares its flow for the ninth check, and its `tool` attribute (empty to withdraw) is its agent tool description. A method's `gated` attribute (`true`/`false`) is its write-gate policy, rendered into the port's generated gate. An inbound's `turns` attribute is its loop's turn budget, rendered as the generated `TURN_BUDGET`.
 
 Type shapes (`shape=…`) are `newtype:Inner`, `foreign:Path`, `enum:A,B,C`, and `struct:field=Type,field=Type`. A struct field may carry its documentation inline as `field=Type:doc`, and a non-`String` field type is parsed and validated as that type on the command line.
 

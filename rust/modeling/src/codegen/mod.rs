@@ -97,6 +97,15 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .filter(|port| port.target.is_none())
         .map(|port| render_port_trait(port, model))
         .collect();
+    // A port with a gated method carries a rendered write gate, so the
+    // permission policy is a modeled fact of the method, never a wrapper to
+    // keep in step by hand.
+    let port_gates: Vec<TokenStream> = ports
+        .iter()
+        .chain(&interior_ports)
+        .filter(|port| port.target.is_none())
+        .map(|port| contract::render_port_gate(port, model))
+        .collect();
     // A modeled turn budget renders as the loop's constant, so the budget is a
     // patchable fact of the model.
     let turn_budgets: Vec<TokenStream> = interior
@@ -133,9 +142,13 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
     } else {
         render_unimplemented()
     };
-    // The gate's error belongs to a service contract; a crate holding only a
-    // loop's interior defaults its port methods and needs no refusal.
-    let refused = if service_traits.is_empty() {
+    // The gate's error renders wherever a contract or a rendered gate can
+    // refuse: with a service's traits, or beside a gated port.
+    let has_gate = ports
+        .iter()
+        .chain(&interior_ports)
+        .any(|port| port.methods.iter().any(|method| method.gated));
+    let refused = if service_traits.is_empty() && !has_gate {
         quote! {}
     } else {
         contract::render_refused()
@@ -232,6 +245,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         #command_import
 
         #(#port_traits)*
+        #(#port_gates)*
         #(#turn_budgets)*
         #composition_root
         #requests

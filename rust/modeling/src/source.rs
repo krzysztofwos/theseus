@@ -220,7 +220,12 @@ fn render_method(method: &Method) -> TokenStream {
     let summary = &method.summary;
     let request = &method.request;
     let response = &method.response;
-    quote! { .method(#name, #summary, #request, #response) }
+    let gated = if method.gated {
+        quote! { .gated() }
+    } else {
+        quote! {}
+    };
+    quote! { .method(#name, #summary, #request, #response) #gated }
 }
 
 #[cfg(test)]

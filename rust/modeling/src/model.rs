@@ -233,6 +233,9 @@ pub struct Method {
     pub request: String,
     /// Response type label.
     pub response: String,
+    /// Whether the method mutates and a write gate refuses it without
+    /// permission. The port's gate wrapper renders from this flag.
+    pub gated: bool,
 }
 
 /// A named type the system exchanges.

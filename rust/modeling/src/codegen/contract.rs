@@ -68,6 +68,69 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
     }
 }
 
+/// Render a port's write gate, for a port with a gated method: a wrapper
+/// carrying the permission, refusing each gated method without it and passing
+/// each ungated one through. The policy renders from the model, so which
+/// methods a gate guards is a modeled fact, and a method the port grows lands
+/// in the gate on the next render.
+pub(super) fn render_port_gate(port: &Port, model: &Model) -> TokenStream {
+    if port.methods.iter().all(|method| !method.gated) {
+        return quote! {};
+    }
+    let trait_name = format_ident!("{}", pascal_case(&port.name));
+    let gate_name = format_ident!("Gated{}", pascal_case(&port.name));
+    let field = format_ident!("{}", snake_case(&port.name));
+    let methods: Vec<TokenStream> = port
+        .methods
+        .iter()
+        .map(|method| {
+            let method_name = format_ident!("{}", method.name);
+            let param = bound_request_param(&method.request, model);
+            let response = response_type(&method.response, model);
+            let args = if method.request == "Empty" {
+                quote! {}
+            } else {
+                quote! { request }
+            };
+            let guard = if method.gated {
+                quote! {
+                    if !self.allow_writes {
+                        return Err(Refused.into());
+                    }
+                }
+            } else {
+                quote! {}
+            };
+            quote! {
+                async fn #method_name(&self #param) -> anyhow::Result<#response> {
+                    #guard
+                    self.#field.#method_name(#args).await
+                }
+            }
+        })
+        .collect();
+    let doc_a = doc(&format!(
+        "The `{}` port carrying a write permission: a gated method is refused",
+        port.name
+    ));
+    let doc_b = doc("without it, and an ungated one passes through. It wraps an owned");
+    let doc_c = doc("adapter or a borrowed one, the same gate either way.");
+    quote! {
+        #doc_a
+        #doc_b
+        #doc_c
+        pub struct #gate_name<A> {
+            pub #field: A,
+            pub allow_writes: bool,
+        }
+
+        #[async_trait::async_trait]
+        impl<A: #trait_name> #trait_name for #gate_name<A> {
+            #(#methods)*
+        }
+    }
+}
+
 /// Render the owned composition root: the service over one owned adapter per
 /// port, driven through a fresh borrowed `Ctx` per call. A long-lived inbound
 /// holds it where a borrowed root cannot live, and its delegations regenerate
@@ -494,6 +557,30 @@ mod tests {
         let service_side = render_module_for_crate(&model, "app");
         assert!(!service_side.contains("trait Llm"));
         assert!(!service_side.contains("TURN_BUDGET"));
+    }
+
+    #[test]
+    fn a_gated_method_renders_its_ports_write_gate() {
+        let model = Model::new("App").service(
+            Service::new("App").crate_name("app").port(
+                Port::new("store", "Writes records.")
+                    .method("read", "Read.", "String", "String")
+                    .method("write", "Write.", "String", "String")
+                    .gated(),
+            ),
+        );
+        let rendered = render_module_for_crate(&model, "app");
+        assert!(rendered.contains("pub struct GatedStore<A>"));
+        // The gated method guards; the ungated one passes through.
+        assert!(rendered.contains("async fn write(&self, request: &str)"));
+        assert!(rendered.contains("Err(Refused.into())"));
+        assert!(rendered.contains("self.store.read(request).await"));
+
+        // A port with no gated method renders no gate.
+        let ungated = Model::new("App").service(Service::new("App").crate_name("app").port(
+            Port::new("store", "Reads records.").method("read", "Read.", "String", "String"),
+        ));
+        assert!(!render_module_for_crate(&ungated, "app").contains("GatedStore"));
     }
 
     #[test]

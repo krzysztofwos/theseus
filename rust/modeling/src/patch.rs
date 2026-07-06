@@ -326,7 +326,10 @@ fn plan_add(
                 &format!("{port}.{name}"),
             )?;
             renderable_types(attrs, &["request", "response"])?;
-            allow_keys(attrs, &["summary", "request", "response"])?;
+            allow_keys(attrs, &["summary", "request", "response", "gated"])?;
+            if let Some(gated) = attr(attrs, "gated") {
+                parse_gated(gated).map_err(gated_refused)?;
+            }
         }
         NodeKind::Field => {
             let ty = parent_struct(model, &parent)?;
@@ -433,6 +436,11 @@ fn plan_set(
         }
         Target::Operation(_) | Target::Method { .. } => {
             renderable_types(attrs, &["request", "response"])?;
+            if let Some(gated) = attr(attrs, "gated")
+                && !gated.is_empty()
+            {
+                parse_gated(gated).map_err(gated_refused)?;
+            }
         }
         Target::Field { .. } => {
             renderable_types(attrs, &["ty"])?;
@@ -550,6 +558,7 @@ fn apply_add(
                 && let Some(port) = port_mut(model, port)
             {
                 port.methods.push(Method {
+                    gated: attr(attrs, "gated") == Some("true"),
                     name: name.to_string(),
                     summary: attr(attrs, "summary").unwrap_or_default().to_string(),
                     request: attr(attrs, "request").unwrap_or("Empty").to_string(),
@@ -781,6 +790,11 @@ fn apply_set(model: &mut Model, target: &Target, attrs: &BTreeMap<String, String
             {
                 set_if(attrs, "summary", &mut method.summary);
                 set_if(attrs, "request", &mut method.request);
+                // The `gated` attribute is the method's write-gate policy.
+                // Empty clears it to ungated.
+                if let Some(gated) = attr(attrs, "gated") {
+                    method.gated = gated == "true";
+                }
                 set_if(attrs, "response", &mut method.response);
             }
         }
@@ -1116,7 +1130,7 @@ fn settable_keys(target: &Target) -> &'static [&'static str] {
         Target::Inbound(_) => &["transport", "service", "crate", "turns"],
         Target::Client(_) => &["transport", "service", "crate"],
         Target::Operation(_) => &["summary", "request", "response", "uses", "tool"],
-        Target::Method { .. } => &["summary", "request", "response"],
+        Target::Method { .. } => &["summary", "request", "response", "gated"],
         Target::Port(_) => &["summary"],
         Target::Field { .. } => &["ty", "doc"],
         Target::Dep { .. }
@@ -1540,6 +1554,28 @@ fn renderable_shape(shape: &TypeShape) -> Result<(), Vec<Diagnostic>> {
         }
         TypeShape::Enum { .. } => Ok(()),
     }
+}
+
+/// A gate flag that is not `true` or `false`.
+#[derive(Debug, thiserror::Error)]
+#[error("`{0}` is not a gate flag (`true` or `false`)")]
+struct GatedError(String);
+
+/// Parse a method's write-gate flag.
+fn parse_gated(text: &str) -> Result<bool, GatedError> {
+    match text {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(GatedError(other.to_string())),
+    }
+}
+
+fn gated_refused(error: GatedError) -> Vec<Diagnostic> {
+    vec![diagnostic(
+        "PATCH019",
+        error.to_string(),
+        "pass gated=true or gated=false, or empty to clear",
+    )]
 }
 
 /// A turn budget that does not parse as a positive integer.
@@ -2210,6 +2246,45 @@ mod tests {
         );
         assert_eq!(model.operation("greet").unwrap().uses, vec!["vault"]);
         assert!(model.services[0].outbound.iter().any(|p| p.name == "vault"));
+    }
+
+    #[test]
+    fn set_a_methods_gate_and_refuse_a_bad_flag() {
+        // The sample store carries no methods; add one to gate.
+        let base = accept(
+            &sample_model(),
+            add(
+                "port:sample:store",
+                "method",
+                "write",
+                &[("request", "String"), ("response", "String")],
+            ),
+        );
+        let model = accept(
+            &base,
+            Edit::Set {
+                target: "method:sample:store.write".to_string(),
+                attrs: [("gated".to_string(), "true".to_string())].into(),
+            },
+        );
+        let port = model.ports().find(|p| p.name == "store").unwrap();
+        assert!(
+            port.methods
+                .iter()
+                .find(|m| m.name == "write")
+                .unwrap()
+                .gated
+        );
+
+        let (outcome, _) = apply_edit(
+            &base,
+            &Edit::Set {
+                target: "method:sample:store.write".to_string(),
+                attrs: [("gated".to_string(), "maybe".to_string())].into(),
+            },
+        );
+        assert!(!outcome.ok);
+        assert_eq!(code(&outcome), "PATCH019");
     }
 
     #[test]

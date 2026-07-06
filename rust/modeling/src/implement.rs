@@ -433,12 +433,14 @@ mod tests {
         let mut model = sample_model();
         let port = &mut model.services[0].outbound[0];
         port.methods.push(crate::model::Method {
+            gated: false,
             name: "read".to_string(),
             summary: "Read.".to_string(),
             request: "Empty".to_string(),
             response: "String".to_string(),
         });
         port.methods.push(crate::model::Method {
+            gated: false,
             name: "write".to_string(),
             summary: "Write.".to_string(),
             request: "String".to_string(),

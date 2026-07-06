@@ -150,53 +150,6 @@ impl Checkpoint for GitCheckpoint {
     }
 }
 
-/// A workspace port carrying a write permission. A permitted write passes
-/// through to the wrapped port and a refused one reports the contract's
-/// [`Refused`], so every operation that reaches disk through the port is gated
-/// the same way. It wraps an owned adapter inside a [`Standalone`] and a
-/// borrowed one inside a session, the same gate either way.
-pub struct GatedWorkspace<W> {
-    pub workspace: W,
-    pub allow_writes: bool,
-}
-
-#[async_trait::async_trait]
-impl<W: Workspace> Workspace for GatedWorkspace<W> {
-    async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
-        if !self.allow_writes {
-            return Err(Refused.into());
-        }
-        self.workspace.write_file(file).await
-    }
-}
-
-/// A checkpoint port carrying the same write permission with its own policy:
-/// `snapshot` captures the tree and passes ungated, `restore` mutates it and
-/// is refused without permission. The asymmetry lives here, on the port whose
-/// contract it is.
-pub struct GatedCheckpoint<C> {
-    pub checkpoint: C,
-    pub allow_writes: bool,
-}
-
-#[async_trait::async_trait]
-impl<C: Checkpoint> Checkpoint for GatedCheckpoint<C> {
-    async fn diff(&self, request: &str) -> anyhow::Result<String> {
-        self.checkpoint.diff(request).await
-    }
-
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
-        self.checkpoint.snapshot(request).await
-    }
-
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
-        if !self.allow_writes {
-            return Err(Refused.into());
-        }
-        self.checkpoint.restore(request).await
-    }
-}
-
 /// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
 /// at the repository root. The shared toolchain adapter for the inbound binaries.
 /// The check runs as a managed child process, so a server inbound keeps serving

@@ -260,11 +260,21 @@ impl Port {
     /// Add a method.
     pub fn method(mut self, name: &str, summary: &str, request: &str, response: &str) -> Self {
         self.methods.push(Method {
+            gated: false,
             name: name.to_string(),
             summary: summary.to_string(),
             request: request.to_string(),
             response: response.to_string(),
         });
+        self
+    }
+
+    /// Mark the most recently added method as gated: it mutates, and the
+    /// port's write gate refuses it without permission.
+    pub fn gated(mut self) -> Self {
+        if let Some(method) = self.methods.last_mut() {
+            method.gated = true;
+        }
         self
     }
 }

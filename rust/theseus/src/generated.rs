@@ -88,6 +88,53 @@ impl<T: Toolchain + ?Sized> Toolchain for &T {
     }
 }
 
+/// The `workspace` port carrying a write permission: a gated method is refused
+/// without it, and an ungated one passes through. It wraps an owned
+/// adapter or a borrowed one, the same gate either way.
+pub struct GatedWorkspace<A> {
+    pub workspace: A,
+    pub allow_writes: bool,
+}
+
+#[async_trait::async_trait]
+impl<A: Workspace> Workspace for GatedWorkspace<A> {
+    async fn write_file(
+        &self,
+        request: &theseus_modeling::GeneratedFile,
+    ) -> anyhow::Result<()> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.workspace.write_file(request).await
+    }
+}
+
+/// The `checkpoint` port carrying a write permission: a gated method is refused
+/// without it, and an ungated one passes through. It wraps an owned
+/// adapter or a borrowed one, the same gate either way.
+pub struct GatedCheckpoint<A> {
+    pub checkpoint: A,
+    pub allow_writes: bool,
+}
+
+#[async_trait::async_trait]
+impl<A: Checkpoint> Checkpoint for GatedCheckpoint<A> {
+    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        self.checkpoint.snapshot(request).await
+    }
+
+    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.checkpoint.restore(request).await
+    }
+
+    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+        self.checkpoint.diff(request).await
+    }
+}
+
 /// Composition root: the model plus the wired outbound ports.
 pub struct Ctx<'a> {
     pub model: &'a theseus_modeling::Model,

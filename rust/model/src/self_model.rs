@@ -380,7 +380,8 @@ pub fn theseus_model() -> Model {
                             "Write one generated file to disk.",
                             "GeneratedFile",
                             "Empty",
-                        ),
+                        )
+                        .gated(),
                 )
                 .port(
                     Port::new("checkpoint", "Checkpoints and restores the working tree.")
@@ -396,6 +397,7 @@ pub fn theseus_model() -> Model {
                             "String",
                             "String",
                         )
+                        .gated()
                         .method(
                             "diff",
                             "Return a unified diff of the working tree against the given snapshot ref.",

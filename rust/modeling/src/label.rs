@@ -19,7 +19,8 @@ pub(crate) fn vec_inner(label: &str) -> Option<&str> {
 /// strings, so the value carries the label's type content.
 pub(crate) fn map_value(label: &str) -> Option<&str> {
     let inner = label.strip_prefix("BTreeMap<")?.strip_suffix('>')?;
-    inner.split_once(',').map(|(_, value)| value.trim())
+    let (key, value) = inner.split_once(',')?;
+    (key.trim() == "String").then(|| value.trim())
 }
 
 /// One container layer's inner label, whichever container the label wraps.
@@ -53,5 +54,6 @@ mod tests {
             map_value("BTreeMap<String, Vec<String>>"),
             Some("Vec<String>")
         );
+        assert_eq!(map_value("BTreeMap<u32, String>"), None);
     }
 }

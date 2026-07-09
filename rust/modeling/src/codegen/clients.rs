@@ -14,26 +14,30 @@ pub(super) fn render_http_client_module(
     client: &Client,
     service: &Service,
     model: &Model,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let ContractPaths {
         prefix,
         service_trait: trait_path,
         unimplemented: unimplemented_path,
         refused: refused_path,
-    } = contract_paths(&client.crate_name, service, model);
+    } = contract_paths(&client.crate_name, service, model)?;
     let name = format_ident!("Http{}Client", pascal_case(&service.name));
 
     let methods: Vec<TokenStream> = service
         .operations
         .iter()
-        .map(|op| {
+        .map(|op| -> Result<TokenStream, RenderError> {
             let method = format_ident!("{}", op.name);
             let op_name = op.name.as_str();
             let (param, body) = match request_type(op, model) {
                 Some(def) => {
-                    let ty = syn_type(&format!("{prefix}{}", def.name));
+                    let ty = syn_type(&format!("{prefix}{}", def.name))?;
                     let TypeShape::Struct(fields) = &def.shape else {
-                        panic!("a request type is a struct");
+                        return Err(RenderError::InvalidRequestType {
+                            service: service.name.clone(),
+                            operation: op.name.clone(),
+                            request: op.request.clone(),
+                        });
                     };
                     let entries: Vec<TokenStream> = fields
                         .iter()
@@ -50,7 +54,7 @@ pub(super) fn render_http_client_module(
                 }
                 None => (quote! {}, quote! { serde_json::json!({}) }),
             };
-            let response = response_type(&op.response, model);
+            let response = response_type(&op.response, model)?;
             let finish = match response_kind(op, model) {
                 ResponseKind::Empty => quote! {
                     checked(#op_name, status, &body)?;
@@ -65,21 +69,21 @@ pub(super) fn render_http_client_module(
                     parsed(#op_name, &body)
                 },
             };
-            quote! {
+            Ok(quote! {
                 async fn #method(&self #param) -> anyhow::Result<#response> {
                     let (status, body) = self.post(#op_name, #body).await?;
                     #finish
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let parsed = render_client_parsed(service, model);
     let doc_a = doc("The service contract carried over HTTP: each call posts its request as");
     let doc_b = doc("a JSON body, and the reply's status maps back onto the contract's error");
     let doc_c = doc("classes. A composition root wires it where an in-process adapter would");
     let doc_d = doc("stand.");
-    quote! {
+    Ok(quote! {
         #doc_a
         #doc_b
         #doc_c
@@ -134,7 +138,7 @@ pub(super) fn render_http_client_module(
         }
 
         #parsed
-    }
+    })
 }
 
 /// Render a gRPC client adapter: the target service's contract implemented over
@@ -144,13 +148,15 @@ pub(super) fn render_grpc_client_module(
     client: &Client,
     service: &Service,
     model: &Model,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
+    render_proto(model, service)?;
+    validate_grpc_conversions(service, model)?;
     let ContractPaths {
         prefix,
         service_trait: trait_path,
         unimplemented: unimplemented_path,
         refused: refused_path,
-    } = contract_paths(&client.crate_name, service, model);
+    } = contract_paths(&client.crate_name, service, model)?;
     let name = format_ident!("Grpc{}Client", pascal_case(&service.name));
     let package = proto_package(model, service);
     let client_mod = format_ident!("{}_client", proto_snake_case(&service.name));
@@ -159,20 +165,24 @@ pub(super) fn render_grpc_client_module(
     let methods: Vec<TokenStream> = service
         .operations
         .iter()
-        .map(|op| {
+        .map(|op| -> Result<TokenStream, RenderError> {
             let method = format_ident!("{}", op.name);
             let op_name = op.name.as_str();
-            let request_msg = format_ident!("{}", proto_request_message(op, model).0);
+            let request_msg = format_ident!("{}", proto_request_message(op, model)?.0);
             let (param, message) = match request_type(op, model) {
                 Some(def) => {
-                    let ty = syn_type(&format!("{prefix}{}", def.name));
+                    let ty = syn_type(&format!("{prefix}{}", def.name))?;
                     let TypeShape::Struct(fields) = &def.shape else {
-                        panic!("a request type is a struct");
+                        return Err(RenderError::InvalidRequestType {
+                            service: service.name.clone(),
+                            operation: op.name.clone(),
+                            request: op.request.clone(),
+                        });
                     };
                     let inits: Vec<TokenStream> = fields
                         .iter()
                         .map(|field| grpc_client_field_conversion(field, model))
-                        .collect();
+                        .collect::<Result<_, _>>()?;
                     (
                         quote! { , request: #ty },
                         quote! { proto::#request_msg { #(#inits),* } },
@@ -180,7 +190,7 @@ pub(super) fn render_grpc_client_module(
                 }
                 None => (quote! {}, quote! { proto::#request_msg {} }),
             };
-            let response = response_type(&op.response, model);
+            let response = response_type(&op.response, model)?;
             let finish = match response_kind(op, model) {
                 ResponseKind::Empty => quote! {
                     reply.into_inner();
@@ -189,7 +199,7 @@ pub(super) fn render_grpc_client_module(
                 ResponseKind::Text => quote! { Ok(reply.into_inner().value) },
                 ResponseKind::Json => quote! { parsed(#op_name, &reply.into_inner().json) },
             };
-            quote! {
+            Ok(quote! {
                 async fn #method(&self #param) -> anyhow::Result<#response> {
                     let reply = self
                         .stub
@@ -199,18 +209,18 @@ pub(super) fn render_grpc_client_module(
                         .map_err(|status| failed(#op_name, status))?;
                     #finish
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
-    let conversions = render_grpc_client_enum_conversions(service, model);
+    let conversions = render_grpc_client_enum_conversions(service, model)?;
     let parsed = render_client_parsed(service, model);
     let doc_proto = doc("The wire types and client stub the build compiles from the proto.");
     let doc_a = doc("The service contract carried over gRPC: each call converts its request");
     let doc_b = doc("to the wire's message, and a status maps back onto the contract's error");
     let doc_c = doc("classes. A composition root wires it where an in-process adapter would");
     let doc_d = doc("stand.");
-    quote! {
+    Ok(quote! {
         #doc_proto
         pub mod proto {
             tonic::include_proto!(#package);
@@ -252,7 +262,7 @@ pub(super) fn render_grpc_client_module(
         }
 
         #parsed
-    }
+    })
 }
 
 /// Render the JSON reply parser a client uses for foreign-typed responses, when
@@ -279,34 +289,40 @@ pub(super) fn render_client_parsed(service: &Service, model: &Model) -> TokenStr
 /// The conversion one request field needs from the contract's form to the
 /// wire's: a map spreads into the proto map, an enum-typed field converts
 /// through its generated conversion, and a scalar passes through.
-pub(super) fn grpc_client_field_conversion(field: &Field, model: &Model) -> TokenStream {
+pub(super) fn grpc_client_field_conversion(
+    field: &Field,
+    model: &Model,
+) -> Result<TokenStream, RenderError> {
     let name = format_ident!("{}", field.name);
     let base = base_label(&field.ty);
     let unwrapped = optional_inner(&field.ty).unwrap_or(&field.ty);
     if unwrapped.starts_with("BTreeMap<") {
-        return quote! { #name: request.#name.into_iter().collect() };
+        return Ok(quote! { #name: request.#name.into_iter().collect() });
     }
     match model.type_def(base).map(|def| &def.shape) {
         Some(TypeShape::Enum { .. }) => {
             let convert = format_ident!("{}_to_proto", proto_snake_case(base));
             if field.ty.starts_with("Vec<") {
-                quote! { #name: request.#name.into_iter().map(#convert).collect() }
+                Ok(quote! { #name: request.#name.into_iter().map(#convert).collect() })
             } else {
-                quote! { #name: Some(#convert(request.#name)) }
+                Ok(quote! { #name: Some(#convert(request.#name)) })
             }
         }
-        Some(TypeShape::Struct(_)) => panic!(
-            "the gRPC client renderer does not yet convert the struct-typed field `{}`",
-            field.name
-        ),
-        _ => quote! { #name: request.#name },
+        Some(TypeShape::Struct(_)) => Err(RenderError::UnsupportedNestedStructType {
+            field: field.name.clone(),
+            ty: field.ty.clone(),
+        }),
+        _ => Ok(quote! { #name: request.#name }),
     }
 }
 
 /// Render a conversion per rich enum the service's request fields carry: the
 /// contract's enum becomes the wire's `oneof` message, verb by verb — the
 /// mirror of the server side's conversion.
-pub(super) fn render_grpc_client_enum_conversions(service: &Service, model: &Model) -> TokenStream {
+pub(super) fn render_grpc_client_enum_conversions(
+    service: &Service,
+    model: &Model,
+) -> Result<TokenStream, RenderError> {
     let mut seen: Vec<&str> = Vec::new();
     let conversions: Vec<TokenStream> = service
         .operations
@@ -328,57 +344,59 @@ pub(super) fn render_grpc_client_enum_conversions(service: &Service, model: &Mod
             }
             _ => None,
         })
-        .map(|(def, variants, path)| {
-            let enum_mod = format_ident!("{}", proto_snake_case(&def.name));
-            let enum_msg = format_ident!("{}", def.name);
-            let convert = format_ident!("{}_to_proto", proto_snake_case(&def.name));
-            let rust_path = syn_type(path);
-            let arms: Vec<TokenStream> = variants
-                .iter()
-                .map(|variant| {
-                    let wire = format_ident!("{}", pascal_case(&variant.name));
-                    let names: Vec<proc_macro2::Ident> = variant
-                        .fields
-                        .iter()
-                        .map(|field| format_ident!("{}", field.name))
-                        .collect();
-                    let inits: Vec<TokenStream> = variant
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            let name = format_ident!("{}", field.name);
-                            let unwrapped = optional_inner(&field.ty).unwrap_or(&field.ty);
-                            if unwrapped.starts_with("BTreeMap<") {
-                                quote! { #name: #name.into_iter().collect() }
-                            } else {
-                                quote! { #name }
-                            }
-                        })
-                        .collect();
-                    quote! {
-                        #rust_path::#wire { #(#names),* } => proto::#enum_msg {
-                            verb: Some(proto::#enum_mod::Verb::#wire(proto::#enum_mod::#wire {
-                                #(#inits),*
-                            })),
-                        },
+        .map(
+            |(def, variants, path)| -> Result<TokenStream, RenderError> {
+                let enum_mod = format_ident!("{}", proto_snake_case(&def.name));
+                let enum_msg = format_ident!("{}", def.name);
+                let convert = format_ident!("{}_to_proto", proto_snake_case(&def.name));
+                let rust_path = syn_type(path)?;
+                let arms: Vec<TokenStream> = variants
+                    .iter()
+                    .map(|variant| {
+                        let wire = format_ident!("{}", pascal_case(&variant.name));
+                        let names: Vec<proc_macro2::Ident> = variant
+                            .fields
+                            .iter()
+                            .map(|field| format_ident!("{}", field.name))
+                            .collect();
+                        let inits: Vec<TokenStream> = variant
+                            .fields
+                            .iter()
+                            .map(|field| {
+                                let name = format_ident!("{}", field.name);
+                                let unwrapped = optional_inner(&field.ty).unwrap_or(&field.ty);
+                                if unwrapped.starts_with("BTreeMap<") {
+                                    quote! { #name: #name.into_iter().collect() }
+                                } else {
+                                    quote! { #name }
+                                }
+                            })
+                            .collect();
+                        quote! {
+                            #rust_path::#wire { #(#names),* } => proto::#enum_msg {
+                                verb: Some(proto::#enum_mod::Verb::#wire(proto::#enum_mod::#wire {
+                                    #(#inits),*
+                                })),
+                            },
+                        }
+                    })
+                    .collect();
+                let doc_line = doc(&format!(
+                    "Convert the contract's {} to the wire's, verb by verb.",
+                    def.name
+                ));
+                Ok(quote! {
+                    #doc_line
+                    fn #convert(value: #rust_path) -> proto::#enum_msg {
+                        match value {
+                            #(#arms)*
+                        }
                     }
                 })
-                .collect();
-            let doc_line = doc(&format!(
-                "Convert the contract's {} to the wire's, verb by verb.",
-                def.name
-            ));
-            quote! {
-                #doc_line
-                fn #convert(value: #rust_path) -> proto::#enum_msg {
-                    match value {
-                        #(#arms)*
-                    }
-                }
-            }
-        })
-        .collect();
-    quote! { #(#conversions)* }
+            },
+        )
+        .collect::<Result<_, _>>()?;
+    Ok(quote! { #(#conversions)* })
 }
 
 #[cfg(test)]
@@ -414,13 +432,15 @@ mod tests {
             .client("http-client", Transport::Http, "App", "app-http-client")
             .client("grpc-client", Transport::Grpc, "App", "app-grpc-client");
 
-        let http = render_module_for_crate(&model, "app-http-client");
+        let http =
+            render_module_for_crate(&model, "app-http-client").expect("HTTP client module renders");
         assert!(http.contains("pub struct HttpAppClient"), "{http}");
         assert!(http.contains("for HttpAppClient"));
         assert!(http.contains("501") && http.contains("Refused"));
         assert!(http.contains("app::Unimplemented"));
 
-        let grpc = render_module_for_crate(&model, "app-grpc-client");
+        let grpc =
+            render_module_for_crate(&model, "app-grpc-client").expect("gRPC client module renders");
         assert!(grpc.contains("pub struct GrpcAppClient"), "{grpc}");
         assert!(grpc.contains("fn edit_to_proto"));
         assert!(grpc.contains("Verb::Add("));

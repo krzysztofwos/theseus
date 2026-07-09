@@ -100,13 +100,14 @@ fn an_agent_builds_and_amends_a_calculator() {
 
     // Both projections render. Each render parses its own tokens, so a successful
     // render guarantees valid Rust, and the output names the operations.
-    let cli = render_cli_module(&model);
+    let cli = render_cli_module(&model).expect("calculator CLI renders");
     assert!(cli.contains("Command::new(\"add\")"));
     assert!(cli.contains("Command::new(\"sub\")"));
     assert!(!cli.contains("Command::new(\"divide\")"));
     assert!(cli.contains("pub struct Operands"));
 
-    let source = render_model_source(&model, "// projected\n", "calculator_model");
+    let source = render_model_source(&model, "// projected\n", "calculator_model")
+        .expect("calculator model source renders");
     assert!(source.contains("pub fn calculator_model() -> Model"));
     assert!(source.contains(".operation(\"add\""));
     assert!(source.contains(".struct_type("));

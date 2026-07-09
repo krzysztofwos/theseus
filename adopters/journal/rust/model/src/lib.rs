@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use theseus_modeling::{GeneratedFile, Model, Port, Service, Transport};
+use theseus_modeling::{GeneratedFile, Model, Port, RenderError, Service, Transport};
 
 /// The journal's model: one service over a `store` port, driven by a CLI.
 pub fn journal_model() -> Model {
@@ -17,7 +17,10 @@ pub fn journal_model() -> Model {
         .crate_node("journal", "journal", 1, &[])
         .crate_node("journal-cli", "cli", 2, &["journal", "journal-model"])
         .struct_type("AddRequest", &[("text", "String", "The entry to record.")])
-        .struct_type("SearchRequest", &[("term", "String", "The text to look for.")])
+        .struct_type(
+            "SearchRequest",
+            &[("term", "String", "The text to look for.")],
+        )
         .service(
             Service::new("Journal")
                 .crate_name("journal")
@@ -51,19 +54,21 @@ pub fn workspace_root() -> PathBuf {
 }
 
 /// The files the journal projects from its model, drift-gated by `verify`.
-pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
+pub fn generated_files(model: &Model) -> Result<Vec<GeneratedFile>, RenderError> {
     let mut files = Vec::new();
     for crate_name in ["journal", "journal-cli"] {
         let dir = model
             .crate_named(crate_name)
             .map(|node| node.dir.as_str())
-            .expect("the crate is modeled");
+            .ok_or_else(|| RenderError::CrateNotModeled {
+                crate_name: crate_name.to_string(),
+            })?;
         files.push(GeneratedFile {
             path: format!("rust/{dir}/src/generated.rs"),
-            contents: theseus_modeling::render_module_for_crate(model, crate_name),
+            contents: theseus_modeling::render_module_for_crate(model, crate_name)?,
         });
     }
-    files
+    Ok(files)
 }
 
 /// The authored impl path of every service, paired with the service name.
@@ -91,7 +96,7 @@ mod tests {
         let report = theseus_modeling::verify(
             &model,
             &workspace_root(),
-            &generated_files(&model),
+            &generated_files(&model).expect("the journal model renders"),
             &authored_impls(&model),
             &[],
         );

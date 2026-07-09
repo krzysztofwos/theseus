@@ -7,8 +7,8 @@ mod self_model;
 
 pub use self_model::theseus_model;
 use theseus_modeling::{
-    GeneratedFile, Model, Service, Transport, render_model_source, render_module_for_crate,
-    render_proto,
+    GeneratedFile, Model, RenderError, Service, Transport, render_model_source,
+    render_module_for_crate, render_proto,
 };
 
 /// The self-model source file, relative to the workspace root. It is the model's
@@ -106,7 +106,7 @@ const SELF_MODEL_HEADER: &str = concat!(
 /// The files Theseus projects from `model`: the CLI scaffolding and the self-model
 /// source itself. `generate` and `patch` write them. `verify` drift-gates them, so
 /// the self-model source is checked to be a fixed point of the renderer.
-pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
+pub fn generated_files(model: &Model) -> Result<Vec<GeneratedFile>, RenderError> {
     let mut files = Vec::new();
     let mut rendered: Vec<&str> = Vec::new();
     // Every crate that hosts a service, a CLI, HTTP, or gRPC inbound, an inbound
@@ -145,10 +145,12 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
         let dir = model
             .crate_named(crate_name)
             .map(|node| node.dir.as_str())
-            .unwrap_or_else(|| panic!("crate `{crate_name}` is not modeled"));
+            .ok_or_else(|| RenderError::CrateNotModeled {
+                crate_name: crate_name.to_string(),
+            })?;
         files.push(GeneratedFile {
             path: format!("rust/{dir}/src/generated.rs"),
-            contents: render_module_for_crate(model, crate_name),
+            contents: render_module_for_crate(model, crate_name)?,
         });
     }
     // A gRPC inbound or client crate also carries its proto contract — the wire
@@ -170,18 +172,20 @@ pub fn generated_files(model: &Model) -> Vec<GeneratedFile> {
             let dir = model
                 .crate_named(crate_name)
                 .map(|node| node.dir.as_str())
-                .unwrap_or_else(|| panic!("crate `{crate_name}` is not modeled"));
+                .ok_or_else(|| RenderError::CrateNotModeled {
+                    crate_name: crate_name.to_string(),
+                })?;
             files.push(GeneratedFile {
                 path: format!("rust/{dir}/proto/{}.proto", service.name.to_lowercase()),
-                contents: render_proto(model, service),
+                contents: render_proto(model, service)?,
             });
         }
     }
     files.push(GeneratedFile {
         path: SELF_MODEL_PATH.to_string(),
-        contents: render_model_source(model, SELF_MODEL_HEADER, "theseus_model"),
+        contents: render_model_source(model, SELF_MODEL_HEADER, "theseus_model")?,
     });
-    files
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -218,10 +222,11 @@ mod tests {
     #[test]
     fn theseus_conforms_to_its_self_model() {
         let model = theseus_model();
+        let generated = generated_files(&model).expect("self-model renders");
         let report = verify(
             &model,
             &workspace_root(),
-            &generated_files(&model),
+            &generated,
             &authored_impls(&model),
             &interior_impls(&model),
         );
@@ -239,10 +244,11 @@ mod tests {
         if let Some(kernel) = model.crates.iter_mut().find(|c| c.dir == "kernel") {
             kernel.depends_on.push("theseus-cli".to_string());
         }
+        let generated = generated_files(&model).expect("self-model renders");
         let report = verify(
             &model,
             &workspace_root(),
-            &generated_files(&model),
+            &generated,
             &authored_impls(&model),
             &interior_impls(&model),
         );
@@ -253,7 +259,7 @@ mod tests {
     fn rendered_surface_covers_every_cli_operation() {
         use theseus_modeling::Transport;
         let model = theseus_model();
-        let rendered = render_cli_module(&model);
+        let rendered = render_cli_module(&model).expect("CLI renders");
         let inbound = model
             .inbounds
             .iter()
@@ -277,6 +283,7 @@ mod tests {
         // the model that projects back to it.
         let model = theseus_model();
         let rendered = generated_files(&model)
+            .expect("self-model renders")
             .into_iter()
             .find(|file| file.path == SELF_MODEL_PATH)
             .expect("self-model is a projected file")

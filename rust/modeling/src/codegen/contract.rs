@@ -5,54 +5,54 @@
 use super::*;
 
 /// Render one outbound port as a trait. The hand-written adapter implements it.
-pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
+pub(super) fn render_port_trait(port: &Port, model: &Model) -> Result<TokenStream, RenderError> {
     let trait_name = format_ident!("{}", pascal_case(&port.name));
     let trait_doc = doc(&port.summary);
     let methods: Vec<TokenStream> = port
         .methods
         .iter()
-        .map(|method| {
+        .map(|method| -> Result<TokenStream, RenderError> {
             let method_doc = doc(&method.summary);
             let method_name = format_ident!("{}", method.name);
-            let param = request_param(&method.request, model);
-            let response = response_type(&method.response, model);
+            let param = request_param(&method.request, model)?;
+            let response = response_type(&method.response, model)?;
             // Each method defaults to the typed unimplemented error, the gate
             // the service trait holds: an adapter authors what it implements,
             // and a method it leaves on the default reports at the boundary.
             let name = format!("{}.{}", port.name, method.name);
-            quote! {
+            Ok(quote! {
                 #method_doc
                 async fn #method_name(&self #param) -> anyhow::Result<#response> {
                     Err(Unimplemented(#name).into())
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     // A borrowed adapter serves the port its target serves. The forwarding
     // renders with the trait, so a port grown by a patch reaches through a
     // borrow — the session's gated composition — without an authored edit.
     let forwards: Vec<TokenStream> = port
         .methods
         .iter()
-        .map(|method| {
+        .map(|method| -> Result<TokenStream, RenderError> {
             let method_name = format_ident!("{}", method.name);
-            let param = bound_request_param(&method.request, model);
-            let response = response_type(&method.response, model);
+            let param = bound_request_param(&method.request, model)?;
+            let response = response_type(&method.response, model)?;
             let args = if method.request == "Empty" {
                 quote! {}
             } else {
                 quote! { request }
             };
-            quote! {
+            Ok(quote! {
                 async fn #method_name(&self #param) -> anyhow::Result<#response> {
                     (**self).#method_name(#args).await
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let forward_doc = doc("A borrowed adapter serves the port its target serves, so a wrapper");
     let forward_doc_b = doc("generic over the port holds a borrow as readily as an owned adapter.");
-    quote! {
+    Ok(quote! {
         #trait_doc
         #[async_trait::async_trait]
         pub trait #trait_name: Send + Sync {
@@ -65,7 +65,7 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
         impl<T: #trait_name + ?Sized> #trait_name for &T {
             #(#forwards)*
         }
-    }
+    })
 }
 
 /// Render a port's write gate, for a port with a gated method: a wrapper
@@ -73,9 +73,9 @@ pub(super) fn render_port_trait(port: &Port, model: &Model) -> TokenStream {
 /// each ungated one through. The policy renders from the model, so which
 /// methods a gate guards is a modeled fact, and a method the port grows lands
 /// in the gate on the next render.
-pub(super) fn render_port_gate(port: &Port, model: &Model) -> TokenStream {
+pub(super) fn render_port_gate(port: &Port, model: &Model) -> Result<TokenStream, RenderError> {
     if port.methods.iter().all(|method| !method.gated) {
-        return quote! {};
+        return Ok(quote! {});
     }
     let trait_name = format_ident!("{}", pascal_case(&port.name));
     let gate_name = format_ident!("Gated{}", pascal_case(&port.name));
@@ -83,10 +83,10 @@ pub(super) fn render_port_gate(port: &Port, model: &Model) -> TokenStream {
     let methods: Vec<TokenStream> = port
         .methods
         .iter()
-        .map(|method| {
+        .map(|method| -> Result<TokenStream, RenderError> {
             let method_name = format_ident!("{}", method.name);
-            let param = bound_request_param(&method.request, model);
-            let response = response_type(&method.response, model);
+            let param = bound_request_param(&method.request, model)?;
+            let response = response_type(&method.response, model)?;
             let args = if method.request == "Empty" {
                 quote! {}
             } else {
@@ -101,21 +101,21 @@ pub(super) fn render_port_gate(port: &Port, model: &Model) -> TokenStream {
             } else {
                 quote! {}
             };
-            quote! {
+            Ok(quote! {
                 async fn #method_name(&self #param) -> anyhow::Result<#response> {
                     #guard
                     self.#field.#method_name(#args).await
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let doc_a = doc(&format!(
         "The `{}` port carrying a write permission: a gated method is refused",
         port.name
     ));
     let doc_b = doc("without it, and an ungated one passes through. It wraps an owned");
     let doc_c = doc("adapter or a borrowed one, the same gate either way.");
-    quote! {
+    Ok(quote! {
         #doc_a
         #doc_b
         #doc_c
@@ -128,7 +128,7 @@ pub(super) fn render_port_gate(port: &Port, model: &Model) -> TokenStream {
         impl<A: #trait_name> #trait_name for #gate_name<A> {
             #(#methods)*
         }
-    }
+    })
 }
 
 /// Render the owned composition root: the service over one owned adapter per
@@ -141,7 +141,7 @@ pub(super) fn render_standalone(
     ports: &[&Port],
     model: &Model,
     current_crate: &str,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let params: Vec<proc_macro2::Ident> = ports
         .iter()
         .map(|port| format_ident!("{}Adapter", pascal_case(&port.name)))
@@ -149,11 +149,11 @@ pub(super) fn render_standalone(
     let bounds: Vec<TokenStream> = ports
         .iter()
         .zip(&params)
-        .map(|(port, param)| {
-            let bound = port_trait_path(port, model, current_crate);
-            quote! { #param: #bound }
+        .map(|(port, param)| -> Result<TokenStream, RenderError> {
+            let bound = port_trait_path(port, model, current_crate)?;
+            Ok(quote! { #param: #bound })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let fields: Vec<TokenStream> = ports
         .iter()
         .zip(&params)
@@ -172,15 +172,15 @@ pub(super) fn render_standalone(
 
     let impls: Vec<TokenStream> = services
         .iter()
-        .map(|service| {
+        .map(|service| -> Result<TokenStream, RenderError> {
             let trait_name = format_ident!("{}Service", pascal_case(&service.name));
             let methods: Vec<TokenStream> = service
                 .operations
                 .iter()
-                .map(|op| {
+                .map(|op| -> Result<TokenStream, RenderError> {
                     let method = format_ident!("{}", op.name);
-                    let response = response_type(&op.response, model);
-                    match request_type(op, model) {
+                    let response = response_type(&op.response, model)?;
+                    Ok(match request_type(op, model) {
                         Some(def) => {
                             let request = format_ident!("{}", def.name);
                             quote! {
@@ -194,22 +194,22 @@ pub(super) fn render_standalone(
                                 self.ctx().#method().await
                             }
                         },
-                    }
+                    })
                 })
-                .collect();
-            quote! {
+                .collect::<Result<_, _>>()?;
+            Ok(quote! {
                 #[async_trait::async_trait]
                 impl<#(#bounds),*> #trait_name for Standalone<#(#params),*> {
                     #(#methods)*
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let doc_a = doc("An owned composition root: the service over one owned adapter per port,");
     let doc_b = doc("driven through a fresh borrowed `Ctx` per call. A long-lived inbound");
     let doc_c = doc("holds it where a borrowed root cannot live.");
-    quote! {
+    Ok(quote! {
         #doc_a
         #doc_b
         #doc_c
@@ -229,7 +229,7 @@ pub(super) fn render_standalone(
         }
 
         #(#impls)*
-    }
+    })
 }
 
 /// Render the composition root: the model plus one field per wired port.
@@ -237,41 +237,53 @@ pub(super) fn render_composition_root(
     ports: &[&Port],
     model: &Model,
     current_crate: &str,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let fields: Vec<TokenStream> = ports
         .iter()
-        .map(|port| {
+        .map(|port| -> Result<TokenStream, RenderError> {
             let field = format_ident!("{}", snake_case(&port.name));
-            let trait_path = port_trait_path(port, model, current_crate);
-            quote! { pub #field: &'a dyn #trait_path, }
+            let trait_path = port_trait_path(port, model, current_crate)?;
+            Ok(quote! { pub #field: &'a dyn #trait_path, })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let doc = doc("Composition root: the model plus the wired outbound ports.");
-    quote! {
+    Ok(quote! {
         #doc
         pub struct Ctx<'a> {
             pub model: &'a theseus_modeling::Model,
             #(#fields)*
         }
-    }
+    })
 }
 
 /// The trait a port's composition-root field is typed against. A method-bearing
 /// port uses its own trait. A service-targeting port uses the target service's
 /// trait, qualified by the target's crate path when it lives in another crate.
-pub(super) fn port_trait_path(port: &Port, model: &Model, current_crate: &str) -> TokenStream {
+pub(super) fn port_trait_path(
+    port: &Port,
+    model: &Model,
+    current_crate: &str,
+) -> Result<TokenStream, RenderError> {
     let Some(service_name) = &port.target else {
         let own = format_ident!("{}", pascal_case(&port.name));
-        return quote! { #own };
+        return Ok(quote! { #own });
     };
     let trait_name = format_ident!("{}Service", pascal_case(service_name));
-    match model.services.iter().find(|s| &s.name == service_name) {
+    let service =
+        model
+            .service_named(service_name)
+            .ok_or_else(|| RenderError::ServiceNotModeled {
+                service: service_name.clone(),
+            })?;
+    Ok(match Some(service) {
         Some(service) if service.crate_name != current_crate && !service.crate_name.is_empty() => {
-            let pkg = format_ident!("{}", service.crate_name.replace('-', "_"));
+            let package = service.crate_name.replace('-', "_");
+            validate_identifier("crate module", &package)?;
+            let pkg = format_ident!("{}", package);
             quote! { #pkg::#trait_name }
         }
         _ => quote! { #trait_name },
-    }
+    })
 }
 
 /// Render each distinct struct type the given services reference at their
@@ -283,7 +295,7 @@ pub(super) fn render_request_structs(
     services: &[&Service],
     extra_ports: &[&Port],
     model: &Model,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let mut seen: Vec<&str> = Vec::new();
     let mut structs: Vec<TokenStream> = Vec::new();
     for label in referenced_labels(services, extra_ports) {
@@ -294,10 +306,10 @@ pub(super) fn render_request_structs(
         if let Some(def) = model.type_def(label)
             && matches!(def.shape, TypeShape::Struct(_))
         {
-            structs.push(render_request_struct(def, model));
+            structs.push(render_request_struct(def, model)?);
         }
     }
-    quote! { #(#structs)* }
+    Ok(quote! { #(#structs)* })
 }
 
 /// Every type label a service references at its boundaries — each operation's
@@ -329,47 +341,53 @@ pub(super) fn referenced_labels<'a>(
 }
 
 /// Render a request struct as a plain record.
-pub(super) fn render_request_struct(def: &TypeDef, model: &Model) -> TokenStream {
+pub(super) fn render_request_struct(
+    def: &TypeDef,
+    model: &Model,
+) -> Result<TokenStream, RenderError> {
     let TypeShape::Struct(fields) = &def.shape else {
-        return quote! {};
+        return Ok(quote! {});
     };
     let name = format_ident!("{}", def.name);
     let struct_doc = doc(&format!("The `{}` request.", def.name));
 
     let field_defs: Vec<TokenStream> = fields
         .iter()
-        .map(|field| {
+        .map(|field| -> Result<TokenStream, RenderError> {
             let field_doc = doc(&field.doc);
             let field_name = format_ident!("{}", field.name);
-            let field_type = syn_type(&resolve_field_type(&field.ty, model));
-            quote! {
+            let field_type = syn_type(&resolve_field_type(&field.ty, model))?;
+            Ok(quote! {
                 #field_doc
                 pub #field_name: #field_type,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
-    quote! {
+    Ok(quote! {
         #struct_doc
         #[derive(Debug, Clone)]
         pub struct #name {
             #(#field_defs)*
         }
-    }
+    })
 }
 
 /// Render the inbound service trait: one method per operation, each defaulting to
 /// an `unimplemented` error. The authored impl overrides the operations it
 /// implements. An operation left on its default still compiles, and `verify`'s
 /// coverage check reports it.
-pub(super) fn render_service_trait(service: &Service, model: &Model) -> TokenStream {
+pub(super) fn render_service_trait(
+    service: &Service,
+    model: &Model,
+) -> Result<TokenStream, RenderError> {
     let trait_name = format_ident!("{}Service", pascal_case(&service.name));
     let doc_a = doc("The inbound service contract: one method per operation, each defaulting");
     let doc_b = doc("to `unimplemented`. The authored impl overrides what it implements.");
     let methods: Vec<TokenStream> = service
         .operations
         .iter()
-        .map(|op| {
+        .map(|op| -> Result<TokenStream, RenderError> {
             let method_doc = doc(&op.summary);
             let method_name = format_ident!("{}", op.name);
             let param = match request_type(op, model) {
@@ -379,24 +397,24 @@ pub(super) fn render_service_trait(service: &Service, model: &Model) -> TokenStr
                 }
                 None => quote! {},
             };
-            let response = response_type(&op.response, model);
+            let response = response_type(&op.response, model)?;
             let name = op.name.as_str();
-            quote! {
+            Ok(quote! {
                 #method_doc
                 async fn #method_name(&self #param) -> anyhow::Result<#response> {
                     Err(Unimplemented(#name).into())
                 }
-            }
+            })
         })
-        .collect();
-    quote! {
+        .collect::<Result<_, _>>()?;
+    Ok(quote! {
         #doc_a
         #doc_b
         #[async_trait::async_trait]
         pub trait #trait_name: Send + Sync {
             #(#methods)*
         }
-    }
+    })
 }
 
 /// Render `Unimplemented`, the trait default's error. It renders with every
@@ -466,7 +484,7 @@ mod tests {
                     .crate_name("app")
                     .port(Port::new("calculator", "Calls the calculator.").targeting("Calc")),
             );
-        let rendered = render_module_for_crate(&model, "app");
+        let rendered = render_module_for_crate(&model, "app").expect("app module renders");
         // The binding emits no port trait of its own. The composition-root field is
         // typed against the target service's trait at its crate path.
         assert!(!rendered.contains("trait Calculator"));
@@ -477,7 +495,7 @@ mod tests {
     fn a_service_without_an_inbound_renders_a_trait_but_no_command() {
         let model = Model::new("Calc")
             .service(Service::new("Calculator").operation("add", "Add.", "Empty", "Empty"));
-        let rendered = render_cli_module(&model);
+        let rendered = render_cli_module(&model).expect("CLI renders");
         // The service trait is present. With no inbound, nothing builds a command.
         assert!(rendered.contains("trait CalculatorService"));
         assert!(!rendered.contains("Command::new"));
@@ -493,7 +511,7 @@ mod tests {
                     .operation("add", "Add.", "Operands", "Empty"),
             );
         // Without an inbound the request is a plain struct and no parser is rendered.
-        let plain = render_module_for_crate(&model, "calc");
+        let plain = render_module_for_crate(&model, "calc").expect("calc module renders");
         assert!(plain.contains("pub struct Operands"));
         assert!(plain.contains("pub a: f64"));
         assert!(!plain.contains("parse_operands"));
@@ -514,7 +532,7 @@ mod tests {
                             .method("send", "Send it.", "Payload", "Empty"),
                     ),
             );
-        let rendered = render_module_for_crate(&model, "app");
+        let rendered = render_module_for_crate(&model, "app").expect("app module renders");
         // One generic parameter per port, bounded by the port trait, and one
         // delegation per operation through a fresh borrowed root.
         assert!(rendered.contains("pub struct Standalone<SinkAdapter: Sink>"));
@@ -546,7 +564,7 @@ mod tests {
                 "Turn",
                 "Reply",
             ));
-        let rendered = render_module_for_crate(&model, "loop");
+        let rendered = render_module_for_crate(&model, "loop").expect("loop module renders");
         // The loop's crate carries the port trait, its request struct, the typed
         // default, and the budget. The service's crate carries none of it.
         assert!(rendered.contains("pub trait Llm"));
@@ -554,7 +572,7 @@ mod tests {
         assert!(rendered.contains("pub struct Turn"));
         assert!(rendered.contains("crate::agent::Reply"));
         assert!(rendered.contains("pub const TURN_BUDGET: usize = 32;"));
-        let service_side = render_module_for_crate(&model, "app");
+        let service_side = render_module_for_crate(&model, "app").expect("service module renders");
         assert!(!service_side.contains("trait Llm"));
         assert!(!service_side.contains("TURN_BUDGET"));
     }
@@ -567,7 +585,7 @@ mod tests {
             .turns(32)
             .inbound("scout", crate::model::Transport::Agent, "App", "loops")
             .turns(8);
-        let rendered = render_module_for_crate(&model, "loops");
+        let rendered = render_module_for_crate(&model, "loops").expect("loops module renders");
         assert!(rendered.contains("pub const AGENT_TURN_BUDGET: usize = 32;"));
         assert!(rendered.contains("pub const SCOUT_TURN_BUDGET: usize = 8;"));
         assert!(!rendered.contains("pub const TURN_BUDGET"));
@@ -583,7 +601,7 @@ mod tests {
                     .gated(),
             ),
         );
-        let rendered = render_module_for_crate(&model, "app");
+        let rendered = render_module_for_crate(&model, "app").expect("app module renders");
         assert!(rendered.contains("pub struct GatedStore<A>"));
         // The gated method guards; the ungated one passes through.
         assert!(rendered.contains("async fn write(&self, request: &str)"));
@@ -594,7 +612,11 @@ mod tests {
         let ungated = Model::new("App").service(Service::new("App").crate_name("app").port(
             Port::new("store", "Reads records.").method("read", "Read.", "String", "String"),
         ));
-        assert!(!render_module_for_crate(&ungated, "app").contains("GatedStore"));
+        assert!(
+            !render_module_for_crate(&ungated, "app")
+                .expect("ungated module renders")
+                .contains("GatedStore")
+        );
     }
 
     #[test]
@@ -607,7 +629,7 @@ mod tests {
                         .method("send", "Send it.", "Payload", "Empty"),
                 ),
             );
-        let rendered = render_module_for_crate(&model, "app");
+        let rendered = render_module_for_crate(&model, "app").expect("app module renders");
         // The struct renders locally, and the port trait names it by its local
         // name.
         assert!(rendered.contains("pub struct Payload"));

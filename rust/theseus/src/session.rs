@@ -119,7 +119,7 @@ impl<'a> Session<'a> {
 /// file whose crate is scaffolded.
 pub(crate) async fn persist(model: &Model, workspace: &dyn Workspace) -> anyhow::Result<()> {
     let root = workspace_root();
-    for file in generated_files(model) {
+    for file in generated_files(model)? {
         if crate_is_scaffolded(&root, &file) {
             workspace.write_file(&file).await?;
         }

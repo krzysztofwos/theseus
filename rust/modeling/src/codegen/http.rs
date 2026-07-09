@@ -11,18 +11,18 @@ pub(super) fn render_http_module(
     inbound: &Inbound,
     service: &Service,
     model: &Model,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let ContractPaths {
         prefix,
         service_trait: trait_path,
         unimplemented: unimplemented_path,
         refused: refused_path,
-    } = contract_paths(&inbound.crate_name, service, model);
+    } = contract_paths(&inbound.crate_name, service, model)?;
 
     // A parser per distinct request struct, building the request from the call's
     // JSON body — the one wire conversion the tool dispatch renders too.
     let operations: Vec<&Operation> = service.operations.iter().collect();
-    let parsers = render_json_parsers(&operations, model, &prefix, "http", false);
+    let parsers = render_json_parsers(&operations, model, &prefix, "http", false)?;
 
     let arms: Vec<TokenStream> = service
         .operations
@@ -56,7 +56,7 @@ pub(super) fn render_http_module(
     let doc_c = doc("outcome's structure: 200 a result, 400 a request that does not parse,");
     let doc_d = doc("404 an unknown operation, 501 an operation with no authored handler,");
     let doc_e = doc("403 a refused write, and 500 any other error.");
-    quote! {
+    Ok(quote! {
         #doc_reply
         pub struct HttpReply {
             pub status: u16,
@@ -135,7 +135,7 @@ pub(super) fn render_http_module(
                 body: serde_json::json!({ "error": error.to_string() }).to_string(),
             }
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -155,7 +155,7 @@ mod tests {
                     .operation("send", "Send.", "Payload", "Empty"),
             )
             .inbound("http", Transport::Http, "App", "app-http");
-        let rendered = render_module_for_crate(&model, "app-http");
+        let rendered = render_module_for_crate(&model, "app-http").expect("HTTP module renders");
         assert!(rendered.contains("pub async fn handle"), "{rendered}");
         assert!(rendered.contains(r#""greet" =>"#));
         assert!(rendered.contains("fn parse_payload_http"));

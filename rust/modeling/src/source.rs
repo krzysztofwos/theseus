@@ -11,28 +11,44 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::model::{
-    Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef, TypeShape,
-    Variant,
+use crate::{
+    codegen::{RenderError, validate_render_inputs},
+    model::{
+        Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, TypeDef,
+        TypeShape, Variant,
+    },
 };
 
 /// Render a model as the source of its authoring function.
 ///
 /// `header` is the file's leading comment block, kept verbatim above the code.
 /// `function` names the builder function the body defines.
-pub fn render_model_source(model: &Model, header: &str, function: &str) -> String {
-    let function = format_ident!("{}", function);
+pub fn render_model_source(
+    model: &Model,
+    header: &str,
+    function: &str,
+) -> Result<String, RenderError> {
+    validate_render_inputs(model)?;
+    let function_ident =
+        syn::parse_str::<syn::Ident>(function).map_err(|error| RenderError::InvalidIdentifier {
+            kind: "model function",
+            name: function.to_string(),
+            message: error.to_string(),
+        })?;
     let imports = render_imports(model);
     let chain = render_model_chain(model);
     let tokens = quote! {
         #imports
-        pub fn #function() -> Model {
+        pub fn #function_ident() -> Model {
             #chain
         }
     };
-    let file = syn::parse2(tokens).expect("rendered model source is valid Rust");
+    let file = syn::parse2(tokens).map_err(|error| RenderError::InvalidModelSource {
+        function: function.to_string(),
+        message: error.to_string(),
+    })?;
     let body = crate::codegen::space_items(&prettyplease::unparse(&file));
-    format!("{header}{body}")
+    Ok(format!("{header}{body}"))
 }
 
 /// The `use` line for the builder vocabulary the chain references.
@@ -235,7 +251,8 @@ mod tests {
 
     #[test]
     fn render_emits_the_builder_chain() {
-        let source = render_model_source(&sample_model(), "// header\n", "sample_model");
+        let source = render_model_source(&sample_model(), "// header\n", "sample_model")
+            .expect("sample model renders");
         assert!(source.contains("pub fn sample_model() -> Model"));
         assert!(source.contains("Model::new(\"Sample\")"));
         for op in sample_model().operations() {
@@ -255,7 +272,7 @@ mod tests {
                 .operation("run", "Run.", "Empty", "String")
                 .uses(&["workspace", "toolchain"]),
         );
-        let source = render_model_source(&model, "", "sample_model");
+        let source = render_model_source(&model, "", "sample_model").expect("sample model renders");
         assert!(
             source.contains(r#".uses(&["workspace", "toolchain"])"#),
             "{source}"
@@ -266,6 +283,8 @@ mod tests {
     fn render_emits_the_inbound_interior() {
         use crate::model::{Port, Service, Transport};
         let model = crate::model::Model::new("Sample")
+            .struct_type("Turn", &[("prompt", "String", "The prompt.")])
+            .foreign_type("Reply", "String")
             .service(Service::new("Sample"))
             .inbound("agent", Transport::Agent, "Sample", "sample-agent")
             .turns(32)
@@ -275,7 +294,7 @@ mod tests {
                 "Turn",
                 "Reply",
             ));
-        let source = render_model_source(&model, "", "sample_model");
+        let source = render_model_source(&model, "", "sample_model").expect("sample model renders");
         assert!(source.contains(".turns(32)"), "{source}");
         assert!(source.contains(".inbound_port("), "{source}");
         assert!(source.contains("Port::new(\"llm\""), "{source}");
@@ -287,7 +306,38 @@ mod tests {
 
     #[test]
     fn render_keeps_the_header_verbatim() {
-        let source = render_model_source(&sample_model(), "// @generated\n", "sample_model");
+        let source = render_model_source(&sample_model(), "// @generated\n", "sample_model")
+            .expect("sample model renders");
         assert!(source.starts_with("// @generated\n"));
+    }
+
+    #[test]
+    fn an_invalid_model_function_is_a_render_error() {
+        assert!(matches!(
+            render_model_source(&sample_model(), "", "not a function"),
+            Err(RenderError::InvalidIdentifier {
+                kind: "model function",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn invalid_model_tokens_are_refused_before_source_projection() {
+        let model =
+            Model::new("Sample").service(Service::new("Sample").crate_name("sample").operation(
+                "match",
+                "Reserved.",
+                "Empty",
+                "Empty",
+            ));
+
+        assert!(matches!(
+            render_model_source(&model, "", "sample_model"),
+            Err(RenderError::InvalidIdentifier {
+                kind: "operation",
+                ..
+            })
+        ));
     }
 }

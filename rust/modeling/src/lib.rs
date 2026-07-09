@@ -22,7 +22,9 @@ mod verify;
 #[cfg(test)]
 mod test_support;
 
-pub use codegen::{GeneratedFile, render_cli_module, render_module_for_crate, render_proto};
+pub use codegen::{
+    GeneratedFile, RenderError, render_cli_module, render_module_for_crate, render_proto,
+};
 pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use flow::{FlowError, handler_flows};
 pub use hash::model_hash;

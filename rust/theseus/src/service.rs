@@ -107,15 +107,16 @@ impl TheseusService for Ctx<'_> {
         // serving while it verifies.
         let model = self.model.clone();
         let report = tokio::task::spawn_blocking(move || {
-            verify(
+            let generated = generated_files(&model)?;
+            Ok::<_, theseus_modeling::RenderError>(verify(
                 &model,
                 &workspace_root(),
-                &generated_files(&model),
+                &generated,
                 &authored_impls(&model),
                 &interior_impls(&model),
-            )
+            ))
         })
-        .await?;
+        .await??;
         Ok(report)
     }
 
@@ -125,7 +126,7 @@ impl TheseusService for Ctx<'_> {
         // directory and break the workspace before `scaffold` runs.
         let root = workspace_root();
         let mut written = Vec::new();
-        for file in generated_files(self.model) {
+        for file in generated_files(self.model)? {
             if crate_is_scaffolded(&root, &file) {
                 self.workspace.write_file(&file).await?;
                 written.push(file);

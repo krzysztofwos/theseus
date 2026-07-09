@@ -42,9 +42,9 @@ pub(super) fn render_tool_dispatch(
     operations: &[&Operation],
     service: &Service,
     model: &Model,
-) -> TokenStream {
+) -> Result<TokenStream, RenderError> {
     let trait_name = format_ident!("{}Service", pascal_case(&service.name));
-    let parsers = render_tool_parsers(operations, model);
+    let parsers = render_tool_parsers(operations, model)?;
     let arms: Vec<TokenStream> = operations
         .iter()
         .map(|op| {
@@ -77,7 +77,7 @@ pub(super) fn render_tool_dispatch(
     let doc_b = doc("call's JSON input, run the operation, and render the result — text");
     let doc_c = doc("for a string, otherwise JSON. The catalog and this dispatch render");
     let doc_d = doc("from the same contract, so every catalog entry has an arm here.");
-    quote! {
+    Ok(quote! {
         #parsers
         #doc_a
         #doc_b
@@ -93,14 +93,17 @@ pub(super) fn render_tool_dispatch(
                 other => anyhow::bail!(#unknown),
             }
         }
-    }
+    })
 }
 
 /// Render a parser per distinct request struct the exposed operations take,
 /// building the request from a tool call's JSON input. The wire-to-domain
 /// conversion is rendered with the dispatch, so the struct itself stays
 /// transport-neutral.
-pub(super) fn render_tool_parsers(operations: &[&Operation], model: &Model) -> TokenStream {
+pub(super) fn render_tool_parsers(
+    operations: &[&Operation],
+    model: &Model,
+) -> Result<TokenStream, RenderError> {
     render_json_parsers(operations, model, "", "input", true)
 }
 
@@ -233,7 +236,8 @@ mod tests {
         };
         let (outcome, patched) = crate::patch::apply_edit(&model, &edit);
         assert!(outcome.ok, "edit refused: {:?}", outcome.diagnostics);
-        let rendered = render_module_for_crate(&patched.unwrap(), "app");
+        let rendered =
+            render_module_for_crate(&patched.unwrap(), "app").expect("tool module renders");
         // The patched-in operation joins the catalog beside the authored one.
         assert!(
             rendered.contains(r#""ping" =>"#),
@@ -260,7 +264,7 @@ mod tests {
                     .operation("hidden", "Hidden.", "Empty", "Empty"),
             )
             .inbound("loop", Transport::Agent, "App", "app-agent");
-        let rendered = render_module_for_crate(&model, "app");
+        let rendered = render_module_for_crate(&model, "app").expect("tool module renders");
         assert!(
             rendered.contains("pub async fn dispatch_tool"),
             "{rendered}"

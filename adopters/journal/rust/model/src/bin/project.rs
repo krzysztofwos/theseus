@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
         write(&path, &file.contents)?;
         println!("scaffolded {}", file.path);
     }
-    for file in generated_files(&model) {
+    for file in generated_files(&model)? {
         write(&root.join(&file.path), &file.contents)?;
         println!("wrote {}", file.path);
     }

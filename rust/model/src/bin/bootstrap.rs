@@ -27,7 +27,7 @@ fn workspace_root() -> PathBuf {
 fn main() -> anyhow::Result<()> {
     let root = workspace_root();
     let model = theseus_model();
-    for file in generated_files(&model) {
+    for file in generated_files(&model)? {
         if !crate_is_scaffolded(&root, &file) {
             continue;
         }

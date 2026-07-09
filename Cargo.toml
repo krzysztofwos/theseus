@@ -8,6 +8,7 @@ theseus-modeling = { path = "rust/modeling" }
 
 # Error handling
 anyhow = "1.0.103"
+heck = "0.5"
 thiserror = "2.0.18"
 
 # CLI
@@ -39,6 +40,7 @@ axum = "0.8"
 # through a pure-Rust compiler.
 prost = "0.14"
 protox = "0.9"
+protox-parse = "0.9"
 tonic = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"

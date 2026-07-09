@@ -8,6 +8,8 @@ Theseus is a self-modeling CLI seed, named for the Ship of Theseus: it holds a m
 
 The whole system is a fixed point: `rust/model/src/self_model.rs` is a value that describes the very tool that holds it.
 
+`adopters/journal/` is a separate workspace — the second adopter, proving the engine from outside (see `docs/second-adopter.md`). It is invisible to the Theseus self-model; its own `cargo test` runs its conformance.
+
 ## Commands
 
 Toolchain is pinned to nightly (`rust-toolchain.toml`), edition 2024.
@@ -36,7 +38,7 @@ The self-modifying agent loop is not a subcommand. It is a separate `agent` bina
 
 ## Architecture
 
-Fifteen crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
+Sixteen crates under `rust/`, layered. Each crate may depend only on strictly lower layers — this layering is itself what `verify` checks.
 
 - `theseus-kernel` (L0) — `rust/kernel/`. Finite categories, functors, and the one law: a functor sends every morphism to one with matching endpoints. The structural substrate for all conformance checks. Knows nothing about Theseus.
 - `theseus-modeling` (L1) — `rust/modeling/`. The general engine over _any_ model: the `Model` vocabulary + fluent-builder DSL (`dsl.rs`), stable hashing (`hash.rs`), `verify`, `codegen`, crate scaffolding (`scaffold.rs`), the agent `query`/`patch` surface, and source splicing (`source.rs`).
@@ -52,6 +54,7 @@ Fifteen crates under `rust/`, layered. Each crate may depend only on strictly lo
 - `theseus-calculator` (L1) — `rust/calculator/`. A second service, `Calculator` (four arithmetic operations over `Operands`), reached from Theseus through an in-process `calculator` port.
 - `theseus-calculator-grpc-client` (L2) — `rust/calculator-grpc-client/`. The Calculator contract carried over gRPC — the client the `theseus` CLI wires onto its `calculator` port for a remote composition.
 - `theseus-calculator-cli` (L2) — `rust/calculator-cli/`. A standalone `calculator` binary driving that service through its own `Cli` inbound — the worked multi-service example (`docs/building-a-calculator.md`).
+- `theseus-text-utils` (L1) — `rust/text-utils/`. A third service, `TextUtils` (slugify, word count, truncate, capitalize) — modeled, scaffolded, and authored end to end by the agent through its own tool surface.
 - `theseus-calculator-grpc` (L2) — `rust/calculator-grpc/`. The `Grpc` inbound, the binary `calculator-grpc`. The build compiles a model-rendered `proto/calculator.proto` (drift-gated like every generated file) into the wire types and server trait, and generated glue maps outcomes onto gRPC statuses (UNIMPLEMENTED, PERMISSION_DENIED, INTERNAL).
 
 The framework/adopter split (L1 engine ↔ L2 concrete model) is the central design seam: the engine is reusable. The adopter supplies one model and its owned paths.

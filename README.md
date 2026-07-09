@@ -35,8 +35,8 @@ cargo run -p theseus-agent -- --allow-writes "give yourself a new capability…"
 
 ## The layout
 
-Fifteen crates under `rust/`, strictly layered: a category/functor kernel that knows nothing of Theseus, a model-generic engine (vocabulary, hashing, verification, code generation, the patch protocol, source splicing), the concrete self-model, the Theseus service with its shared adapters, and the inbounds and clients — CLI, agent loop, MCP server, HTTP and gRPC servers and their clients — plus a second worked service, the calculator. `CLAUDE.md` carries the working map; `docs/building-the-harness.md` is the experiment log, entry by entry; `docs/adding-an-operation.md` and `docs/building-a-calculator.md` are the guided walkthroughs.
+Sixteen crates under `rust/`, strictly layered: a category/functor kernel that knows nothing of Theseus, a model-generic engine (vocabulary, hashing, verification, code generation, the patch protocol, source splicing), the concrete self-model, the Theseus service with its shared adapters, and the inbounds and clients — CLI, agent loop, MCP server, HTTP and gRPC servers and their clients — plus two more services: the calculator, the worked example, and the text utilities, grown whole by the agent. `CLAUDE.md` carries the working map; `docs/building-the-harness.md` is the experiment log, entry by entry; `docs/adding-an-operation.md` and `docs/building-a-calculator.md` are the guided walkthroughs.
 
 ## Status
 
-A clean-room experiment in self-modeling systems and agent harnesses, built from scratch with no external categorical framework. The interesting claims are the checked ones: run `verify` and read the ten lines.
+A clean-room experiment in self-modeling systems and agent harnesses, built from scratch with no external categorical framework. The engine's reusability is proven by a second adopter — a journal service in `adopters/journal/`, a workspace the self-model knows nothing about, verified by the same ten checks (`docs/second-adopter.md`). The interesting claims are the checked ones: run `verify` and read the ten lines.

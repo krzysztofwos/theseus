@@ -290,6 +290,104 @@ impl Checkpoint for GitCheckpoint {
     }
 }
 
+/// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
+/// at the repository root. The shared toolchain adapter for the inbound binaries.
+/// The check runs as a managed child process, so a server inbound keeps serving
+/// while it compiles.
+pub struct CargoToolchain;
+
+#[async_trait::async_trait]
+impl Toolchain for CargoToolchain {
+    async fn test(&self) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("cargo")
+            .args(["test", "--workspace", "--quiet"])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running `cargo test --workspace`")?;
+        // With `--quiet` the diagnostic stream carries warnings and errors only.
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        Ok(if output.status.success() {
+            if diagnostics.is_empty() {
+                "the tests pass".to_string()
+            } else {
+                format!("the tests pass, with warnings:\n{}", head(diagnostics))
+            }
+        } else {
+            format!("tests failed:\n{}", head(diagnostics))
+        })
+    }
+
+    async fn check(&self) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("cargo")
+            .args(["check", "--workspace", "--quiet"])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running `cargo check --workspace`")?;
+        // With `--quiet` the diagnostic stream carries warnings and errors only.
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        Ok(if output.status.success() {
+            if diagnostics.is_empty() {
+                "the workspace compiles".to_string()
+            } else {
+                format!(
+                    "the workspace compiles, with warnings:\n{}",
+                    head(diagnostics)
+                )
+            }
+        } else {
+            format!("check failed:\n{}", head(diagnostics))
+        })
+    }
+}
+
+/// The head of a diagnostic stream, capped so the report stays readable as a
+/// tool result. The first diagnostics carry the signal, so the cap keeps the
+/// head and counts what it drops.
+pub fn head(diagnostics: &str) -> String {
+    const CAP: usize = 8_000;
+    match diagnostics.char_indices().nth(CAP) {
+        None => diagnostics.to_string(),
+        Some((byte, _)) => format!(
+            "{}\n… truncated ({} more bytes)",
+            &diagnostics[..byte],
+            diagnostics.len() - byte
+        ),
+    }
+}
+
+/// The repository's own composition for the owned root: the local adapters,
+/// writes gated by `allow_writes`.
+impl
+    Standalone<
+        GatedWorkspace<FsWorkspace>,
+        GatedCheckpoint<GitCheckpoint>,
+        theseus_calculator::Calculator,
+        CargoToolchain,
+    >
+{
+    pub fn new(allow_writes: bool) -> Self {
+        Self {
+            model: theseus_model::theseus_model(),
+            workspace: GatedWorkspace {
+                workspace: FsWorkspace::at_repo_root(),
+                allow_writes,
+            },
+            checkpoint: GatedCheckpoint {
+                checkpoint: GitCheckpoint::at_repo_root(),
+                allow_writes,
+            },
+            calculator: theseus_calculator::Calculator,
+            toolchain: CargoToolchain,
+        }
+    }
+}
+
 #[cfg(test)]
 mod git_checkpoint_tests {
     use std::{
@@ -449,103 +547,5 @@ mod git_checkpoint_tests {
             error.downcast_ref::<GitCheckpointError>(),
             Some(GitCheckpointError::UnknownCommit { reference }) if reference == missing
         ));
-    }
-}
-
-/// A [`Toolchain`] that compile-checks the workspace by running `cargo check`
-/// at the repository root. The shared toolchain adapter for the inbound binaries.
-/// The check runs as a managed child process, so a server inbound keeps serving
-/// while it compiles.
-pub struct CargoToolchain;
-
-#[async_trait::async_trait]
-impl Toolchain for CargoToolchain {
-    async fn test(&self) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["test", "--workspace", "--quiet"])
-            .current_dir(workspace_root())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running `cargo test --workspace`")?;
-        // With `--quiet` the diagnostic stream carries warnings and errors only.
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        Ok(if output.status.success() {
-            if diagnostics.is_empty() {
-                "the tests pass".to_string()
-            } else {
-                format!("the tests pass, with warnings:\n{}", head(diagnostics))
-            }
-        } else {
-            format!("tests failed:\n{}", head(diagnostics))
-        })
-    }
-
-    async fn check(&self) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["check", "--workspace", "--quiet"])
-            .current_dir(workspace_root())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running `cargo check --workspace`")?;
-        // With `--quiet` the diagnostic stream carries warnings and errors only.
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        Ok(if output.status.success() {
-            if diagnostics.is_empty() {
-                "the workspace compiles".to_string()
-            } else {
-                format!(
-                    "the workspace compiles, with warnings:\n{}",
-                    head(diagnostics)
-                )
-            }
-        } else {
-            format!("check failed:\n{}", head(diagnostics))
-        })
-    }
-}
-
-/// The head of a diagnostic stream, capped so the report stays readable as a
-/// tool result. The first diagnostics carry the signal, so the cap keeps the
-/// head and counts what it drops.
-pub fn head(diagnostics: &str) -> String {
-    const CAP: usize = 8_000;
-    match diagnostics.char_indices().nth(CAP) {
-        None => diagnostics.to_string(),
-        Some((byte, _)) => format!(
-            "{}\n… truncated ({} more bytes)",
-            &diagnostics[..byte],
-            diagnostics.len() - byte
-        ),
-    }
-}
-
-/// The repository's own composition for the owned root: the local adapters,
-/// writes gated by `allow_writes`.
-impl
-    Standalone<
-        GatedWorkspace<FsWorkspace>,
-        GatedCheckpoint<GitCheckpoint>,
-        theseus_calculator::Calculator,
-        CargoToolchain,
-    >
-{
-    pub fn new(allow_writes: bool) -> Self {
-        Self {
-            model: theseus_model::theseus_model(),
-            workspace: GatedWorkspace {
-                workspace: FsWorkspace::at_repo_root(),
-                allow_writes,
-            },
-            checkpoint: GatedCheckpoint {
-                checkpoint: GitCheckpoint::at_repo_root(),
-                allow_writes,
-            },
-            calculator: theseus_calculator::Calculator,
-            toolchain: CargoToolchain,
-        }
     }
 }

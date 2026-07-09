@@ -341,7 +341,11 @@ mod tests {
 
         let lib = file(&files, "app/src/lib.rs");
         assert!(lib.contains("mod generated;"));
-        assert!(lib.contains("pub use generated::{CalculatorService, Operands, Refused, Unimplemented};"));
+        assert!(
+            lib.contains(
+                "pub use generated::{CalculatorService, Operands, Refused, Unimplemented};"
+            )
+        );
         assert!(lib.contains("pub use service::Calculator;"));
 
         let service = file(&files, "app/src/service.rs");

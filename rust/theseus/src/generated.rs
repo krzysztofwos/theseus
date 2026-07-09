@@ -448,7 +448,10 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "object", "properties" : {} } }), serde_json::json!({ "name" : "verify",
         "description" : "Check that the workspace conforms to the model.", "input_schema"
         : { "type" : "object", "properties" : {} } }), serde_json::json!({ "name" :
-        "query", "description" :
+        "generate", "description" :
+        "Regenerate model-derived code (generated.rs files) from the self-model. Call this after scaffolding a new service crate so generated.rs exists before authoring handlers.",
+        "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
+        "name" : "query", "description" :
         "List model element handles, optionally filtered by `find` (a substring), `node` (an exact handle), or `kind`.",
         "input_schema" : { "type" : "object", "properties" : { "find" : { "type" :
         "string" }, "node" : { "type" : "string" }, "kind" : { "type" : "string" } } }
@@ -482,6 +485,9 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "required" : ["method"] } }), serde_json::json!({ "name" : "check", "description"
         :
         "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
+        "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
+        "name" : "scaffold", "description" :
+        "Scaffold missing library service crates — writes the skeleton src/lib.rs and Cargo.toml for each service crate that does not yet have one.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "test", "description" :
         "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
@@ -615,6 +621,7 @@ pub async fn dispatch_tool(
     match name {
         "model" => Ok(service.model().await?),
         "verify" => Ok(serde_json::to_string(&service.verify().await?)?),
+        "generate" => Ok(serde_json::to_string(&service.generate().await?)?),
         "query" => {
             Ok(
                 serde_json::to_string(
@@ -635,13 +642,14 @@ pub async fn dispatch_tool(
         }
         "show" => Ok(service.show(parse_show_request_input(input)?).await?),
         "check" => Ok(service.check().await?),
+        "scaffold" => Ok(serde_json::to_string(&service.scaffold().await?)?),
         "test" => Ok(service.test().await?),
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
         "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check, test, snapshot, rollback, diff"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff"
             )
         }
     }

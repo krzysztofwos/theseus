@@ -583,7 +583,7 @@ mod tests {
             &StubToolchain,
             false,
         )
-        .call("generate", &serde_json::json!({}))
+        .call("calc", &serde_json::json!({}))
         .await
         .expect_err("an unexposed operation has no dispatch arm");
         assert!(

@@ -75,6 +75,7 @@ pub fn theseus_model() -> Model {
             4,
             &["theseus", "theseus-modeling"],
         )
+        .crate_node("theseus-text-utils", "text-utils", 1, &[])
         .foreign_type("GeneratedFile", "theseus_modeling::GeneratedFile")
         .struct_type(
             "QueryRequest",
@@ -234,6 +235,33 @@ pub fn theseus_model() -> Model {
             "SnapshotRef",
             &[("reference", "String", "The snapshot id, as returned by `snapshot`.")],
         )
+        .struct_type(
+            "SlugifyRequest",
+            &[("input", "String", "The string to convert to a slug.")],
+        )
+        .struct_type(
+            "WordCountRequest",
+            &[("input", "String", "The string whose words to count.")],
+        )
+        .struct_type(
+            "TruncateRequest",
+            &[
+                ("input", "String", "The string to truncate."),
+                (
+                    "max_chars",
+                    "u32",
+                    "Maximum number of characters to keep before appending ellipsis.",
+                ),
+            ],
+        )
+        .struct_type(
+            "CapitalizeRequest",
+            &[("input", "String", "The string to title-case.")],
+        )
+        .foreign_type("SlugifyResponse", "String")
+        .foreign_type("WordCountResponse", "String")
+        .foreign_type("TruncateResponse", "String")
+        .foreign_type("CapitalizeResponse", "String")
         .service(
             Service::new("Theseus")
                 .crate_name("theseus")
@@ -258,6 +286,9 @@ pub fn theseus_model() -> Model {
                     "GeneratedFiles",
                 )
                 .uses(&["workspace"])
+                .tool(
+                    "Regenerate model-derived code (generated.rs files) from the self-model. Call this after scaffolding a new service crate so generated.rs exists before authoring handlers.",
+                )
                 .operation(
                     "query",
                     "Return a stable handle and model hash for a model element.",
@@ -327,6 +358,9 @@ pub fn theseus_model() -> Model {
                     "GeneratedFiles",
                 )
                 .uses(&["workspace"])
+                .tool(
+                    "Scaffold missing library service crates — writes the skeleton src/lib.rs and Cargo.toml for each service crate that does not yet have one.",
+                )
                 .operation(
                     "test",
                     "Run the workspace tests and report the outcome.",
@@ -442,6 +476,34 @@ pub fn theseus_model() -> Model {
                     "CalcResult",
                 )
                 .operation("divide", "Divide the operands.", "Operands", "CalcResult"),
+        )
+        .service(
+            Service::new("TextUtils")
+                .crate_name("theseus-text-utils")
+                .operation(
+                    "slugify",
+                    "Convert a string to a URL-safe slug.",
+                    "SlugifyRequest",
+                    "SlugifyResponse",
+                )
+                .operation(
+                    "word_count",
+                    "Count the words in a string.",
+                    "WordCountRequest",
+                    "WordCountResponse",
+                )
+                .operation(
+                    "truncate",
+                    "Truncate a string to at most N characters, appending an ellipsis when cut.",
+                    "TruncateRequest",
+                    "TruncateResponse",
+                )
+                .operation(
+                    "capitalize",
+                    "Capitalize the first letter of every word (title case).",
+                    "CapitalizeRequest",
+                    "CapitalizeResponse",
+                ),
         )
         .inbound("theseus", Transport::Cli, "Theseus", "theseus-cli")
         .inbound("agent", Transport::Agent, "Theseus", "theseus-agent")

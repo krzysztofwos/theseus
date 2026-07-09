@@ -36,8 +36,21 @@ message and no tool call.";
 /// The loop-level tool: rebuild the binary and resume the session in it.
 pub const RESTART_TOOL: &str = "restart";
 
-/// The restart tool's definition, appended to the session's catalog. The loop
-/// answers it itself: rebuilding the running binary is this inbound's affordance.
+/// The loop's tool list: the session's catalog, with the restart tool appended
+/// when the model does not already expose it. A modeled `restart` operation
+/// carries its own catalog entry, and the loop still answers the call itself
+/// either way — rebuilding the running binary is this inbound's affordance.
+fn loop_tools() -> Vec<Value> {
+    let mut tools = theseus::tool_catalog();
+    if !tools.iter().any(|tool| tool["name"] == RESTART_TOOL) {
+        tools.push(restart_tool());
+    }
+    tools
+}
+
+/// The restart tool's definition, the fallback for a model that does not
+/// expose the operation. The loop answers it itself: rebuilding the running
+/// binary is this inbound's affordance.
 fn restart_tool() -> Value {
     serde_json::json!({
         "name": RESTART_TOOL,
@@ -134,8 +147,7 @@ pub async fn run_agent(
     session: &mut Session<'_>,
     mut messages: Vec<Message>,
 ) -> anyhow::Result<Outcome> {
-    let mut tools = theseus::tool_catalog();
-    tools.push(restart_tool());
+    let tools = loop_tools();
     // `AGENT_TRACE` set in the environment streams each turn's tool calls and
     // results to stderr, so a run can be watched without touching the answer.
     let trace = std::env::var("AGENT_TRACE").is_ok();
@@ -388,6 +400,15 @@ mod tests {
             matches!(outcome, Outcome::Answered(answer) if answer == "done"),
             "a mixed restart should be refused inline, not end the run",
         );
+    }
+
+    #[test]
+    fn the_loop_carries_exactly_one_restart_tool() {
+        let restarts = loop_tools()
+            .iter()
+            .filter(|tool| tool["name"] == RESTART_TOOL)
+            .count();
+        assert_eq!(restarts, 1);
     }
 
     #[test]

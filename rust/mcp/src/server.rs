@@ -90,7 +90,17 @@ impl ServerHandler for TheseusMcp {
             &self.toolchain,
             self.allow_writes,
         );
-        let outcome = session.call(request.name.as_ref(), &input).await;
+        // `restart` is an inbound's affordance: the loop rebuilds and resumes,
+        // and this server restarts through `restart_server`. The session's
+        // handler cannot restart anything, so the call is answered here.
+        let outcome = if request.name.as_ref() == "restart" {
+            Ok(
+                "this inbound restarts through the `restart_server` tool; call that instead"
+                    .to_string(),
+            )
+        } else {
+            session.call(request.name.as_ref(), &input).await
+        };
         // A host that cancels mid-call drops the future here: a write that
         // already reprojected stays on disk while the working model reverts,
         // and the drift gate reports the divergence on the next verify.

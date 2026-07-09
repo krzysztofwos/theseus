@@ -100,40 +100,64 @@ fn binary_cargo_toml(
     service: &Service,
     model: &Model,
 ) -> String {
-    let service_dir = model
-        .crate_named(&service.crate_name)
-        .map(|n| n.dir.as_str())
-        .unwrap_or(&service.crate_name);
-    let service_dep = format!(
-        "{} = {{ path = \"../{service_dir}\" }}\n",
-        service.crate_name,
-    );
+    // The manifest carries every dependency the model declares for the crate —
+    // the service it drives, and whatever else the composition reaches — so the
+    // dependency check verifies the scaffold it wrote.
+    let mut deps: Vec<&str> = node.depends_on.iter().map(String::as_str).collect();
+    if !deps.contains(&service.crate_name.as_str()) {
+        deps.push(&service.crate_name);
+    }
+    let path_block: String = deps
+        .iter()
+        .map(|dep| {
+            let dir = model
+                .crate_named(dep)
+                .map(|n| n.dir.as_str())
+                .unwrap_or(dep);
+            format!("{dep} = {{ path = \"../{dir}\" }}\n")
+        })
+        .collect();
     format!(
         "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"A standalone command-line interface to the {} service\"\n\n\
          [[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n\n\
-         [dependencies]\nanyhow = {{ workspace = true }}\nclap = {{ workspace = true }}\n\n{service_dep}",
+         [dependencies]\nanyhow = {{ workspace = true }}\nclap = {{ workspace = true }}\ntokio = {{ workspace = true }}\n\n{path_block}",
         node.name, service.name, inbound.name,
     )
 }
 
-/// Render the binary's composition root: construct the service adapter and drive
-/// it from the generated command surface.
+/// Render the binary's composition root. A portless service backs the contract
+/// with its adapter and drives the generated dispatch. A ported service leaves
+/// the composition authored: the skeleton compiles, and the wiring — adapters
+/// into a `Ctx` or a `Standalone` — is the leaf the architecture names.
 fn binary_main(service: &Service) -> String {
     let module = service.crate_name.replace('-', "_");
-    let adapter = adapter_name(service);
-    let var = service.name.to_lowercase();
-    format!(
+    let header = format!(
         "//! A standalone command-line interface to the {} service.\n//!\n\
          //! The command surface, the parsed invocation, and the dispatch are generated\n\
-         //! from the service's operations. This entry point backs the contract with the\n\
-         //! `{adapter}` adapter and drives it from the command line.\n\n\
+         //! from the service's operations. This entry point is the authored composition\n\
+         //! root: it backs the contract with adapters and drives it from the command line.\n\n\
          mod generated;\n\n\
-         fn main() -> anyhow::Result<()> {{\n    \
-         let {var} = {module}::{adapter};\n    \
-         let matches = generated::command().get_matches();\n    \
-         generated::dispatch(&{var}, generated::Invocation::from_matches(&matches))\n}}\n",
+         #[tokio::main(flavor = \"current_thread\")]\n\
+         async fn main() -> anyhow::Result<()> {{\n",
         service.name,
-    )
+    );
+    let body = if service.outbound.is_empty() {
+        let adapter = adapter_name(service);
+        let var = service.name.to_lowercase();
+        format!(
+            "    let {var} = {module}::{adapter};\n    \
+             let matches = generated::command().get_matches();\n    \
+             generated::dispatch(&{var}, generated::Invocation::from_matches(&matches)?).await\n"
+        )
+    } else {
+        format!(
+            "    // The service carries ports: author its adapters in `{module}`, wire\n    \
+             // them into a composition root, and drive the generated dispatch.\n    \
+             todo!(\"compose the {} service's adapters\")\n",
+            service.name,
+        )
+    };
+    format!("{header}{body}}}\n")
 }
 
 /// Render the crate manifest: `anyhow` and `async-trait` for the generated
@@ -154,9 +178,17 @@ fn cargo_toml(node: &CrateNode, services: &[&Service], model: &Model) -> String 
     } else {
         format!("\n{}", paths.concat())
     };
+    // A ported service's composition roots carry the engine's `Model`, so its
+    // crate depends on the engine through the workspace, and the workspace
+    // points the name at wherever the engine lives.
+    let engine = if services.iter().any(|s| !s.outbound.is_empty()) {
+        "theseus-modeling = { workspace = true }\n"
+    } else {
+        ""
+    };
     format!(
         "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{}\"\n\n\
-         [dependencies]\nanyhow = {{ workspace = true }}\nasync-trait = {{ workspace = true }}\n{path_block}",
+         [dependencies]\nanyhow = {{ workspace = true }}\nasync-trait = {{ workspace = true }}\n{engine}{path_block}",
         node.name,
         description(services),
     )
@@ -170,28 +202,60 @@ fn lib_rs(services: &[&Service], model: &Model) -> String {
     // adapter downcasts them to map an outcome, so the library exports them.
     contract.push("Refused".to_string());
     contract.push("Unimplemented".to_string());
-    let adapters: Vec<String> = services.iter().map(|s| adapter_name(s)).collect();
+    // A ported service's composition surface crosses the crate line too: the
+    // borrowed and owned roots, and the port traits an adapter implements.
+    for service in services.iter().filter(|s| !s.outbound.is_empty()) {
+        contract.push("Ctx".to_string());
+        contract.push("Standalone".to_string());
+        for port in service.outbound.iter().filter(|p| p.target.is_none()) {
+            contract.push(pascal_case(&port.name));
+        }
+    }
+    // A portless service authors an adapter struct; a ported one authors its
+    // handlers on `Ctx`, so only the portless adapters cross the crate line.
+    let adapters: Vec<String> = services
+        .iter()
+        .filter(|s| s.outbound.is_empty())
+        .map(|s| adapter_name(s))
+        .collect();
+    let adapter_uses = if adapters.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", use_list("service", &adapters))
+    };
     format!(
-        "//! {}\n\nmod generated;\nmod service;\n\n{}\n{}\n",
+        "//! {}\n\nmod generated;\nmod service;\n\n{}\n{adapter_uses}",
         description(services),
         use_list("generated", &contract),
-        use_list("service", &adapters),
     )
 }
 
-/// Render the authored adapter: an empty implementation of each service contract,
+/// Render the authored impl: an empty implementation of each service contract,
 /// whose methods fall through to their `unimplemented` defaults until authored.
+/// A portless service implements on its own adapter struct. A ported one
+/// implements on the generated `Ctx`, the borrowed root its handlers reach
+/// their ports through.
 fn service_rs(services: &[&Service]) -> String {
-    let traits: Vec<String> = services.iter().map(|s| trait_name(s)).collect();
+    let mut traits: Vec<String> = services.iter().map(|s| trait_name(s)).collect();
+    if services.iter().any(|s| !s.outbound.is_empty()) {
+        traits.push("Ctx".to_string());
+    }
     let blocks: Vec<String> = services
         .iter()
         .map(|s| {
-            let adapter = adapter_name(s);
-            format!(
-                "/// The {} adapter.\npub struct {adapter};\n\n#[async_trait::async_trait]\nimpl {} for {adapter} {{}}\n",
-                s.name,
-                trait_name(s),
-            )
+            if s.outbound.is_empty() {
+                let adapter = adapter_name(s);
+                format!(
+                    "/// The {} adapter.\npub struct {adapter};\n\n#[async_trait::async_trait]\nimpl {} for {adapter} {{}}\n",
+                    s.name,
+                    trait_name(s),
+                )
+            } else {
+                format!(
+                    "#[async_trait::async_trait]\nimpl {} for Ctx<'_> {{}}\n",
+                    trait_name(s),
+                )
+            }
         })
         .collect();
     format!(

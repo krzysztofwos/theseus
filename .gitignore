@@ -1,2 +1,5 @@
 /target
 .theseus/
+
+# Adopter workspaces build in their own trees
+adopters/*/target/

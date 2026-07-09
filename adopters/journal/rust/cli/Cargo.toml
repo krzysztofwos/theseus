@@ -1,0 +1,17 @@
+[package]
+name = "journal-cli"
+version = "0.1.0"
+edition = "2024"
+description = "A standalone command-line interface to the Journal service"
+
+[[bin]]
+name = "journal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+
+journal = { path = "../journal" }
+journal-model = { path = "../model" }

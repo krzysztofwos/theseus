@@ -182,6 +182,12 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("diff", status, &body)?;
         Ok(body)
     }
+
+    async fn restart(&self) -> anyhow::Result<()> {
+        let (status, body) = self.post("restart", serde_json::json!({})).await?;
+        checked("restart", status, &body)?;
+        Ok(())
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

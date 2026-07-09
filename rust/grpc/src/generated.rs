@@ -269,6 +269,17 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn restart(
+        &self,
+        _request: tonic::Request<proto::Empty>,
+    ) -> Result<tonic::Response<proto::Empty>, tonic::Status> {
+        let outcome = self.0.restart().await;
+        match outcome {
+            Ok(_) => Ok(tonic::Response::new(proto::Empty {})),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

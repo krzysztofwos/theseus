@@ -150,7 +150,11 @@ pub fn theseus_model() -> Model {
                     "Vec<Edit>",
                     "The edits to apply in order, each a verb over a handle from `query`.",
                 ),
-                ("write", "bool", "Apply the edit by reprojecting the model."),
+                (
+                    "write",
+                    "bool",
+                    "When true, apply the edit and reproject the model to disk; when false, validate and preview only.",
+                ),
             ],
         )
         .foreign_type("Transcript", "Vec<crate::agent::Message>")
@@ -310,7 +314,7 @@ pub fn theseus_model() -> Model {
                 )
                 .operation(
                     "coverage",
-                    "Report which operations have an authored handler.",
+                    "Report which operations have no authored handler.",
                     "Empty",
                     "CoverageReport",
                 )
@@ -400,6 +404,16 @@ pub fn theseus_model() -> Model {
                 .uses(&["checkpoint"])
                 .tool(
                     "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
+                )
+                .operation(
+                    "restart",
+                    "Rebuild the agent binary from the current workspace and resume the session.",
+                    "Empty",
+                    "Empty",
+                )
+                .uses(&["toolchain"])
+                .tool(
+                    "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
                 )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")

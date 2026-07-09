@@ -212,6 +212,17 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("diff", status))?;
         Ok(reply.into_inner().value)
     }
+
+    async fn restart(&self) -> anyhow::Result<()> {
+        let reply = self
+            .stub
+            .clone()
+            .restart(proto::Empty {})
+            .await
+            .map_err(|status| failed("restart", status))?;
+        reply.into_inner();
+        Ok(())
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

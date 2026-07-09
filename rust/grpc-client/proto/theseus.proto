@@ -36,7 +36,7 @@ message QueryResult {
 message PatchRequest {
   // The edits to apply in order, each a verb over a handle from `query`.
   repeated Edit edit = 1;
-  // Apply the edit by reprojecting the model.
+  // When true, apply the edit and reproject the model to disk; when false, validate and preview only.
   bool write = 2;
 }
 
@@ -156,7 +156,7 @@ service Theseus {
   rpc Query (QueryRequest) returns (QueryResult);
   // Propose an edit to the model.
   rpc Patch (PatchRequest) returns (PatchResult);
-  // Report which operations have an authored handler.
+  // Report which operations have no authored handler.
   rpc Coverage (Empty) returns (CoverageReport);
   // Splice an authored handler or adapter method and compile-check it.
   rpc Implement (ImplementRequest) returns (ImplementResult);
@@ -176,4 +176,6 @@ service Theseus {
   rpc Rollback (SnapshotRef) returns (String);
   // Show what changed in the working tree since a snapshot.
   rpc Diff (SnapshotRef) returns (String);
+  // Rebuild the agent binary from the current workspace and resume the session.
+  rpc Restart (Empty) returns (Empty);
 }

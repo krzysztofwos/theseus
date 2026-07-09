@@ -61,12 +61,14 @@ pub fn command() -> Command {
                     Arg::new("write")
                         .long("write")
                         .action(ArgAction::SetTrue)
-                        .help("Apply the edit by reprojecting the model."),
+                        .help(
+                            "When true, apply the edit and reproject the model to disk; when false, validate and preview only.",
+                        ),
                 ),
         )
         .subcommand(
             Command::new("coverage")
-                .about("Report which operations have an authored handler."),
+                .about("Report which operations have no authored handler."),
         )
         .subcommand(
             Command::new("implement")
@@ -206,6 +208,12 @@ pub fn command() -> Command {
                         .help("The snapshot id, as returned by `snapshot`."),
                 ),
         )
+        .subcommand(
+            Command::new("restart")
+                .about(
+                    "Rebuild the agent binary from the current workspace and resume the session.",
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -294,6 +302,7 @@ pub enum Invocation {
     Snapshot(theseus::SnapshotRequest),
     Rollback(theseus::SnapshotRef),
     Diff(theseus::SnapshotRef),
+    Restart,
 }
 
 impl Invocation {
@@ -319,6 +328,7 @@ impl Invocation {
             }
             Some(("rollback", sub)) => Ok(Invocation::Rollback(parse_snapshot_ref(sub)?)),
             Some(("diff", sub)) => Ok(Invocation::Diff(parse_snapshot_ref(sub)?)),
+            Some(("restart", _)) => Ok(Invocation::Restart),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -369,6 +379,9 @@ pub async fn dispatch(
             println!("{}", service.rollback(request). await ?)
         }
         Invocation::Diff(request) => println!("{}", service.diff(request). await ?),
+        Invocation::Restart => {
+            println!("{}", serde_json::to_string_pretty(& service.restart(). await ?) ?)
+        }
     }
     Ok(())
 }

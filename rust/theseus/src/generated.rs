@@ -160,7 +160,7 @@ pub struct QueryRequest {
 pub struct PatchRequest {
     /// The edits to apply in order, each a verb over a handle from `query`.
     pub edit: Vec<theseus_modeling::Edit>,
-    /// Apply the edit by reprojecting the model.
+    /// When true, apply the edit and reproject the model to disk; when false, validate and preview only.
     pub write: bool,
 }
 
@@ -274,7 +274,7 @@ pub trait TheseusService: Send + Sync {
         Err(Unimplemented("patch").into())
     }
 
-    /// Report which operations have an authored handler.
+    /// Report which operations have no authored handler.
     async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
         Err(Unimplemented("coverage").into())
     }
@@ -322,6 +322,11 @@ pub trait TheseusService: Send + Sync {
     /// Show what changed in the working tree since a snapshot.
     async fn diff(&self, _request: SnapshotRef) -> anyhow::Result<String> {
         Err(Unimplemented("diff").into())
+    }
+
+    /// Rebuild the agent binary from the current workspace and resume the session.
+    async fn restart(&self) -> anyhow::Result<()> {
+        Err(Unimplemented("restart").into())
     }
 }
 
@@ -437,6 +442,10 @@ for Standalone<
     async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
         self.ctx().diff(request).await
     }
+
+    async fn restart(&self) -> anyhow::Result<()> {
+        self.ctx().restart().await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -503,7 +512,10 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "diff", "description" :
         "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
-        "string" } }, "required" : ["reference"] } })
+        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
+        "restart", "description" :
+        "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+        "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -647,9 +659,10 @@ pub async fn dispatch_tool(
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
         "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
+        "restart" => Ok(serde_json::to_string(&service.restart().await?)?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart"
             )
         }
     }

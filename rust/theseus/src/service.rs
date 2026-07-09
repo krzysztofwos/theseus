@@ -27,6 +27,13 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn restart(&self) -> anyhow::Result<()> {
+        // The rebuild and the resume belong to the inbound above. The service's
+        // share of a restart is proving the tree compiles before the handoff.
+        self.toolchain.check().await?;
+        Ok(())
+    }
+
     async fn diff(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
         self.checkpoint.diff(&request.reference).await
     }

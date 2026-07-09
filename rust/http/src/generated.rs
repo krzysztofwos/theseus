@@ -202,6 +202,7 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
+        "restart" => reply_json(service.restart().await),
         other => {
             HttpReply {
                 status: 404,

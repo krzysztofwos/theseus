@@ -238,12 +238,12 @@ for GrpcTheseus<S> {
 
     async fn rollback(
         &self,
-        request: tonic::Request<proto::RollbackRequest>,
+        request: tonic::Request<proto::SnapshotRef>,
     ) -> Result<tonic::Response<proto::String>, tonic::Status> {
         let request = request.into_inner();
         let outcome = self
             .0
-            .rollback(theseus::RollbackRequest {
+            .rollback(theseus::SnapshotRef {
                 reference: request.reference,
             })
             .await;
@@ -255,12 +255,12 @@ for GrpcTheseus<S> {
 
     async fn diff(
         &self,
-        request: tonic::Request<proto::RollbackRequest>,
+        request: tonic::Request<proto::SnapshotRef>,
     ) -> Result<tonic::Response<proto::String>, tonic::Status> {
         let request = request.into_inner();
         let outcome = self
             .0
-            .diff(theseus::RollbackRequest {
+            .diff(theseus::SnapshotRef {
                 reference: request.reference,
             })
             .await;

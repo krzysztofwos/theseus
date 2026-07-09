@@ -107,16 +107,27 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> String {
         .map(|port| contract::render_port_gate(port, model))
         .collect();
     // A modeled turn budget renders as the loop's constant, so the budget is a
-    // patchable fact of the model.
-    let turn_budgets: Vec<TokenStream> = interior
+    // patchable fact of the model. A crate hosting one loop names its budget
+    // plainly; a crate hosting several prefixes each with its inbound's name,
+    // so the constants stay distinct.
+    let turned: Vec<&&Inbound> = interior
         .iter()
-        .filter_map(|inbound| inbound.turns)
-        .map(|turns| {
+        .filter(|inbound| inbound.turns.is_some())
+        .collect();
+    let turn_budgets: Vec<TokenStream> = turned
+        .iter()
+        .map(|inbound| {
+            let turns = inbound.turns.expect("filtered to turned inbounds");
+            let name = if turned.len() == 1 {
+                format_ident!("TURN_BUDGET")
+            } else {
+                format_ident!("{}_TURN_BUDGET", snake_case(&inbound.name).to_uppercase())
+            };
             let value = proc_macro2::Literal::usize_unsuffixed(turns as usize);
             let budget_doc = doc("The most turns the loop runs before giving up.");
             quote! {
                 #budget_doc
-                pub const TURN_BUDGET: usize = #value;
+                pub const #name: usize = #value;
             }
         })
         .collect();
@@ -533,6 +544,56 @@ fn distinct_request_types<'a>(operations: &[&Operation], model: &'a Model) -> Ve
         }
     }
     types
+}
+
+/// Render a parser per distinct request struct, building the request from a
+/// call's JSON input — the one wire-to-domain conversion every JSON transport
+/// renders. `prefix` qualifies the struct where the adapter lives outside the
+/// service's crate, `suffix` keeps each surface's parser names distinct, and
+/// `public` widens the visibility for a surface whose callers live in sibling
+/// modules.
+fn render_json_parsers(
+    operations: &[&Operation],
+    model: &Model,
+    prefix: &str,
+    suffix: &str,
+    public: bool,
+) -> TokenStream {
+    let parsers: Vec<TokenStream> = distinct_request_types(operations, model)
+        .into_iter()
+        .map(|def| {
+            let TypeShape::Struct(fields) = &def.shape else {
+                return quote! {};
+            };
+            let fn_name = format_ident!("parse_{}_{suffix}", proto_snake_case(&def.name));
+            let ty = syn_type(&format!("{prefix}{}", def.name));
+            let vis = if public {
+                quote! { pub(crate) }
+            } else {
+                quote! {}
+            };
+            let inits: Vec<TokenStream> = fields.iter().map(tool_field_init).collect();
+            quote! {
+                #vis fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
+                    Ok(#ty { #(#inits),* })
+                }
+            }
+        })
+        .collect();
+    quote! { #(#parsers)* }
+}
+
+/// The binding a JSON dispatch takes its input by: named when any operation
+/// parses a request from it, underscored when none does.
+fn request_binding(operations: &[&Operation], model: &Model) -> proc_macro2::Ident {
+    if operations
+        .iter()
+        .any(|op| request_type(op, model).is_some())
+    {
+        format_ident!("input")
+    } else {
+        format_ident!("_input")
+    }
 }
 
 /// The crate-path prefix an adapter hosted in `host_crate` names the service's

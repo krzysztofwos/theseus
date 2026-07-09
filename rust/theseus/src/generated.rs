@@ -206,10 +206,10 @@ pub struct SnapshotRequest {
     pub label: String,
 }
 
-/// The `RollbackRequest` request.
+/// The `SnapshotRef` request.
 #[derive(Debug, Clone)]
-pub struct RollbackRequest {
-    /// The snapshot id to restore, as returned by `snapshot`.
+pub struct SnapshotRef {
+    /// The snapshot id, as returned by `snapshot`.
     pub reference: String,
 }
 
@@ -315,12 +315,12 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Restore the working tree to a snapshot.
-    async fn rollback(&self, _request: RollbackRequest) -> anyhow::Result<String> {
+    async fn rollback(&self, _request: SnapshotRef) -> anyhow::Result<String> {
         Err(Unimplemented("rollback").into())
     }
 
     /// Show what changed in the working tree since a snapshot.
-    async fn diff(&self, _request: RollbackRequest) -> anyhow::Result<String> {
+    async fn diff(&self, _request: SnapshotRef) -> anyhow::Result<String> {
         Err(Unimplemented("diff").into())
     }
 }
@@ -430,11 +430,11 @@ for Standalone<
         self.ctx().snapshot(request).await
     }
 
-    async fn rollback(&self, request: RollbackRequest) -> anyhow::Result<String> {
+    async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
         self.ctx().rollback(request).await
     }
 
-    async fn diff(&self, request: RollbackRequest) -> anyhow::Result<String> {
+    async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
         self.ctx().diff(request).await
     }
 }
@@ -591,10 +591,10 @@ pub(crate) fn parse_snapshot_request_input(
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `label`"))?,
     })
 }
-pub(crate) fn parse_rollback_request_input(
+pub(crate) fn parse_snapshot_ref_input(
     input: &serde_json::Value,
-) -> anyhow::Result<RollbackRequest> {
-    Ok(RollbackRequest {
+) -> anyhow::Result<SnapshotRef> {
+    Ok(SnapshotRef {
         reference: input
             .get("reference")
             .and_then(serde_json::Value::as_str)
@@ -637,8 +637,8 @@ pub async fn dispatch_tool(
         "check" => Ok(service.check().await?),
         "test" => Ok(service.test().await?),
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
-        "rollback" => Ok(service.rollback(parse_rollback_request_input(input)?).await?),
-        "diff" => Ok(service.diff(parse_rollback_request_input(input)?).await?),
+        "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
+        "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
         other => {
             anyhow::bail!(
                 "unknown tool `{other}`; tools are model, verify, query, patch, coverage, implement, show, check, test, snapshot, rollback, diff"

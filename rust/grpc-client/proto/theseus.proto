@@ -104,8 +104,8 @@ message String {
   string value = 1;
 }
 
-message RollbackRequest {
-  // The snapshot id to restore, as returned by `snapshot`.
+message SnapshotRef {
+  // The snapshot id, as returned by `snapshot`.
   string reference = 1;
 }
 
@@ -173,7 +173,7 @@ service Theseus {
   // Checkpoint the working tree and return the snapshot id.
   rpc Snapshot (SnapshotRequest) returns (String);
   // Restore the working tree to a snapshot.
-  rpc Rollback (RollbackRequest) returns (String);
+  rpc Rollback (SnapshotRef) returns (String);
   // Show what changed in the working tree since a snapshot.
-  rpc Diff (RollbackRequest) returns (String);
+  rpc Diff (SnapshotRef) returns (String);
 }

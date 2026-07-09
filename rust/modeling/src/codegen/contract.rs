@@ -560,6 +560,20 @@ mod tests {
     }
 
     #[test]
+    fn two_loops_in_one_crate_carry_named_budgets() {
+        let model = Model::new("App")
+            .service(Service::new("App").crate_name("app"))
+            .inbound("agent", crate::model::Transport::Agent, "App", "loops")
+            .turns(32)
+            .inbound("scout", crate::model::Transport::Agent, "App", "loops")
+            .turns(8);
+        let rendered = render_module_for_crate(&model, "loops");
+        assert!(rendered.contains("pub const AGENT_TURN_BUDGET: usize = 32;"));
+        assert!(rendered.contains("pub const SCOUT_TURN_BUDGET: usize = 8;"));
+        assert!(!rendered.contains("pub const TURN_BUDGET"));
+    }
+
+    #[test]
     fn a_gated_method_renders_its_ports_write_gate() {
         let model = Model::new("App").service(
             Service::new("App").crate_name("app").port(

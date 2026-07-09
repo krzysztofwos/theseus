@@ -192,7 +192,7 @@ pub fn command() -> Command {
                         .long("reference")
                         .action(ArgAction::Set)
                         .required(true)
-                        .help("The snapshot id to restore, as returned by `snapshot`."),
+                        .help("The snapshot id, as returned by `snapshot`."),
                 ),
         )
         .subcommand(
@@ -203,7 +203,7 @@ pub fn command() -> Command {
                         .long("reference")
                         .action(ArgAction::Set)
                         .required(true)
-                        .help("The snapshot id to restore, as returned by `snapshot`."),
+                        .help("The snapshot id, as returned by `snapshot`."),
                 ),
         )
 }
@@ -271,11 +271,9 @@ fn parse_snapshot_request(
     })
 }
 
-fn parse_rollback_request(
-    matches: &ArgMatches,
-) -> anyhow::Result<theseus::RollbackRequest> {
+fn parse_snapshot_ref(matches: &ArgMatches) -> anyhow::Result<theseus::SnapshotRef> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
-    Ok(theseus::RollbackRequest {
+    Ok(theseus::SnapshotRef {
         reference: arg("reference").unwrap_or_default(),
     })
 }
@@ -294,8 +292,8 @@ pub enum Invocation {
     Scaffold,
     Test,
     Snapshot(theseus::SnapshotRequest),
-    Rollback(theseus::RollbackRequest),
-    Diff(theseus::RollbackRequest),
+    Rollback(theseus::SnapshotRef),
+    Diff(theseus::SnapshotRef),
 }
 
 impl Invocation {
@@ -319,10 +317,8 @@ impl Invocation {
             Some(("snapshot", sub)) => {
                 Ok(Invocation::Snapshot(parse_snapshot_request(sub)?))
             }
-            Some(("rollback", sub)) => {
-                Ok(Invocation::Rollback(parse_rollback_request(sub)?))
-            }
-            Some(("diff", sub)) => Ok(Invocation::Diff(parse_rollback_request(sub)?)),
+            Some(("rollback", sub)) => Ok(Invocation::Rollback(parse_snapshot_ref(sub)?)),
+            Some(("diff", sub)) => Ok(Invocation::Diff(parse_snapshot_ref(sub)?)),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }

@@ -20,24 +20,9 @@ pub(super) fn render_http_module(
     } = contract_paths(&inbound.crate_name, service, model);
 
     // A parser per distinct request struct, building the request from the call's
-    // JSON body — the same wire conversion the tool dispatch renders.
+    // JSON body — the one wire conversion the tool dispatch renders too.
     let operations: Vec<&Operation> = service.operations.iter().collect();
-    let parsers: Vec<TokenStream> = distinct_request_types(&operations, model)
-        .into_iter()
-        .map(|def| {
-            let TypeShape::Struct(fields) = &def.shape else {
-                return quote! {};
-            };
-            let fn_name = format_ident!("parse_{}_http", proto_snake_case(&def.name));
-            let ty = syn_type(&format!("{prefix}{}", def.name));
-            let inits: Vec<TokenStream> = fields.iter().map(tool_field_init).collect();
-            quote! {
-                fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
-                    Ok(#ty { #(#inits),* })
-                }
-            }
-        })
-        .collect();
+    let parsers = render_json_parsers(&operations, model, &prefix, "http", false);
 
     let arms: Vec<TokenStream> = service
         .operations
@@ -63,15 +48,7 @@ pub(super) fn render_http_module(
             }
         })
         .collect();
-    let input = if service
-        .operations
-        .iter()
-        .any(|op| request_type(op, model).is_some())
-    {
-        format_ident!("input")
-    } else {
-        format_ident!("_input")
-    };
+    let input = request_binding(&operations, model);
 
     let doc_reply = doc("One HTTP reply: the status code and the rendered body.");
     let doc_a = doc("Handle one operation call: parse the request from the call's JSON body,");
@@ -87,7 +64,7 @@ pub(super) fn render_http_module(
             pub body: String,
         }
 
-        #(#parsers)*
+        #parsers
 
         #doc_a
         #doc_b

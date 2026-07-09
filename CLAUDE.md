@@ -56,6 +56,8 @@ Fifteen crates under `rust/`, layered. Each crate may depend only on strictly lo
 
 The framework/adopter split (L1 engine ↔ L2 concrete model) is the central design seam: the engine is reusable. The adopter supplies one model and its owned paths.
 
+Reads are ambient by doctrine: only mutations cross a port. A handler reads the tree directly (`tokio::fs`, the manifests, the authored sources) and writes through `workspace`, checkpoints through `checkpoint`, builds through `toolchain` — so a `uses` edge means "this operation can change something through that port", and the flow check verifies exactly that mutation picture. The trade is deliberate: port the effects that need gating and doubles, leave reads frictionless.
+
 The contract is async end to end: the generated service and port traits are async (through `async-trait`, so they stay usable as trait objects), the adapters and authored handlers await their ports, and every inbound binary runs on an async runtime. The engine (L1) stays synchronous pure computation. The `theseus` crate also holds the shared adapters: `FsWorkspace`, `GitCheckpoint`, and `CargoToolchain`. The write gates (`GatedWorkspace`, `GatedCheckpoint`) render from each method's modeled `gated` flag, so which methods a gate refuses is a fact of the model, not a wrapper kept in step by hand.
 
 ### The model → code → verify loop

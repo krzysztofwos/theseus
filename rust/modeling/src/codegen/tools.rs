@@ -72,14 +72,7 @@ pub(super) fn render_tool_dispatch(
         .collect::<Vec<_>>()
         .join(", ");
     let unknown = format!("unknown tool `{{other}}`; tools are {known}");
-    let input = if operations
-        .iter()
-        .any(|op| request_type(op, model).is_some())
-    {
-        format_ident!("input")
-    } else {
-        format_ident!("_input")
-    };
+    let input = request_binding(operations, model);
     let doc_a = doc("Dispatch one tool call to the service: parse the request from the");
     let doc_b = doc("call's JSON input, run the operation, and render the result — text");
     let doc_c = doc("for a string, otherwise JSON. The catalog and this dispatch render");
@@ -108,23 +101,7 @@ pub(super) fn render_tool_dispatch(
 /// conversion is rendered with the dispatch, so the struct itself stays
 /// transport-neutral.
 pub(super) fn render_tool_parsers(operations: &[&Operation], model: &Model) -> TokenStream {
-    let parsers: Vec<TokenStream> = distinct_request_types(operations, model)
-        .into_iter()
-        .map(|def| {
-            let TypeShape::Struct(fields) = &def.shape else {
-                return quote! {};
-            };
-            let fn_name = format_ident!("parse_{}_input", proto_snake_case(&def.name));
-            let ty = format_ident!("{}", def.name);
-            let inits: Vec<TokenStream> = fields.iter().map(tool_field_init).collect();
-            quote! {
-                pub(crate) fn #fn_name(input: &serde_json::Value) -> anyhow::Result<#ty> {
-                    Ok(#ty { #(#inits),* })
-                }
-            }
-        })
-        .collect();
-    quote! { #(#parsers)* }
+    render_json_parsers(operations, model, "", "input", true)
 }
 
 /// Render an operation's JSON-schema `input_schema` from its request contract. An

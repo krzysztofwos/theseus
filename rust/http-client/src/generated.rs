@@ -167,10 +167,7 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(body)
     }
 
-    async fn rollback(
-        &self,
-        request: theseus::RollbackRequest,
-    ) -> anyhow::Result<String> {
+    async fn rollback(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let (status, body) = self
             .post("rollback", serde_json::json!({ "reference" : request.reference }))
             .await?;
@@ -178,7 +175,7 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(body)
     }
 
-    async fn diff(&self, request: theseus::RollbackRequest) -> anyhow::Result<String> {
+    async fn diff(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let (status, body) = self
             .post("diff", serde_json::json!({ "reference" : request.reference }))
             .await?;

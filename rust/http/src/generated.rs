@@ -124,10 +124,10 @@ fn parse_snapshot_request_http(
     })
 }
 
-fn parse_rollback_request_http(
+fn parse_snapshot_ref_http(
     input: &serde_json::Value,
-) -> anyhow::Result<theseus::RollbackRequest> {
-    Ok(theseus::RollbackRequest {
+) -> anyhow::Result<theseus::SnapshotRef> {
+    Ok(theseus::SnapshotRef {
         reference: input
             .get("reference")
             .and_then(serde_json::Value::as_str)
@@ -191,13 +191,13 @@ pub async fn handle(
             }
         }
         "rollback" => {
-            match parse_rollback_request_http(input) {
+            match parse_snapshot_ref_http(input) {
                 Ok(request) => reply_text(service.rollback(request).await),
                 Err(error) => error_body(400, &error),
             }
         }
         "diff" => {
-            match parse_rollback_request_http(input) {
+            match parse_snapshot_ref_http(input) {
                 Ok(request) => reply_text(service.diff(request).await),
                 Err(error) => error_body(400, &error),
             }

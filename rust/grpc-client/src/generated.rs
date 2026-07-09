@@ -189,14 +189,11 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(reply.into_inner().value)
     }
 
-    async fn rollback(
-        &self,
-        request: theseus::RollbackRequest,
-    ) -> anyhow::Result<String> {
+    async fn rollback(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let reply = self
             .stub
             .clone()
-            .rollback(proto::RollbackRequest {
+            .rollback(proto::SnapshotRef {
                 reference: request.reference,
             })
             .await
@@ -204,11 +201,11 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(reply.into_inner().value)
     }
 
-    async fn diff(&self, request: theseus::RollbackRequest) -> anyhow::Result<String> {
+    async fn diff(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let reply = self
             .stub
             .clone()
-            .diff(proto::RollbackRequest {
+            .diff(proto::SnapshotRef {
                 reference: request.reference,
             })
             .await

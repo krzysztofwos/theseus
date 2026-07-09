@@ -231,14 +231,8 @@ pub fn theseus_model() -> Model {
             &[("label", "String", "A short label naming the snapshot.")],
         )
         .struct_type(
-            "RollbackRequest",
-            &[
-                (
-                    "reference",
-                    "String",
-                    "The snapshot id to restore, as returned by `snapshot`.",
-                ),
-            ],
+            "SnapshotRef",
+            &[("reference", "String", "The snapshot id, as returned by `snapshot`.")],
         )
         .service(
             Service::new("Theseus")
@@ -356,7 +350,7 @@ pub fn theseus_model() -> Model {
                 .operation(
                     "rollback",
                     "Restore the working tree to a snapshot.",
-                    "RollbackRequest",
+                    "SnapshotRef",
                     "String",
                 )
                 .uses(&["checkpoint"])
@@ -366,7 +360,7 @@ pub fn theseus_model() -> Model {
                 .operation(
                     "diff",
                     "Show what changed in the working tree since a snapshot.",
-                    "RollbackRequest",
+                    "SnapshotRef",
                     "String",
                 )
                 .uses(&["checkpoint"])

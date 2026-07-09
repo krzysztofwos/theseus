@@ -214,6 +214,48 @@ pub fn command() -> Command {
                     "Rebuild the agent binary from the current workspace and resume the session.",
                 ),
         )
+        .subcommand(
+            Command::new("read")
+                .about("Read a workspace file, capped for a tool result.")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The workspace-relative file to read."),
+                ),
+        )
+        .subcommand(
+            Command::new("search")
+                .about("Find a pattern's occurrences across the workspace.")
+                .arg(
+                    Arg::new("pattern")
+                        .long("pattern")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The text to find."),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .action(ArgAction::Set)
+                        .help(
+                            "A workspace-relative subtree to search. The whole workspace when omitted.",
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List a workspace directory.")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .action(ArgAction::Set)
+                        .help(
+                            "The workspace-relative directory to list. The root when omitted.",
+                        ),
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -286,6 +328,28 @@ fn parse_snapshot_ref(matches: &ArgMatches) -> anyhow::Result<theseus::SnapshotR
     })
 }
 
+fn parse_read_request(matches: &ArgMatches) -> anyhow::Result<theseus::ReadRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::ReadRequest {
+        path: arg("path").unwrap_or_default(),
+    })
+}
+
+fn parse_search_request(matches: &ArgMatches) -> anyhow::Result<theseus::SearchRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::SearchRequest {
+        pattern: arg("pattern").unwrap_or_default(),
+        path: arg("path"),
+    })
+}
+
+fn parse_list_request(matches: &ArgMatches) -> anyhow::Result<theseus::ListRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::ListRequest {
+        path: arg("path"),
+    })
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -303,6 +367,9 @@ pub enum Invocation {
     Rollback(theseus::SnapshotRef),
     Diff(theseus::SnapshotRef),
     Restart,
+    Read(theseus::ReadRequest),
+    Search(theseus::SearchRequest),
+    List(theseus::ListRequest),
 }
 
 impl Invocation {
@@ -329,6 +396,9 @@ impl Invocation {
             Some(("rollback", sub)) => Ok(Invocation::Rollback(parse_snapshot_ref(sub)?)),
             Some(("diff", sub)) => Ok(Invocation::Diff(parse_snapshot_ref(sub)?)),
             Some(("restart", _)) => Ok(Invocation::Restart),
+            Some(("read", sub)) => Ok(Invocation::Read(parse_read_request(sub)?)),
+            Some(("search", sub)) => Ok(Invocation::Search(parse_search_request(sub)?)),
+            Some(("list", sub)) => Ok(Invocation::List(parse_list_request(sub)?)),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -382,6 +452,9 @@ pub async fn dispatch(
         Invocation::Restart => {
             println!("{}", serde_json::to_string_pretty(& service.restart(). await ?) ?)
         }
+        Invocation::Read(request) => println!("{}", service.read(request). await ?),
+        Invocation::Search(request) => println!("{}", service.search(request). await ?),
+        Invocation::List(request) => println!("{}", service.list(request). await ?),
     }
     Ok(())
 }

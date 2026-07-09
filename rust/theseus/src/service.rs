@@ -27,6 +27,53 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<String> {
+        let path = rooted(&request.path)?;
+        let text = tokio::fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("reading {}", request.path))?;
+        Ok(crate::head(&text))
+    }
+
+    async fn search(&self, request: crate::generated::SearchRequest) -> anyhow::Result<String> {
+        let base = rooted(request.path.as_deref().unwrap_or(""))?;
+        let root = rooted("")?;
+        let pattern = request.pattern;
+        tokio::task::spawn_blocking(move || {
+            let mut hits = Vec::new();
+            search_tree(&base, &root, &pattern, &mut hits)?;
+            if hits.is_empty() {
+                return Ok(format!("no lines contain `{pattern}`"));
+            }
+            let total = hits.len();
+            hits.truncate(SEARCH_CAP);
+            let mut out = hits.join("\n");
+            if total > SEARCH_CAP {
+                out.push_str(&format!(
+                    "\n… truncated ({} more line(s))",
+                    total - SEARCH_CAP
+                ));
+            }
+            Ok(out)
+        })
+        .await?
+    }
+
+    async fn list(&self, request: crate::generated::ListRequest) -> anyhow::Result<String> {
+        let dir = rooted(request.path.as_deref().unwrap_or(""))?;
+        let mut entries = Vec::new();
+        let mut reader = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = reader.next_entry().await? {
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().await?.is_dir() {
+                name.push('/');
+            }
+            entries.push(name);
+        }
+        entries.sort();
+        Ok(entries.join("\n"))
+    }
+
     async fn restart(&self) -> anyhow::Result<()> {
         // The rebuild and the resume belong to the inbound above. The service's
         // share of a restart is proving the tree compiles before the handoff.
@@ -243,6 +290,63 @@ pub(crate) fn apply_patch(
         anyhow::bail!("patch needs at least one edit");
     }
     Ok(apply_edits(model, &request.edit))
+}
+
+/// The most search hits a result carries, so a broad pattern stays readable.
+const SEARCH_CAP: usize = 200;
+
+/// A workspace path, resolved and proven to stay inside the workspace. Every
+/// read surface goes through this guard — the operations cross every
+/// transport, so a wire caller is held to the same boundary as the loop.
+fn rooted(path: &str) -> anyhow::Result<std::path::PathBuf> {
+    let root = workspace_root()
+        .canonicalize()
+        .context("resolving the workspace root")?;
+    let resolved = root
+        .join(path)
+        .canonicalize()
+        .with_context(|| format!("no such path: {path}"))?;
+    anyhow::ensure!(
+        resolved.starts_with(&root),
+        "`{path}` escapes the workspace"
+    );
+    Ok(resolved)
+}
+
+/// Collect `path:line: text` hits for every line containing `pattern` under
+/// `base`, skipping build trees, version control, and files that are not text.
+fn search_tree(
+    base: &std::path::Path,
+    root: &std::path::Path,
+    pattern: &str,
+    hits: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(base)?.collect::<Result<_, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type()?.is_dir() {
+            if matches!(
+                name.as_str(),
+                ".git" | "target" | ".theseus" | ".trunk" | "node_modules"
+            ) {
+                continue;
+            }
+            search_tree(&path, root, pattern, hits)?;
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let rel = path.strip_prefix(root).unwrap_or(&path).display();
+        for (number, line) in text.lines().enumerate() {
+            if line.contains(pattern) {
+                hits.push(format!("{rel}:{}: {}", number + 1, line.trim()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The authored adapters file holding the impls for `port`: the `lib.rs` of the
@@ -485,6 +589,60 @@ mod tests {
         .await
         .expect("the check tool runs");
         assert_eq!(result, "the workspace compiles (stub)");
+    }
+
+    #[tokio::test]
+    async fn the_read_tool_reads_a_workspace_file() {
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("read", &serde_json::json!({ "path": "Cargo.toml" }))
+        .await
+        .expect("the read tool runs");
+        assert!(result.contains("[workspace]"), "{result}");
+    }
+
+    #[tokio::test]
+    async fn the_read_tool_refuses_an_escape() {
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("read", &serde_json::json!({ "path": "../" }))
+        .await
+        .expect_err("a path above the workspace is refused");
+        assert!(
+            error.to_string().contains("escapes the workspace"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_search_tool_reports_path_and_line() {
+        let result = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call(
+            "search",
+            &serde_json::json!({ "pattern": "theseus-kernel", "path": "rust/kernel" }),
+        )
+        .await
+        .expect("the search tool runs");
+        assert!(result.contains("rust/kernel/Cargo.toml:"), "{result}");
     }
 
     #[tokio::test]

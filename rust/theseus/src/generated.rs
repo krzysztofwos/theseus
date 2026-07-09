@@ -213,6 +213,29 @@ pub struct SnapshotRef {
     pub reference: String,
 }
 
+/// The `ReadRequest` request.
+#[derive(Debug, Clone)]
+pub struct ReadRequest {
+    /// The workspace-relative file to read.
+    pub path: String,
+}
+
+/// The `SearchRequest` request.
+#[derive(Debug, Clone)]
+pub struct SearchRequest {
+    /// The text to find.
+    pub pattern: String,
+    /// A workspace-relative subtree to search. The whole workspace when omitted.
+    pub path: Option<String>,
+}
+
+/// The `ListRequest` request.
+#[derive(Debug, Clone)]
+pub struct ListRequest {
+    /// The workspace-relative directory to list. The root when omitted.
+    pub path: Option<String>,
+}
+
 /// An operation with no authored handler, the trait default's error. A
 /// transport adapter downcasts it to map the outcome in its own vocabulary.
 #[derive(Debug)]
@@ -327,6 +350,21 @@ pub trait TheseusService: Send + Sync {
     /// Rebuild the agent binary from the current workspace and resume the session.
     async fn restart(&self) -> anyhow::Result<()> {
         Err(Unimplemented("restart").into())
+    }
+
+    /// Read a workspace file, capped for a tool result.
+    async fn read(&self, _request: ReadRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("read").into())
+    }
+
+    /// Find a pattern's occurrences across the workspace.
+    async fn search(&self, _request: SearchRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("search").into())
+    }
+
+    /// List a workspace directory.
+    async fn list(&self, _request: ListRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("list").into())
     }
 }
 
@@ -446,6 +484,18 @@ for Standalone<
     async fn restart(&self) -> anyhow::Result<()> {
         self.ctx().restart().await
     }
+
+    async fn read(&self, request: ReadRequest) -> anyhow::Result<String> {
+        self.ctx().read(request).await
+    }
+
+    async fn search(&self, request: SearchRequest) -> anyhow::Result<String> {
+        self.ctx().search(request).await
+    }
+
+    async fn list(&self, request: ListRequest) -> anyhow::Result<String> {
+        self.ctx().list(request).await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -515,7 +565,19 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
         "restart", "description" :
         "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
-        "input_schema" : { "type" : "object", "properties" : {} } })
+        "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
+        "name" : "read", "description" :
+        "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
+        "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
+        "string" } }, "required" : ["path"] } }), serde_json::json!({ "name" : "search",
+        "description" :
+        "Search the workspace for lines containing `pattern`, reported as path:line: text, capped. `path` narrows the search to a subtree, e.g. `rust/agent`. Use it to find house patterns and neighbors before authoring, then `read` the file. Example: { \"pattern\": \"impl Toolchain\", \"path\": \"rust/theseus\" }.",
+        "input_schema" : { "type" : "object", "properties" : { "pattern" : { "type" :
+        "string" }, "path" : { "type" : "string" } }, "required" : ["pattern"] } }),
+        serde_json::json!({ "name" : "list", "description" :
+        "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
+        "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
+        "string" } } } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -620,6 +682,42 @@ pub(crate) fn parse_snapshot_ref_input(
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `reference`"))?,
     })
 }
+pub(crate) fn parse_read_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<ReadRequest> {
+    Ok(ReadRequest {
+        path: input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+    })
+}
+pub(crate) fn parse_search_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<SearchRequest> {
+    Ok(SearchRequest {
+        pattern: input
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `pattern`"))?,
+        path: serde_json::from_value(
+                input.get("path").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `path` field is invalid: {error}"))?,
+    })
+}
+pub(crate) fn parse_list_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<ListRequest> {
+    Ok(ListRequest {
+        path: serde_json::from_value(
+                input.get("path").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `path` field is invalid: {error}"))?,
+    })
+}
 
 /// Dispatch one tool call to the service: parse the request from the
 /// call's JSON input, run the operation, and render the result — text
@@ -660,9 +758,12 @@ pub async fn dispatch_tool(
         "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
         "restart" => Ok(serde_json::to_string(&service.restart().await?)?),
+        "read" => Ok(service.read(parse_read_request_input(input)?).await?),
+        "search" => Ok(service.search(parse_search_request_input(input)?).await?),
+        "list" => Ok(service.list(parse_list_request_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart, read, search, list"
             )
         }
     }

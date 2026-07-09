@@ -280,6 +280,58 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn read(
+        &self,
+        request: tonic::Request<proto::ReadRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .read(theseus::ReadRequest {
+                path: request.path,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
+
+    async fn search(
+        &self,
+        request: tonic::Request<proto::SearchRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .search(theseus::SearchRequest {
+                pattern: request.pattern,
+                path: request.path,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
+
+    async fn list(
+        &self,
+        request: tonic::Request<proto::ListRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .list(theseus::ListRequest {
+                path: request.path,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

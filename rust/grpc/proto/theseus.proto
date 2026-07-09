@@ -109,6 +109,23 @@ message SnapshotRef {
   string reference = 1;
 }
 
+message ReadRequest {
+  // The workspace-relative file to read.
+  string path = 1;
+}
+
+message SearchRequest {
+  // The text to find.
+  string pattern = 1;
+  // A workspace-relative subtree to search. The whole workspace when omitted.
+  optional string path = 2;
+}
+
+message ListRequest {
+  // The workspace-relative directory to list. The root when omitted.
+  optional string path = 1;
+}
+
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
@@ -178,4 +195,10 @@ service Theseus {
   rpc Diff (SnapshotRef) returns (String);
   // Rebuild the agent binary from the current workspace and resume the session.
   rpc Restart (Empty) returns (Empty);
+  // Read a workspace file, capped for a tool result.
+  rpc Read (ReadRequest) returns (String);
+  // Find a pattern's occurrences across the workspace.
+  rpc Search (SearchRequest) returns (String);
+  // List a workspace directory.
+  rpc List (ListRequest) returns (String);
 }

@@ -223,6 +223,43 @@ impl theseus::TheseusService for GrpcTheseusClient {
         reply.into_inner();
         Ok(())
     }
+
+    async fn read(&self, request: theseus::ReadRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .read(proto::ReadRequest {
+                path: request.path,
+            })
+            .await
+            .map_err(|status| failed("read", status))?;
+        Ok(reply.into_inner().value)
+    }
+
+    async fn search(&self, request: theseus::SearchRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .search(proto::SearchRequest {
+                pattern: request.pattern,
+                path: request.path,
+            })
+            .await
+            .map_err(|status| failed("search", status))?;
+        Ok(reply.into_inner().value)
+    }
+
+    async fn list(&self, request: theseus::ListRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .list(proto::ListRequest {
+                path: request.path,
+            })
+            .await
+            .map_err(|status| failed("list", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

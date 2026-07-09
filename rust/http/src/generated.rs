@@ -136,6 +136,45 @@ fn parse_snapshot_ref_http(
     })
 }
 
+fn parse_read_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::ReadRequest> {
+    Ok(theseus::ReadRequest {
+        path: input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+    })
+}
+
+fn parse_search_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::SearchRequest> {
+    Ok(theseus::SearchRequest {
+        pattern: input
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `pattern`"))?,
+        path: serde_json::from_value(
+                input.get("path").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `path` field is invalid: {error}"))?,
+    })
+}
+
+fn parse_list_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::ListRequest> {
+    Ok(theseus::ListRequest {
+        path: serde_json::from_value(
+                input.get("path").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `path` field is invalid: {error}"))?,
+    })
+}
+
 /// Handle one operation call: parse the request from the call's JSON body,
 /// run the operation, and render the reply. The status derives from the
 /// outcome's structure: 200 a result, 400 a request that does not parse,
@@ -203,6 +242,24 @@ pub async fn handle(
             }
         }
         "restart" => reply_json(service.restart().await),
+        "read" => {
+            match parse_read_request_http(input) {
+                Ok(request) => reply_text(service.read(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "search" => {
+            match parse_search_request_http(input) {
+                Ok(request) => reply_text(service.search(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "list" => {
+            match parse_list_request_http(input) {
+                Ok(request) => reply_text(service.list(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
         other => {
             HttpReply {
                 status: 404,

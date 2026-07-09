@@ -188,6 +188,33 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("restart", status, &body)?;
         Ok(())
     }
+
+    async fn read(&self, request: theseus::ReadRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("read", serde_json::json!({ "path" : request.path }))
+            .await?;
+        checked("read", status, &body)?;
+        Ok(body)
+    }
+
+    async fn search(&self, request: theseus::SearchRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post(
+                "search",
+                serde_json::json!({ "pattern" : request.pattern, "path" : request.path }),
+            )
+            .await?;
+        checked("search", status, &body)?;
+        Ok(body)
+    }
+
+    async fn list(&self, request: theseus::ListRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("list", serde_json::json!({ "path" : request.path }))
+            .await?;
+        checked("list", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

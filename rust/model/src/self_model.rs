@@ -240,6 +240,31 @@ pub fn theseus_model() -> Model {
             &[("reference", "String", "The snapshot id, as returned by `snapshot`.")],
         )
         .struct_type(
+            "ReadRequest",
+            &[("path", "String", "The workspace-relative file to read.")],
+        )
+        .struct_type(
+            "SearchRequest",
+            &[
+                ("pattern", "String", "The text to find."),
+                (
+                    "path",
+                    "Option<String>",
+                    "A workspace-relative subtree to search. The whole workspace when omitted.",
+                ),
+            ],
+        )
+        .struct_type(
+            "ListRequest",
+            &[
+                (
+                    "path",
+                    "Option<String>",
+                    "The workspace-relative directory to list. The root when omitted.",
+                ),
+            ],
+        )
+        .struct_type(
             "SlugifyRequest",
             &[("input", "String", "The string to convert to a slug.")],
         )
@@ -414,6 +439,33 @@ pub fn theseus_model() -> Model {
                 .uses(&["toolchain"])
                 .tool(
                     "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+                )
+                .operation(
+                    "read",
+                    "Read a workspace file, capped for a tool result.",
+                    "ReadRequest",
+                    "String",
+                )
+                .tool(
+                    "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
+                )
+                .operation(
+                    "search",
+                    "Find a pattern's occurrences across the workspace.",
+                    "SearchRequest",
+                    "String",
+                )
+                .tool(
+                    "Search the workspace for lines containing `pattern`, reported as path:line: text, capped. `path` narrows the search to a subtree, e.g. `rust/agent`. Use it to find house patterns and neighbors before authoring, then `read` the file. Example: { \"pattern\": \"impl Toolchain\", \"path\": \"rust/theseus\" }.",
+                )
+                .operation(
+                    "list",
+                    "List a workspace directory.",
+                    "ListRequest",
+                    "String",
+                )
+                .tool(
+                    "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
                 )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")

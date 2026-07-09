@@ -1967,6 +1967,7 @@ dependencies = [
  "theseus-calculator",
  "theseus-model",
  "theseus-modeling",
+ "thiserror",
  "tokio",
 ]
 

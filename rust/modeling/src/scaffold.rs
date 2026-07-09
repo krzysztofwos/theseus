@@ -166,6 +166,10 @@ fn cargo_toml(node: &CrateNode, services: &[&Service], model: &Model) -> String 
 fn lib_rs(services: &[&Service], model: &Model) -> String {
     let mut contract: Vec<String> = services.iter().map(|s| trait_name(s)).collect();
     contract.extend(request_structs(services, model));
+    // The boundary error types cross the crate line with the contract: a wire
+    // adapter downcasts them to map an outcome, so the library exports them.
+    contract.push("Refused".to_string());
+    contract.push("Unimplemented".to_string());
     let adapters: Vec<String> = services.iter().map(|s| adapter_name(s)).collect();
     format!(
         "//! {}\n\nmod generated;\nmod service;\n\n{}\n{}\n",
@@ -273,7 +277,7 @@ mod tests {
 
         let lib = file(&files, "app/src/lib.rs");
         assert!(lib.contains("mod generated;"));
-        assert!(lib.contains("pub use generated::{CalculatorService, Operands};"));
+        assert!(lib.contains("pub use generated::{CalculatorService, Operands, Refused, Unimplemented};"));
         assert!(lib.contains("pub use service::Calculator;"));
 
         let service = file(&files, "app/src/service.rs");

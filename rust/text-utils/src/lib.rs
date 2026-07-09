@@ -4,6 +4,7 @@ mod generated;
 mod service;
 
 pub use generated::{
-    CapitalizeRequest, SlugifyRequest, TextUtilsService, TruncateRequest, WordCountRequest,
+    CapitalizeRequest, Refused, SlugifyRequest, TextUtilsService, TruncateRequest, Unimplemented,
+    WordCountRequest,
 };
 pub use service::TextUtils;

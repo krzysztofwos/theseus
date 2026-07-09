@@ -10,6 +10,6 @@ Run a goal with `AGENT_TRACE=1 cargo run -p theseus-agent -- --allow-writes "<go
 | 2 | Grow a port method + adapter, restart, call it live | Full self-modification | 2026-07-03 (test), 2026-07-04 (checkpoint) | green — both kept in-tree |
 | 3 | Snapshot, break something, roll back | Recovery | not yet run | — |
 | 4 | Scaffold an in-tree service, author it, verify | Multi-service | 2026-07-09 (text-utils) | green — exposed scaffold/generate itself first |
-| 5 | Explain a subsystem end to end, citing files | Investigation over `read`/`search`/`list` | 2026-07-10 | ran to completion within budget; systematic `list`/`read`/`show` exploration observed; the answer text was lost to an operator filter, and the rerun hit an empty API balance — regrade on the next run |
+| 5 | Explain a subsystem end to end, citing files | Investigation over `read`/`search`/`list` | 2026-07-10 | green — a fully cited end-to-end account of `restart` (model → codegen → generated catalog/dispatch → handler → loop → resumed binary), every claim tied to a file it read; systematic `list`/`read`/`search`/`show` exploration; trace in the session scratchpad |
 | 6 | Author a capability from local evidence gathered by `search`+`read`, not only `show` | Reading before writing | — | blocked on API credits |
 | 7 | (later) Stand up a foreign adopter from a goal string | Other software | blocked on rooted sessions (§3) | — |

@@ -19,7 +19,8 @@ use std::{path::PathBuf, process::Command};
 
 use adapters::{AnthropicLlm, OfflineLlm};
 use agent::{
-    Message, Outcome, Reply, answer_restart, load_transcript, opening, run_agent, save_transcript,
+    Message, Outcome, Reply, answer_restart, load_transcript, opening, resume, run_agent,
+    save_transcript,
 };
 use generated::Llm;
 use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session, workspace_root};
@@ -43,10 +44,12 @@ async fn main() -> anyhow::Result<()> {
 
     let messages = match &mode {
         Mode::Start(message) => opening(message),
-        Mode::Resume => answer_restart(
+        Mode::Resume => resume(
             load_transcript(&session_path())?,
             "rebuilt; this is the new binary, and its compiled model and tool \
 catalog match the workspace",
+            "the turn budget was spent and has been renewed; continue where you \
+stopped, and finish with your answer",
         )?,
     };
 
@@ -85,7 +88,8 @@ async fn drive(
             Outcome::Exhausted(transcript) => {
                 save_transcript(&session_path(), &transcript)?;
                 anyhow::bail!(
-                    "the agent did not finish within its turn budget; the transcript is saved at {}",
+                    "the agent did not finish within its turn budget; continue it \
+with `agent --resume` (the transcript is saved at {})",
                     session_path().display()
                 );
             }

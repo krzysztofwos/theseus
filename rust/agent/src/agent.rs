@@ -238,11 +238,10 @@ pub fn load_transcript(path: &Path) -> anyhow::Result<Vec<Message>> {
     serde_json::from_str(&json).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Answer the pending restart call a persisted transcript ends with, so the
-/// resumed loop's next request carries a result for every tool call. `content`
-/// reports how the restart went — the rebuilt greeting, or the failure.
-pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Result<Vec<Message>> {
-    let pending = messages
+/// The pending restart call a transcript ends with, when one does: the id of
+/// the restart tool use in a final assistant message.
+fn pending_restart(messages: &[Message]) -> Option<String> {
+    messages
         .last()
         .filter(|message| matches!(message.role, Role::Assistant))
         .into_iter()
@@ -251,6 +250,13 @@ pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Resu
             Block::ToolUse(tool) if tool.name == RESTART_TOOL => Some(tool.id.clone()),
             _ => None,
         })
+}
+
+/// Answer the pending restart call a persisted transcript ends with, so the
+/// resumed loop's next request carries a result for every tool call. `content`
+/// reports how the restart went — the rebuilt greeting, or the failure.
+pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Result<Vec<Message>> {
+    let pending = pending_restart(&messages)
         .context("the transcript does not end with a pending restart call")?;
     messages.push(Message {
         role: Role::User,
@@ -258,6 +264,27 @@ pub fn answer_restart(mut messages: Vec<Message>, content: &str) -> anyhow::Resu
             tool_use_id: pending,
             content: content.to_string(),
         }],
+    });
+    Ok(messages)
+}
+
+/// Resume a persisted transcript, whichever way its run ended. A transcript
+/// ending with a pending restart call — the drydock handoff — takes
+/// `restart_answer` as that call's result. An exhausted run's transcript ends
+/// with its last tool results, and takes `budget_note` as a user message, so
+/// the model knows its budget is renewed and picks up where it stopped.
+pub fn resume(
+    messages: Vec<Message>,
+    restart_answer: &str,
+    budget_note: &str,
+) -> anyhow::Result<Vec<Message>> {
+    if pending_restart(&messages).is_some() {
+        return answer_restart(messages, restart_answer);
+    }
+    let mut messages = messages;
+    messages.push(Message {
+        role: Role::User,
+        blocks: vec![Block::Text(budget_note.to_string())],
     });
     Ok(messages)
 }
@@ -409,6 +436,59 @@ mod tests {
             .filter(|tool| tool["name"] == RESTART_TOOL)
             .count();
         assert_eq!(restarts, 1);
+    }
+
+    #[test]
+    fn resume_answers_a_pending_restart() {
+        let transcript = vec![
+            Message {
+                role: Role::User,
+                blocks: vec![Block::Text("go".to_string())],
+            },
+            Message {
+                role: Role::Assistant,
+                blocks: vec![Block::ToolUse(call("r1", RESTART_TOOL, json!({})))],
+            },
+        ];
+        let resumed = resume(transcript, "rebuilt", "renewed").expect("the handoff resumes");
+        let Some(Block::ToolResult {
+            tool_use_id,
+            content,
+        }) = resumed.last().and_then(|m| m.blocks.last())
+        else {
+            panic!("the pending call should carry a result");
+        };
+        assert_eq!(tool_use_id, "r1");
+        assert_eq!(content, "rebuilt");
+    }
+
+    #[test]
+    fn resume_continues_an_exhausted_transcript() {
+        // An exhausted run ends with the last turn's tool results.
+        let transcript = vec![
+            Message {
+                role: Role::User,
+                blocks: vec![Block::Text("go".to_string())],
+            },
+            Message {
+                role: Role::Assistant,
+                blocks: vec![Block::ToolUse(call("1", "query", json!({})))],
+            },
+            Message {
+                role: Role::User,
+                blocks: vec![Block::ToolResult {
+                    tool_use_id: "1".to_string(),
+                    content: "handles".to_string(),
+                }],
+            },
+        ];
+        let resumed = resume(transcript, "rebuilt", "the budget is renewed; continue")
+            .expect("an exhausted run resumes");
+        assert_eq!(resumed.len(), 4);
+        let Some(Block::Text(note)) = resumed.last().and_then(|m| m.blocks.last()) else {
+            panic!("the resumed transcript should end with the budget note");
+        };
+        assert_eq!(note, "the budget is renewed; continue");
     }
 
     #[test]

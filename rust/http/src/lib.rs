@@ -60,7 +60,7 @@ async fn call<S: TheseusService + 'static>(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use theseus::{GatedWorkspace, TheseusService, Toolchain, Workspace};
+    use theseus::{GatedWorkspace, StatefulSession, TheseusService, Toolchain, Workspace};
     use theseus_model::theseus_model;
     use theseus_modeling::GeneratedFile;
 
@@ -161,5 +161,35 @@ mod tests {
         .await;
         assert_eq!(reply.status, 403);
         assert!(reply.body.contains("not permitted"));
+    }
+
+    #[tokio::test]
+    async fn a_patch_updates_the_model_used_by_the_next_http_call() {
+        let service = StatefulSession::at_repo_root(false);
+        let patch = handle(
+            &service,
+            "patch",
+            &json!({
+                "edit": [{
+                    "verb": "add",
+                    "parent": "model:theseus",
+                    "kind": "type",
+                    "name": "HttpStateProbe",
+                    "attrs": { "shape": "foreign:String" }
+                }],
+                "write": false
+            }),
+        )
+        .await;
+        assert_eq!(patch.status, 200, "{}", patch.body);
+
+        let query = handle(
+            &service,
+            "query",
+            &json!({ "node": "type:theseus:HttpStateProbe" }),
+        )
+        .await;
+        assert_eq!(query.status, 200, "{}", query.body);
+        assert!(query.body.contains("HttpStateProbe"), "{}", query.body);
     }
 }

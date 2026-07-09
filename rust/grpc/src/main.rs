@@ -9,7 +9,7 @@
 //! foreign type rides as its JSON rendering. Writes are refused unless the
 //! server is launched with `--allow-writes`.
 
-use theseus::Standalone;
+use theseus::StatefulSession;
 use theseus_grpc::generated::{GrpcTheseus, proto::theseus_server::TheseusServer};
 
 #[tokio::main(flavor = "current_thread")]
@@ -31,9 +31,9 @@ async fn main() -> anyhow::Result<()> {
     let addr = listen.parse()?;
     eprintln!("listening on grpc://{listen}");
     tonic::transport::Server::builder()
-        .add_service(TheseusServer::new(GrpcTheseus(Standalone::new(
-            allow_writes,
-        ))))
+        .add_service(TheseusServer::new(GrpcTheseus(
+            StatefulSession::at_repo_root(allow_writes),
+        )))
         .serve(addr)
         .await?;
     Ok(())
@@ -41,12 +41,12 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use theseus::Standalone;
+    use theseus::StatefulSession;
     use theseus_grpc::generated::{GrpcTheseus, proto, proto::theseus_server::Theseus as _};
 
     #[tokio::test]
     async fn a_query_rides_back_as_json() {
-        let glue = GrpcTheseus(Standalone::new(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let reply = glue
             .query(tonic::Request::new(proto::QueryRequest {
                 find: None,
@@ -62,7 +62,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_patch_carries_its_edit_as_a_oneof() {
-        let glue = GrpcTheseus(Standalone::new(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let edit = proto::Edit {
             verb: Some(proto::edit::Verb::Add(proto::edit::Add {
                 parent: "model:theseus".to_string(),
@@ -82,11 +82,23 @@ mod tests {
         let json = reply.into_inner().json;
         assert!(json.contains(r#""ok":true"#), "{json}");
         assert!(json.contains("Probe"), "{json}");
+
+        let query = glue
+            .query(tonic::Request::new(proto::QueryRequest {
+                find: None,
+                node: Some("type:theseus:Probe".to_string()),
+                kind: None,
+            }))
+            .await
+            .expect("the subsequent query runs")
+            .into_inner()
+            .json;
+        assert!(query.contains("type:theseus:Probe"), "{query}");
     }
 
     #[tokio::test]
     async fn an_edit_without_a_verb_is_invalid() {
-        let glue = GrpcTheseus(Standalone::new(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let status = glue
             .patch(tonic::Request::new(proto::PatchRequest {
                 edit: vec![proto::Edit { verb: None }],
@@ -99,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_write_maps_to_permission_denied() {
-        let glue = GrpcTheseus(Standalone::new(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let status = glue
             .implement(tonic::Request::new(proto::ImplementRequest {
                 method: "verify".to_string(),

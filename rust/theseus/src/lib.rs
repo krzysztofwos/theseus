@@ -15,9 +15,11 @@ use thiserror::Error;
 mod generated;
 mod service;
 mod session;
+mod stateful;
 
 pub use generated::*;
 pub use session::Session;
+pub use stateful::StatefulSession;
 
 /// The repository root, the directory that holds `rust/`, derived from this
 /// crate's compile-time location at `<root>/rust/theseus`.

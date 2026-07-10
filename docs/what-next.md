@@ -2,6 +2,33 @@
 
 Strategic analysis for Theseus as a self-modifying agent harness: a complete set of tools an agent uses to extend itself and develop other software. Written after a project review (architecture, verify status, tool surface, harness log, and second adopter).
 
+## July 2026 update
+
+The first two recommendations below are complete. The agent can now inspect arbitrary workspace source through root-guarded `read`, `search`, and `list`; the live goal corpus records investigation and self-edit runs; Git option injection is closed; renderer failures are structured diagnostics; and HTTP, gRPC, MCP, and the internal loop carry serialized session state.
+
+Mutation safety also moved from a backlog item into the runtime contract:
+
+- `patch --write`, `generate`, `scaffold`, and `implement` declare one path set, acquire an OS repository lease, verify the persisted projection, publish through a durable WAL, and compile-check before commit.
+- Failed checks, canceled applies, dropped transactions, and killed prepared writers restore the declared files; successful commits retain generated-file deletions and `Cargo.lock` updates as part of the same batch.
+- The recovery bootstrap and the journal adopter's projector use the same lower-level transaction crate instead of sequential writes.
+- Long-lived sessions distinguish speculative and persisted models. Known rollback IDs restore both; unknown IDs are rejected before the checkpoint adapter is called.
+- Snapshots are bounded, pinned under `refs/theseus/snapshots/`, survive Git GC, and share the repository lease.
+
+### Current order
+
+1. **Finish checkpoint semantics.** Capture only model-owned untracked paths without broad `git clean`, restore tracked paths through a crash-recoverable plan, and add snapshot release/retention so private refs do not grow forever.
+2. **Root sessions in foreign adopters.** Thread an explicit workspace root, model of record, and path policy through handlers and adapters; then drive the journal-class workflow from the agent rather than its standalone projector.
+3. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
+
+### Explicit boundaries
+
+- Workspace WAL support is Unix-only. It protects against malformed paths and corrupt internal files, not a hostile same-account process racing pathname components; closing that requires fd-relative traversal and publication.
+- Drop-time rollback is synchronous but cannot report a rollback error to the canceled caller. The next lease retries recovery and fails closed if recovery remains impossible.
+- Git rollback is still tracked-only and Git's multi-file restore is not WAL-backed. A rollback can leave new untracked scaffold files, and power loss during restore is not transactionally repaired.
+- Cargo commands hold the repository lease and ordinary checks use `--locked`, but the harness trusts build scripts and descendants not to keep mutating source after their direct Cargo child is canceled.
+
+The remainder of this document is the original roadmap and rationale. It is retained because the foreign-adopter analysis still describes the next product milestone.
+
 ## Context
 
 Theseus already closes the **self-extension** loop for model-shaped work:
@@ -21,21 +48,21 @@ That gap is what to close next.
 
 ## The bottleneck
 
-| Capability | Self-extend Theseus | Develop other software |
-| ---------- | ------------------- | ---------------------- |
-| Model ops (`query` / `patch` / `verify`) | Strong | Weak (fixed to Theseus’s model + root) |
-| Handler/adapter splice (`show` / `implement`) | Strong | Only inside that model’s crates |
-| Build/test gates | Strong | Same, if root is that workspace |
-| Checkpoint/restart | Strong | Same |
-| Read arbitrary source / search tree | Missing | Missing |
-| Write freeform files (tests, `main`, docs, non-method code) | Partial (only generated + splices) | Missing |
-| “New product” as a first-class object | In-tree services only | Journal is hand-run, outside the agent |
+| Capability                                                  | Self-extend Theseus                | Develop other software                 |
+| ----------------------------------------------------------- | ---------------------------------- | -------------------------------------- |
+| Model ops (`query` / `patch` / `verify`)                    | Strong                             | Weak (fixed to Theseus’s model + root) |
+| Handler/adapter splice (`show` / `implement`)               | Strong                             | Only inside that model’s crates        |
+| Build/test gates                                            | Strong                             | Same, if root is that workspace        |
+| Checkpoint/restart                                          | Strong                             | Same                                   |
+| Read arbitrary source / search tree                         | Missing                            | Missing                                |
+| Write freeform files (tests, `main`, docs, non-method code) | Partial (only generated + splices) | Missing                                |
+| “New product” as a first-class object                       | In-tree services only              | Journal is hand-run, outside the agent |
 
 The harness is great at **replacing planks of its own architecture**. It is not yet a complete programming agent, and it is not yet a product factory. Those are two different expansions; do them in order.
 
 ## Recommended order
 
-### 1. First: make the agent able to *see and touch* authored code
+### 1. First: make the agent able to _see and touch_ authored code
 
 **Highest leverage.** Every successful live run in the harness log still depended on patterns the model could only partly reach: neighboring adapters via `show`, house style, compile errors from `implement` / `check`. Real development needs:
 
@@ -64,12 +91,12 @@ The method was already proven once: cold agent + MCP comparison improved the sur
 
 A small **goal corpus** under something like `evals/`:
 
-| Goal | Proves |
-| ---- | ------ |
-| Add type / operation + implement + verify | Model loop |
-| Grow a port method + adapter + restart + call it | Full self-mod |
-| Snapshot → break → rollback | Recovery |
-| Scaffold in-tree service + implement + verify | Multi-service |
+| Goal                                              | Proves         |
+| ------------------------------------------------- | -------------- |
+| Add type / operation + implement + verify         | Model loop     |
+| Grow a port method + adapter + restart + call it  | Full self-mod  |
+| Snapshot → break → rollback                       | Recovery       |
+| Scaffold in-tree service + implement + verify     | Multi-service  |
 | (later) Init foreign adopter + first green verify | Other software |
 
 The mechanical loop invariants (restart interception, gate refusals, resume shapes) already live in `cargo test` and stay there. The goal corpus is **live-only** — every goal branches on model judgment, which a scripted stub cannot follow — run on a cadence with `AGENT_TRACE` traces kept, tracking turn count and success/fail per goal.
@@ -80,13 +107,13 @@ Without evals, every new tool is a story; with evals, you know whether the tool 
 
 ### 3. Third: “other software” as a first-class adopter workflow
 
-Journal proved the engine. It did **not** prove the *agent* can develop foreign software. The missing product is:
+Journal proved the engine. It did **not** prove the _agent_ can develop foreign software. The missing product is:
 
 > An agent session rooted at **any** workspace that has a model of record + engine dep, using the same tools.
 
 Concrete slices:
 
-1. **Root parameter** — Session / CLI / agent take `--root <path>` (or env); `workspace_root`, checkpoint, toolchain, generate paths all relative to it. This is bigger than a flag: ambient reads assume *the* root (compile-time `workspace_root()` is used by handlers directly), so the root threads through handlers, not just adapters.
+1. **Root parameter** — Session / CLI / agent take `--root <path>` (or env); `workspace_root`, checkpoint, toolchain, generate paths all relative to it. This is bigger than a flag: ambient reads assume _the_ root (compile-time `workspace_root()` is used by handlers directly), so the root threads through handlers, not just adapters.
 2. **Model of record as input** — not only `theseus_model()`; load / hold the working model for that adopter. The hidden step: path conventions (`generated_files`, `authored_impls`, adapter files) are adopter **code** today (`theseus-model`, `journal-model`) — a foreign-rooted session needs them either modeled as vocabulary or injected as a trait. Naming this is what makes §3 an arc, not a flag.
 3. **Init / project as tools** — what journal’s `project` binary does (scaffold missing crates + write generated files), reachable from the agent.
 4. **One live goal:** “From empty dir (or template), produce a journal-class service; `verify` green; CLI works.”
@@ -101,15 +128,15 @@ In-tree demos (calculator, text-utils) stay valuable, but they never leave the T
 
 These matter, but they should be **pulled by failed goals**, not built as a pile:
 
-| Gap | When it matters |
-| --- | --------------- |
-| **Bootstrap as a tool / recovery path** | Agent wedges renderer + consumer; today needs a human |
-| **`patch --write` + compile gate** | Bad reprojections still possible before `check` |
-| **Untracked files vs snapshot** | Rollback leaves garbage; agent creates files then rolls back |
-| **Owned composition-root / freeform wiring** | Mostly fixed by generated `Standalone`; remaining holes show up when growing inbounds |
-| **Freeform write (`write_source` / typed test-splice first)** | An eval fails for want of a file `implement` cannot own |
-| **Structured check/test/implement outcomes** | `verify` is already structured JSON; the prose outcomes are `check`, `test`, and `implement` |
-| **Richer `implement` context** | Auto-include neighboring method snippets in `show` |
+| Gap                                                           | When it matters                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Bootstrap as a tool / recovery path**                       | Agent wedges renderer + consumer; today needs a human                                        |
+| **`patch --write` + compile gate**                            | Bad reprojections still possible before `check`                                              |
+| **Untracked files vs snapshot**                               | Rollback leaves garbage; agent creates files then rolls back                                 |
+| **Owned composition-root / freeform wiring**                  | Mostly fixed by generated `Standalone`; remaining holes show up when growing inbounds        |
+| **Freeform write (`write_source` / typed test-splice first)** | An eval fails for want of a file `implement` cannot own                                      |
+| **Structured check/test/implement outcomes**                  | `verify` is already structured JSON; the prose outcomes are `check`, `test`, and `implement` |
+| **Richer `implement` context**                                | Auto-include neighboring method snippets in `show`                                           |
 
 Avoid spending a quarter on HTTP auth, multi-tenant sessions, or the generic affordance projector. Those serve deployment, not “complete tools for self-extension and development.”
 
@@ -124,7 +151,7 @@ Avoid spending a quarter on HTTP auth, multi-tenant sessions, or the generic aff
 
 Phrase the next milestone so it can fail loudly:
 
-> **An agent, with `--allow-writes`, can grow a capability in Theseus *and* stand up a small foreign service from a goal string, using only the tool catalog — with a regression eval that stays green.**
+> **An agent, with `--allow-writes`, can grow a capability in Theseus _and_ stand up a small foreign service from a goal string, using only the tool catalog — with a regression eval that stays green.**
 
 Break that into three shippable increments:
 

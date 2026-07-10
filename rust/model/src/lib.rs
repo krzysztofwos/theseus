@@ -8,7 +8,7 @@ mod self_model;
 pub use self_model::theseus_model;
 use theseus_modeling::{
     GeneratedFile, Model, RenderError, Service, Transport, render_model_source,
-    render_module_for_crate, render_proto,
+    render_module_for_crate, render_proto, scaffold_files,
 };
 
 /// The self-model source file, relative to the workspace root. It is the model's
@@ -62,6 +62,29 @@ pub fn authored_impls(model: &Model) -> Vec<(String, String)> {
         .iter()
         .map(|service| (service.name.clone(), authored_impl_path(model, service)))
         .collect()
+}
+
+/// Every exact file path whose lifecycle is owned by Theseus's model-driven
+/// workflow. Checkpoints use this complete, ambient-state-independent catalogue
+/// to capture or tombstone only files the harness can create or edit.
+pub fn checkpoint_paths(model: &Model) -> Result<Vec<String>, RenderError> {
+    let mut paths: Vec<String> = generated_files(model)?
+        .into_iter()
+        .chain(scaffold_files(model))
+        .map(|file| file.path)
+        .collect();
+    paths.extend(authored_impls(model).into_iter().map(|(_, path)| path));
+    paths.extend(interior_impls(model).into_iter().map(|(_, path)| path));
+    paths.extend(
+        model
+            .services
+            .iter()
+            .map(|service| adapter_impl_path(model, service)),
+    );
+    paths.push("Cargo.lock".to_string());
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.
@@ -217,6 +240,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn checkpoint_paths_are_exact_sorted_and_independent_of_disk_state() {
+        let model = Model::new("Probe")
+            .crate_node("probe", "probe", 0, &[])
+            .service(Service::new("Probe").crate_name("probe"));
+
+        assert_eq!(
+            checkpoint_paths(&model).expect("the ownership catalogue renders"),
+            [
+                "Cargo.lock",
+                "rust/model/src/self_model.rs",
+                "rust/probe/Cargo.toml",
+                "rust/probe/src/generated.rs",
+                "rust/probe/src/lib.rs",
+                "rust/probe/src/service.rs",
+            ]
+        );
+    }
+
+    #[test]
+    fn checkpoint_paths_reuse_projection_path_validation() {
+        let model = Model::new("Probe")
+            .crate_node("probe", "../outside", 0, &[])
+            .service(Service::new("Probe").crate_name("probe"));
+
+        assert!(matches!(
+            checkpoint_paths(&model),
+            Err(RenderError::InvalidCrateDirectory { .. })
+        ));
     }
 
     #[test]

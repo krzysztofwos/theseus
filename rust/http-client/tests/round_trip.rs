@@ -19,18 +19,30 @@ struct CheckpointEcho;
 struct NoopWorkspace;
 
 #[async_trait::async_trait]
-impl Workspace for NoopWorkspace {}
+impl Workspace for NoopWorkspace {
+    async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+        Ok(theseus::theseus_project()?)
+    }
+}
 
 struct NoopToolchain;
 
 #[async_trait::async_trait]
-impl Toolchain for NoopToolchain {}
+impl Toolchain for NoopToolchain {
+    async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+        Ok(theseus::theseus_project()?)
+    }
+}
 
 #[derive(Default)]
 struct ModelCheckpoint(std::sync::Mutex<Option<theseus_modeling::Model>>);
 
 #[async_trait::async_trait]
 impl Checkpoint for ModelCheckpoint {
+    async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+        Ok(theseus::theseus_project()?)
+    }
+
     async fn snapshot(
         &self,
         request: &CheckpointSnapshotRequest,
@@ -109,7 +121,7 @@ async fn serve<S: TheseusService + 'static>(service: S) -> HttpTheseusClient {
 
 #[tokio::test]
 async fn the_wire_crossing_preserves_the_contract() {
-    let client = serve(Standalone::new(false)).await;
+    let client = serve(Standalone::new(false).expect("Theseus project context is valid")).await;
 
     // A read crosses typed: the client returns the contract's value.
     let outcome = client
@@ -231,9 +243,9 @@ async fn checkpoint_lifecycle_requests_cross_http() {
 
 #[tokio::test]
 async fn rollback_adopts_the_snapshot_model_across_http() {
-    let one_shot = Standalone::new(false);
+    let one_shot = Standalone::new(false).expect("Theseus project context is valid");
     let service = StatefulSession::new(
-        one_shot.model,
+        one_shot.project,
         NoopWorkspace,
         ModelCheckpoint::default(),
         one_shot.calculator,

@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let listen = address.unwrap_or_else(|| "127.0.0.1:4870".to_string());
-    let router = theseus_http::router(Arc::new(StatefulSession::at_repo_root(allow_writes)));
+    let router = theseus_http::router(Arc::new(StatefulSession::at_repo_root(allow_writes)?));
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     eprintln!("listening on http://{listen}");
     axum::serve(listener, router).await?;

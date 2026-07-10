@@ -18,13 +18,19 @@ mod checkpoint;
 mod checkpoint_model;
 mod generated;
 mod implement_result;
+mod project;
 mod service;
 mod session;
 mod stateful;
 
 pub use check_report::CheckReport;
+pub use checkpoint_model::SnapshotModelError;
 pub use generated::*;
 pub use implement_result::ImplementResult;
+pub use project::{
+    ProjectBindingError, ProjectContext, ProjectContextError, ProjectPathError, ProjectRootError,
+    theseus_project,
+};
 pub use session::{Session, SessionState};
 pub use stateful::StatefulSession;
 pub use theseus_workspace::{
@@ -45,22 +51,33 @@ pub fn workspace_root() -> PathBuf {
 /// A [`Workspace`] that writes generated files relative to a root directory. The
 /// shared filesystem adapter for the inbound binaries.
 pub struct FsWorkspace {
-    root: PathBuf,
+    project: ProjectContext,
 }
 
 impl FsWorkspace {
-    /// A workspace rooted at the repository root.
-    pub fn at_repo_root() -> Self {
+    /// A workspace bound to the same immutable project as its session.
+    pub fn for_project(project: &ProjectContext) -> Self {
         Self {
-            root: workspace_root(),
+            project: project.clone(),
         }
+    }
+
+    /// A workspace rooted at the repository root.
+    pub fn at_repo_root() -> Result<Self, ProjectContextError> {
+        Ok(Self::for_project(&theseus_project()?))
     }
 }
 
 #[async_trait::async_trait]
 impl Workspace for FsWorkspace {
+    async fn context(&self) -> anyhow::Result<ProjectContext> {
+        self.project.validate_root()?;
+        Ok(self.project.clone())
+    }
+
     async fn begin_mutation(&self, expected: &ExpectedFileSet) -> anyhow::Result<PendingMutation> {
-        Ok(FsMutation::begin_async(self.root.clone(), expected.clone()).await?)
+        self.project.validate_root()?;
+        Ok(FsMutation::begin_async(self.project.root().to_path_buf(), expected.clone()).await?)
     }
 }
 
@@ -69,7 +86,7 @@ impl Workspace for FsWorkspace {
 /// tracked and model-owned state; restores publish exact files, symlinks, modes,
 /// and tombstones through the workspace WAL.
 pub struct GitCheckpoint {
-    root: PathBuf,
+    project: ProjectContext,
 }
 
 const SNAPSHOT_REF_PREFIX: &str = "refs/theseus/snapshots";
@@ -79,6 +96,7 @@ const MAX_SNAPSHOT_LABEL_BYTES: usize = 256;
 #[derive(Clone, Debug)]
 pub struct CheckpointSnapshotRequest {
     pub label: String,
+    pub project: theseus_modeling::CheckpointProjectDescriptor,
     pub expected: ExpectedFileSet,
     pub owned_paths: Vec<String>,
     pub model: theseus_modeling::Model,
@@ -89,6 +107,7 @@ pub struct CheckpointSnapshotRequest {
 #[derive(Clone, Debug)]
 pub struct CheckpointStateRequest {
     pub reference: String,
+    pub project: theseus_modeling::CheckpointProjectDescriptor,
     pub expected: ExpectedFileSet,
     pub owned_paths: Vec<String>,
     pub model: theseus_modeling::Model,
@@ -136,12 +155,14 @@ impl TryFrom<&str> for GitObjectId {
     }
 }
 
+/// A checkpoint reference was not a full hexadecimal Git object ID.
 #[derive(Debug, Error)]
 #[error("expected a full 40- or 64-character hexadecimal Git object ID")]
-struct InvalidGitObjectId;
+pub struct InvalidGitObjectId;
 
+/// A structured checkpoint refusal or I/O failure.
 #[derive(Debug, Error)]
-enum GitCheckpointError {
+pub enum GitCheckpointError {
     #[error("snapshot label is {length} bytes; the maximum is {maximum}")]
     LabelTooLong { length: usize, maximum: usize },
     #[error("invalid snapshot reference {reference:?}: {source}")]
@@ -164,10 +185,20 @@ enum GitCheckpointError {
     OwnershipMismatch,
     #[error("snapshot expected projection does not match its persisted model")]
     ProjectionMismatch,
+    #[error("checkpoint project {actual} does not match configured project {expected}")]
+    ProjectMismatch {
+        expected: theseus_modeling::ProjectId,
+        actual: theseus_modeling::ProjectId,
+    },
+    #[error("configured project root {configured:?} does not equal Git repository root {actual:?}")]
+    RepositoryRootMismatch {
+        configured: PathBuf,
+        actual: PathBuf,
+    },
     #[error("snapshot model cannot be projected")]
     InvalidModel {
         #[source]
-        source: theseus_modeling::RenderError,
+        source: theseus_modeling::ProjectLayoutError,
     },
     #[error("snapshot model is invalid")]
     SnapshotModel {
@@ -284,18 +315,21 @@ impl GitCheckpointError {
 }
 
 impl GitCheckpoint {
+    /// A checkpoint bound to one immutable project root and layout.
+    pub fn for_project(project: ProjectContext) -> Self {
+        Self { project }
+    }
+
     /// A checkpoint rooted at the repository root.
-    pub fn at_repo_root() -> Self {
-        Self {
-            root: workspace_root(),
-        }
+    pub fn at_repo_root() -> Result<Self, ProjectContextError> {
+        Ok(Self::for_project(theseus_project()?))
     }
 
     async fn repository_lease(
         &self,
         expected: ExpectedFileSet,
     ) -> Result<PendingMutation, GitCheckpointError> {
-        Ok(FsMutation::begin_async(self.root.clone(), expected).await?)
+        Ok(FsMutation::begin_async(self.project.root().to_path_buf(), expected).await?)
     }
 
     fn validate_label(label: &str) -> Result<(), GitCheckpointError> {
@@ -330,12 +364,35 @@ impl GitCheckpoint {
 /// at the repository root. The shared toolchain adapter for the inbound binaries.
 /// The check runs as a managed child process, so a server inbound keeps serving
 /// while it compiles.
-pub struct CargoToolchain;
+pub struct CargoToolchain {
+    project: ProjectContext,
+}
+
+impl CargoToolchain {
+    /// A Cargo adapter bound to the same immutable project as its session.
+    pub fn for_project(project: &ProjectContext) -> Self {
+        Self {
+            project: project.clone(),
+        }
+    }
+
+    /// A Cargo adapter rooted at Theseus's repository root.
+    pub fn at_repo_root() -> Result<Self, ProjectContextError> {
+        Ok(Self::for_project(&theseus_project()?))
+    }
+}
 
 #[async_trait::async_trait]
 impl Toolchain for CargoToolchain {
+    async fn context(&self) -> anyhow::Result<ProjectContext> {
+        self.project.validate_root()?;
+        Ok(self.project.clone())
+    }
+
     async fn lint(&self) -> anyhow::Result<CheckReport> {
+        self.project.validate_root()?;
         run_cargo_under_lease(
+            self.project.root(),
             &[
                 "clippy",
                 "--workspace",
@@ -354,7 +411,9 @@ impl Toolchain for CargoToolchain {
     }
 
     async fn test(&self) -> anyhow::Result<CheckReport> {
+        self.project.validate_root()?;
         run_cargo_under_lease(
+            self.project.root(),
             &["test", "--workspace", "--quiet", "--locked"],
             "cargo test --workspace --locked",
             "the tests pass",
@@ -365,7 +424,9 @@ impl Toolchain for CargoToolchain {
     }
 
     async fn check(&self) -> anyhow::Result<CheckReport> {
+        self.project.validate_root()?;
         run_cargo_under_lease(
+            self.project.root(),
             &["check", "--workspace", "--quiet", "--locked"],
             "cargo check --workspace --locked",
             "the workspace compiles",
@@ -376,7 +437,9 @@ impl Toolchain for CargoToolchain {
     }
 
     async fn check_mutation(&self) -> anyhow::Result<CheckReport> {
+        self.project.validate_root()?;
         run_cargo(
+            self.project.root(),
             &["check", "--workspace", "--quiet"],
             "cargo check --workspace",
             "the workspace compiles",
@@ -388,19 +451,21 @@ impl Toolchain for CargoToolchain {
 }
 
 async fn run_cargo_under_lease(
+    root: &Path,
     args: &[&str],
     operation: &'static str,
     success: &'static str,
     success_with_notes: &'static str,
     failure: &'static str,
 ) -> anyhow::Result<CheckReport> {
-    let lease = FsMutation::begin_async(workspace_root(), Vec::new()).await?;
-    let report = run_cargo(args, operation, success, success_with_notes, failure).await?;
+    let lease = FsMutation::begin_async(root.to_path_buf(), Vec::new()).await?;
+    let report = run_cargo(root, args, operation, success, success_with_notes, failure).await?;
     lease.commit()?;
     Ok(report)
 }
 
 async fn run_cargo(
+    root: &Path,
     args: &[&str],
     operation: &'static str,
     success: &'static str,
@@ -409,7 +474,7 @@ async fn run_cargo(
 ) -> anyhow::Result<CheckReport> {
     let output = tokio::process::Command::new("cargo")
         .args(args)
-        .current_dir(workspace_root())
+        .current_dir(root)
         .kill_on_drop(true)
         .output()
         .await
@@ -488,26 +553,29 @@ pub fn head(diagnostics: &str) -> String {
 /// writes gated by `allow_writes`.
 impl
     Standalone<
+        ProjectContext,
         GatedWorkspace<FsWorkspace>,
         GatedCheckpoint<GitCheckpoint>,
         theseus_calculator::Calculator,
         CargoToolchain,
     >
 {
-    pub fn new(allow_writes: bool) -> Self {
-        Self {
-            model: theseus_model::theseus_model(),
+    pub fn new(allow_writes: bool) -> Result<Self, ProjectContextError> {
+        let project = theseus_project()?;
+        Ok(Self {
+            model: project.initial_model().clone(),
+            project: project.clone(),
             workspace: GatedWorkspace {
-                workspace: FsWorkspace::at_repo_root(),
+                workspace: FsWorkspace::for_project(&project),
                 allow_writes,
             },
             checkpoint: GatedCheckpoint {
-                checkpoint: GitCheckpoint::at_repo_root(),
+                checkpoint: GitCheckpoint::for_project(project.clone()),
                 allow_writes,
             },
             calculator: theseus_calculator::Calculator,
-            toolchain: CargoToolchain,
-        }
+            toolchain: CargoToolchain::for_project(&project),
+        })
     }
 }
 
@@ -565,15 +633,17 @@ mod git_checkpoint_tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use theseus_model::{checkpoint_paths, theseus_model};
+    use theseus_model::theseus_model;
+    use theseus_modeling::{ModelRecord, ProjectId, RustWorkspaceLayout};
 
     use super::{
         Checkpoint, CheckpointSnapshotRequest, CheckpointStateRequest, FsMutation, GitCheckpoint,
-        GitCheckpointError, GitObjectId, MAX_SNAPSHOT_LABEL_BYTES, SNAPSHOT_REF_PREFIX,
-        checkpoint::PRIMARY_PROMOTION_DIRECTORY,
+        GitCheckpointError, GitObjectId, MAX_SNAPSHOT_LABEL_BYTES, ProjectContext,
+        SNAPSHOT_REF_PREFIX, checkpoint::PRIMARY_PROMOTION_DIRECTORY,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+    const PROJECT_SNAPSHOT_REF_PREFIX: &str = "refs/theseus/projects/theseus/snapshots";
 
     struct TempDirectory(PathBuf);
 
@@ -623,9 +693,7 @@ mod git_checkpoint_tests {
                 &["add", "--", "tracked.txt", ".gitignore"],
             );
             git(directory.path(), &["commit", "--quiet", "-m", "initial"]);
-            let checkpoint = GitCheckpoint {
-                root: directory.path().to_path_buf(),
-            };
+            let checkpoint = GitCheckpoint::for_project(project_context(directory.path()));
             Self {
                 directory,
                 checkpoint,
@@ -664,6 +732,40 @@ mod git_checkpoint_tests {
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
+    fn git_input_stdout(root: &Path, args: &[&str], input: &[u8]) -> String {
+        use std::io::Write as _;
+
+        let mut child = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("git runs");
+        child
+            .stdin
+            .take()
+            .expect("git stdin is piped")
+            .write_all(input)
+            .expect("git input is written");
+        let output = child.wait_with_output().expect("git completes");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn snapshot_manifest(root: &Path, reference: &str) -> serde_json::Value {
+        let commit = git_stdout(root, &["cat-file", "commit", reference]);
+        let (_, manifest) = commit
+            .split_once("\n\n")
+            .expect("the snapshot commit has a manifest");
+        serde_json::from_str(manifest).expect("the snapshot manifest is JSON")
+    }
+
     fn loose_object_count(root: &Path) -> u64 {
         git_stdout(root, &["count-objects", "-v"])
             .lines()
@@ -673,26 +775,69 @@ mod git_checkpoint_tests {
             .expect("the loose object count is numeric")
     }
 
-    fn snapshot_request(root: &Path, label: impl Into<String>) -> CheckpointSnapshotRequest {
-        let model = theseus_model();
+    fn project_context(root: &Path) -> ProjectContext {
+        ProjectContext::new(
+            root,
+            theseus_model(),
+            theseus_model::project_layout().expect("the Theseus layout is valid"),
+        )
+        .expect("the project context is valid")
+    }
+
+    fn alternate_project_context(root: &Path) -> ProjectContext {
+        let layout = RustWorkspaceLayout::new(
+            ProjectId::new("alternate").expect("the alternate id is valid"),
+            ModelRecord::rust_builder("rust/alternate/src/model.rs", "", "theseus_model")
+                .expect("the alternate model record is valid"),
+        );
+        ProjectContext::new(root, theseus_model(), layout)
+            .expect("the alternate project context is valid")
+    }
+
+    fn snapshot_request_for(
+        project: &ProjectContext,
+        label: impl Into<String>,
+    ) -> CheckpointSnapshotRequest {
+        let model = project.initial_model().clone();
         CheckpointSnapshotRequest {
             label: label.into(),
-            expected: theseus_model::checkpoint_expectations(root, &model)
+            project: project.descriptor(),
+            expected: project
+                .expected_files(&model)
                 .expect("checkpoint expectations render"),
-            owned_paths: checkpoint_paths(&model).expect("checkpoint paths render"),
+            owned_paths: project
+                .owned_paths(&model)
+                .expect("checkpoint paths render"),
             model,
         }
     }
 
-    fn state_request(root: &Path, reference: impl Into<String>) -> CheckpointStateRequest {
-        let model = theseus_model();
+    fn state_request_for(
+        project: &ProjectContext,
+        reference: impl Into<String>,
+    ) -> CheckpointStateRequest {
+        let model = project.initial_model().clone();
         CheckpointStateRequest {
             reference: reference.into(),
-            expected: theseus_model::checkpoint_expectations(root, &model)
+            project: project.descriptor(),
+            expected: project
+                .expected_files(&model)
                 .expect("checkpoint expectations render"),
-            owned_paths: checkpoint_paths(&model).expect("checkpoint paths render"),
+            owned_paths: project
+                .owned_paths(&model)
+                .expect("checkpoint paths render"),
             model,
         }
+    }
+
+    fn snapshot_request(root: &Path, label: impl Into<String>) -> CheckpointSnapshotRequest {
+        let project = project_context(root);
+        snapshot_request_for(&project, label)
+    }
+
+    fn state_request(root: &Path, reference: impl Into<String>) -> CheckpointStateRequest {
+        let project = project_context(root);
+        state_request_for(&project, reference)
     }
 
     #[test]
@@ -730,6 +875,36 @@ mod git_checkpoint_tests {
     }
 
     #[tokio::test]
+    async fn nested_project_roots_are_rejected_before_checkpoint_writes() {
+        let repository = TestRepository::new();
+        let nested = repository.path("nested-project");
+        fs::create_dir(&nested).expect("the nested project root is created");
+        let project = project_context(&nested);
+        let checkpoint = GitCheckpoint::for_project(project.clone());
+
+        let error = checkpoint
+            .snapshot(&snapshot_request_for(&project, "nested"))
+            .await
+            .expect_err("a nested project cannot checkpoint its outer repository");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::RepositoryRootMismatch { configured, actual })
+                if configured == project.root() && actual == repository.directory.path()
+        ));
+        assert!(
+            !nested.join(".theseus").exists(),
+            "root validation must precede lease creation"
+        );
+        assert!(
+            git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", "refs/theseus/projects"]
+            )
+            .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn snapshot_ids_round_trip_through_diff_and_restore() {
         let repository = TestRepository::new();
         fs::write(repository.path("tracked.txt"), "snapshot\n")
@@ -748,10 +923,22 @@ mod git_checkpoint_tests {
                     "show-ref",
                     "--verify",
                     "--hash",
-                    &format!("{SNAPSHOT_REF_PREFIX}/{snapshot}"),
+                    &format!("{PROJECT_SNAPSHOT_REF_PREFIX}/{snapshot}"),
                 ],
             ),
             snapshot
+        );
+        let manifest = snapshot_manifest(repository.directory.path(), &snapshot);
+        assert_eq!(manifest["version"], 2);
+        assert_eq!(manifest["project"]["project_id"], "theseus");
+        assert_eq!(manifest["project"]["version"], 1);
+        assert!(
+            git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+            )
+            .is_empty(),
+            "new snapshots must not use the legacy global namespace"
         );
 
         fs::write(repository.path("tracked.txt"), "after\n").expect("the later content is written");
@@ -773,6 +960,149 @@ mod git_checkpoint_tests {
                 .expect("the restored file is readable"),
             "snapshot\n"
         );
+    }
+
+    #[tokio::test]
+    async fn project_namespaces_cannot_inspect_release_or_prune_each_other() {
+        let repository = TestRepository::new();
+        let theseus = project_context(repository.directory.path());
+        let alternate = alternate_project_context(repository.directory.path());
+        let theseus_checkpoint = GitCheckpoint::for_project(theseus.clone());
+        let alternate_checkpoint = GitCheckpoint::for_project(alternate.clone());
+
+        let mismatch = alternate_checkpoint
+            .snapshot(&snapshot_request_for(&theseus, "mismatched"))
+            .await
+            .expect_err("an adapter cannot accept another project's plan");
+        assert!(matches!(
+            mismatch.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::ProjectMismatch { expected, actual })
+                if expected.as_str() == "alternate" && actual.as_str() == "theseus"
+        ));
+
+        let theseus_snapshot = theseus_checkpoint
+            .snapshot(&snapshot_request_for(&theseus, "theseus"))
+            .await
+            .expect("the Theseus snapshot succeeds")
+            .reference;
+        let alternate_snapshot = alternate_checkpoint
+            .snapshot(&snapshot_request_for(&alternate, "alternate"))
+            .await
+            .expect("the alternate snapshot succeeds")
+            .reference;
+
+        let error = alternate_checkpoint
+            .diff(&state_request_for(&alternate, &theseus_snapshot))
+            .await
+            .expect_err("another project cannot inspect the Theseus snapshot");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::UnknownSnapshot { .. })
+        ));
+        let error = alternate_checkpoint
+            .restore(&state_request_for(&alternate, &theseus_snapshot))
+            .await
+            .expect_err("another project cannot restore the Theseus snapshot");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::UnknownSnapshot { .. })
+        ));
+        let error = alternate_checkpoint
+            .release(&theseus_snapshot)
+            .await
+            .expect_err("another project cannot release the Theseus snapshot");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::UnknownSnapshot { .. })
+        ));
+
+        alternate_checkpoint
+            .prune(&super::SnapshotRetention { keep: 0 })
+            .await
+            .expect("alternate pruning succeeds");
+        assert_eq!(
+            git_stdout(
+                repository.directory.path(),
+                &[
+                    "show-ref",
+                    "--verify",
+                    "--hash",
+                    &format!("{PROJECT_SNAPSHOT_REF_PREFIX}/{theseus_snapshot}"),
+                ],
+            ),
+            theseus_snapshot
+        );
+        assert!(
+            git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", "refs/theseus/projects/alternate"]
+            )
+            .is_empty(),
+            "alternate pruning must remove only alternate refs"
+        );
+        theseus_checkpoint
+            .diff(&state_request_for(&theseus, &theseus_snapshot))
+            .await
+            .expect("the Theseus snapshot remains pinned");
+        assert_ne!(theseus_snapshot, alternate_snapshot);
+    }
+
+    #[tokio::test]
+    async fn legacy_version_one_theseus_snapshots_remain_restorable_and_releasable() {
+        let repository = TestRepository::new();
+        fs::write(repository.path("tracked.txt"), "legacy snapshot\n")
+            .expect("the legacy state is written");
+        let version_two = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "source"))
+            .await
+            .expect("the source snapshot succeeds")
+            .reference;
+        let root = repository.directory.path();
+        let tree = git_stdout(root, &["rev-parse", &format!("{version_two}^{{tree}}")]);
+        let parent = git_stdout(root, &["rev-parse", "HEAD"]);
+        let mut manifest = snapshot_manifest(root, &version_two);
+        manifest["version"] = serde_json::json!(1);
+        manifest
+            .as_object_mut()
+            .expect("the manifest is an object")
+            .remove("project");
+        manifest["label"] = serde_json::json!("legacy");
+        manifest["nonce"] = serde_json::json!("legacy-fixture");
+        let sequence = manifest["sequence"]
+            .as_u64()
+            .expect("the sequence is numeric");
+        let encoded = serde_json::to_vec(&manifest).expect("the legacy manifest serializes");
+        let legacy = git_input_stdout(
+            root,
+            &["commit-tree", &tree, "-p", &parent, "-F", "-"],
+            &encoded,
+        );
+        let snapshot_ref = format!("{SNAPSHOT_REF_PREFIX}/{legacy}");
+        let order_ref = format!("refs/theseus/snapshot-order/{sequence:020}-{legacy}");
+        git(root, &["update-ref", &snapshot_ref, &legacy]);
+        git(root, &["update-ref", &order_ref, &legacy]);
+
+        fs::write(repository.path("tracked.txt"), "after legacy\n")
+            .expect("the post-snapshot state is written");
+        let restored = repository
+            .checkpoint
+            .restore(&state_request(root, &legacy))
+            .await
+            .expect("the version-one snapshot restores");
+        assert_eq!(restored.model, theseus_model());
+        assert_eq!(
+            fs::read_to_string(repository.path("tracked.txt")).unwrap(),
+            "legacy snapshot\n"
+        );
+
+        repository
+            .checkpoint
+            .release(&legacy)
+            .await
+            .expect("the version-one snapshot releases");
+        assert!(git_stdout(root, &["for-each-ref", &snapshot_ref]).is_empty());
+        assert!(git_stdout(root, &["for-each-ref", &order_ref]).is_empty());
     }
 
     #[tokio::test]
@@ -911,7 +1241,7 @@ mod git_checkpoint_tests {
             return;
         };
         let root = PathBuf::from(root);
-        GitCheckpoint { root: root.clone() }
+        GitCheckpoint::for_project(project_context(&root))
             .snapshot(&snapshot_request(&root, "quarantined"))
             .await
             .expect("the helper snapshot completes only when not killed");
@@ -924,11 +1254,10 @@ mod git_checkpoint_tests {
         };
         let reference = std::env::var("THESEUS_CHECKPOINT_REFERENCE")
             .expect("the helper receives a snapshot reference");
-        let checkpoint = GitCheckpoint {
-            root: PathBuf::from(root),
-        };
+        let root = PathBuf::from(root);
+        let checkpoint = GitCheckpoint::for_project(project_context(&root));
         checkpoint
-            .diff(&state_request(&checkpoint.root, reference))
+            .diff(&state_request(&root, reference))
             .await
             .expect("the helper diff completes only when not killed");
     }
@@ -1137,7 +1466,7 @@ mod git_checkpoint_tests {
         assert!(
             git_stdout(
                 repository.directory.path(),
-                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+                &["for-each-ref", PROJECT_SNAPSHOT_REF_PREFIX]
             )
             .is_empty()
         );
@@ -1171,7 +1500,7 @@ mod git_checkpoint_tests {
         assert!(
             !git_stdout(
                 repository.directory.path(),
-                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+                &["for-each-ref", PROJECT_SNAPSHOT_REF_PREFIX]
             )
             .is_empty(),
             "the intended repository did not receive the snapshot ref"
@@ -1179,7 +1508,7 @@ mod git_checkpoint_tests {
         assert!(
             git_stdout(
                 decoy.directory.path(),
-                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+                &["for-each-ref", PROJECT_SNAPSHOT_REF_PREFIX]
             )
             .is_empty(),
             "an inherited Git override redirected the snapshot ref"
@@ -1194,7 +1523,7 @@ mod git_checkpoint_tests {
             return;
         };
         let root = PathBuf::from(root);
-        GitCheckpoint { root: root.clone() }
+        GitCheckpoint::for_project(project_context(&root))
             .snapshot(&snapshot_request(&root, "environment"))
             .await
             .expect("the scrubbed checkpoint succeeds");
@@ -1412,9 +1741,7 @@ mod git_checkpoint_tests {
         let blocker =
             FsMutation::begin(&object_directory, &[]).expect("the shared object lease is acquired");
         let request = snapshot_request(&linked_root, "linked worktree");
-        let checkpoint = GitCheckpoint {
-            root: linked_root.clone(),
-        };
+        let checkpoint = GitCheckpoint::for_project(project_context(&linked_root));
         let task = tokio::spawn(async move { checkpoint.snapshot(&request).await });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(
@@ -1429,12 +1756,9 @@ mod git_checkpoint_tests {
             .expect("the linked snapshot task joins")
             .expect("the linked snapshot succeeds");
 
-        let main_checkpoint = GitCheckpoint {
-            root: repository.directory.path().to_path_buf(),
-        };
-        let linked_checkpoint = GitCheckpoint {
-            root: linked_root.clone(),
-        };
+        let main_checkpoint =
+            GitCheckpoint::for_project(project_context(repository.directory.path()));
+        let linked_checkpoint = GitCheckpoint::for_project(project_context(&linked_root));
         let main_request = snapshot_request(repository.directory.path(), "concurrent main");
         let linked_request = snapshot_request(&linked_root, "concurrent linked");
         let (main_snapshot, linked_snapshot) = tokio::join!(
@@ -1546,7 +1870,7 @@ mod git_checkpoint_tests {
             .reference;
         let branch = git_stdout(repository.directory.path(), &["symbolic-ref", "HEAD"]);
         let head = git_stdout(repository.directory.path(), &["rev-parse", "HEAD"]);
-        let snapshot_ref = format!("{SNAPSHOT_REF_PREFIX}/{snapshot}");
+        let snapshot_ref = format!("{PROJECT_SNAPSHOT_REF_PREFIX}/{snapshot}");
         git(
             repository.directory.path(),
             &["symbolic-ref", &snapshot_ref, &branch],
@@ -1597,7 +1921,7 @@ mod git_checkpoint_tests {
         assert!(
             git_stdout(
                 repository.directory.path(),
-                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+                &["for-each-ref", PROJECT_SNAPSHOT_REF_PREFIX]
             )
             .is_empty()
         );
@@ -1672,10 +1996,9 @@ mod git_checkpoint_tests {
         };
         let reference = std::env::var("THESEUS_CHECKPOINT_REFERENCE")
             .expect("the helper receives a snapshot reference");
-        let checkpoint = GitCheckpoint {
-            root: PathBuf::from(root),
-        };
-        let request = state_request(&checkpoint.root, reference);
+        let root = PathBuf::from(root);
+        let checkpoint = GitCheckpoint::for_project(project_context(&root));
+        let request = state_request(&root, reference);
         checkpoint
             .restore(&request)
             .await
@@ -1707,9 +2030,7 @@ mod git_checkpoint_tests {
         let repository = TestRepository::new();
         let mutation = FsMutation::begin(repository.directory.path(), &[])
             .expect("the mutation lease is acquired");
-        let checkpoint = GitCheckpoint {
-            root: repository.directory.path().to_path_buf(),
-        };
+        let checkpoint = GitCheckpoint::for_project(project_context(repository.directory.path()));
         let request = snapshot_request(repository.directory.path(), "leased");
         let snapshot = tokio::spawn(async move { checkpoint.snapshot(&request).await });
 

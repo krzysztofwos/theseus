@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("listening on grpc://{listen}");
     tonic::transport::Server::builder()
         .add_service(TheseusServer::new(GrpcTheseus(
-            StatefulSession::at_repo_root(allow_writes),
+            StatefulSession::at_repo_root(allow_writes)?,
         )))
         .serve(addr)
         .await?;
@@ -46,7 +46,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_query_rides_back_as_json() {
-        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false).unwrap());
         let reply = glue
             .query(tonic::Request::new(proto::QueryRequest {
                 find: None,
@@ -62,7 +62,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_patch_carries_its_edit_as_a_oneof() {
-        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false).unwrap());
         let edit = proto::Edit {
             verb: Some(proto::edit::Verb::Add(proto::edit::Add {
                 parent: Some("model:theseus".to_string()),
@@ -98,7 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_edit_without_a_verb_is_invalid() {
-        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false).unwrap());
         let status = glue
             .patch(tonic::Request::new(proto::PatchRequest {
                 edit: vec![proto::Edit { verb: None }],
@@ -111,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_write_maps_to_permission_denied() {
-        let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
+        let glue = GrpcTheseus(StatefulSession::at_repo_root(false).unwrap());
         let status = glue
             .implement(tonic::Request::new(proto::ImplementRequest {
                 method: Some("verify".to_string()),

@@ -8,11 +8,6 @@
 //! inbound binaries (`theseus-cli`, and the agent and MCP adapters to come).
 
 use anyhow::Context;
-use theseus_model::{
-    adapter_impl_path, authored_impl_path, authored_impls, checkpoint_expectations,
-    checkpoint_paths, crate_is_scaffolded, generated_files, inbound_adapter_impl_path,
-    interior_impls,
-};
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
     coverage, describe, handler_source, query, scaffold_files, verify,
@@ -20,22 +15,50 @@ use theseus_modeling::{
 
 use crate::{
     CheckReport, CheckpointSnapshotRequest, CheckpointStateRequest, ExpectedFile, ExpectedFileSet,
-    ImplementResult, MutationFile, PendingMutation,
+    ImplementResult, MutationFile, PendingMutation, ProjectContext,
     generated::{
-        CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
+        CalcRequest, Checkpoint, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
         TheseusService, Toolchain, Workspace,
     },
-    workspace_root,
 };
+
+pub(crate) async fn ensure_workspace_toolchain_project(
+    project: &ProjectContext,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<()> {
+    project.ensure_same_project(&workspace.context().await?)?;
+    project.ensure_same_project(&toolchain.context().await?)?;
+    Ok(())
+}
+
+pub(crate) async fn ensure_toolchain_project(
+    project: &ProjectContext,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<()> {
+    project.ensure_same_project(&toolchain.context().await?)?;
+    Ok(())
+}
+
+pub(crate) async fn ensure_checkpoint_project(
+    project: &ProjectContext,
+    checkpoint: &dyn Checkpoint,
+) -> anyhow::Result<()> {
+    project.ensure_same_project(&checkpoint.context().await?)?;
+    Ok(())
+}
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
     async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
+        let project = self.project.context().await?;
+        ensure_toolchain_project(&project, self.toolchain).await?;
         self.toolchain.lint().await
     }
 
     async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<String> {
-        let path = rooted(&request.path)?;
+        let project = self.project.context().await?;
+        let path = project.resolve_existing(&request.path)?;
         let text = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("reading {}", request.path))?;
@@ -43,8 +66,9 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn search(&self, request: crate::generated::SearchRequest) -> anyhow::Result<String> {
-        let base = rooted(request.path.as_deref().unwrap_or(""))?;
-        let root = rooted("")?;
+        let project = self.project.context().await?;
+        let base = project.resolve_existing(request.path.as_deref().unwrap_or(""))?;
+        let root = project.root().to_path_buf();
         let pattern = request.pattern;
         tokio::task::spawn_blocking(move || {
             let mut hits = Vec::new();
@@ -67,7 +91,8 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn list(&self, request: crate::generated::ListRequest) -> anyhow::Result<String> {
-        let dir = rooted(request.path.as_deref().unwrap_or(""))?;
+        let project = self.project.context().await?;
+        let dir = project.resolve_existing(request.path.as_deref().unwrap_or(""))?;
         let mut entries = Vec::new();
         let mut reader = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = reader.next_entry().await? {
@@ -84,42 +109,68 @@ impl TheseusService for Ctx<'_> {
     async fn restart(&self) -> anyhow::Result<()> {
         // The rebuild and the resume belong to the inbound above. The service's
         // share of a restart is proving the tree compiles before the handoff.
+        let project = self.project.context().await?;
+        ensure_toolchain_project(&project, self.toolchain).await?;
         let report = self.toolchain.check().await?;
         anyhow::ensure!(report.ok, "restart refused: {}", report.detail);
         Ok(())
     }
 
     async fn diff(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
+        ensure_checkpoint_project(&project, self.checkpoint).await?;
         self.checkpoint
-            .diff(&checkpoint_state_request(self.model, request.reference)?)
+            .diff(&checkpoint_state_request(
+                &project,
+                self.model,
+                request.reference,
+            )?)
             .await
     }
 
     async fn rollback(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
+        ensure_checkpoint_project(&project, self.checkpoint).await?;
         Ok(self
             .checkpoint
-            .restore(&checkpoint_state_request(self.model, request.reference)?)
+            .restore(&checkpoint_state_request(
+                &project,
+                self.model,
+                request.reference,
+            )?)
             .await?
             .detail)
     }
 
     async fn snapshot(&self, request: crate::generated::SnapshotRequest) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
+        ensure_checkpoint_project(&project, self.checkpoint).await?;
         Ok(self
             .checkpoint
-            .snapshot(&checkpoint_snapshot_request(self.model, request.label)?)
+            .snapshot(&checkpoint_snapshot_request(
+                &project,
+                self.model,
+                request.label,
+            )?)
             .await?
             .reference)
     }
 
     async fn release(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
+        ensure_checkpoint_project(&project, self.checkpoint).await?;
         self.checkpoint.release(&request.reference).await
     }
 
     async fn prune(&self, request: crate::generated::SnapshotRetention) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
+        ensure_checkpoint_project(&project, self.checkpoint).await?;
         self.checkpoint.prune(&request).await
     }
 
     async fn test(&self) -> anyhow::Result<crate::CheckReport> {
+        let project = self.project.context().await?;
+        ensure_toolchain_project(&project, self.toolchain).await?;
         self.toolchain.test().await
     }
 
@@ -132,14 +183,17 @@ impl TheseusService for Ctx<'_> {
         // I/O, so the check runs off the async thread and a server keeps
         // serving while it verifies.
         let model = self.model.clone();
-        let report = tokio::task::spawn_blocking(move || {
-            let generated = generated_files(&model)?;
-            Ok::<_, theseus_modeling::RenderError>(verify(
+        let project = self.project.context().await?;
+        let report = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let generated = project.generated_files(&model)?;
+            let authored = project.authored_impls(&model)?;
+            let interiors = project.interior_impls(&model)?;
+            Ok(verify(
                 &model,
-                &workspace_root(),
+                project.root(),
                 &generated,
-                &authored_impls(&model),
-                &interior_impls(&model),
+                &authored,
+                &interiors,
             ))
         })
         .await??;
@@ -147,11 +201,29 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        generate_model(self.model, self.model, self.workspace, self.toolchain).await
+        let project = self.project.context().await?;
+        ensure_workspace_toolchain_project(&project, self.workspace, self.toolchain).await?;
+        generate_model(
+            &project,
+            self.model,
+            self.model,
+            self.workspace,
+            self.toolchain,
+        )
+        .await
     }
 
     async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        scaffold_model(self.model, self.model, self.workspace, self.toolchain).await
+        let project = self.project.context().await?;
+        ensure_workspace_toolchain_project(&project, self.workspace, self.toolchain).await?;
+        scaffold_model(
+            &project,
+            self.model,
+            self.model,
+            self.workspace,
+            self.toolchain,
+        )
+        .await
     }
 
     async fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
@@ -165,11 +237,12 @@ impl TheseusService for Ctx<'_> {
     async fn coverage(&self) -> anyhow::Result<CoverageReport> {
         // The handler sources read and parse off the async thread.
         let model = self.model.clone();
+        let project = self.project.context().await?;
         let report = tokio::task::spawn_blocking(move || {
-            let root = workspace_root();
             coverage(&model, |service| -> anyhow::Result<String> {
-                let path = authored_impl_path(&model, service);
-                std::fs::read_to_string(root.join(&path)).with_context(|| format!("reading {path}"))
+                let path = project.authored_impl_path(&model, service)?;
+                std::fs::read_to_string(project.root().join(&path))
+                    .with_context(|| format!("reading {path}"))
             })
         })
         .await??;
@@ -177,10 +250,11 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
+        let project = self.project.context().await?;
         match &request.port {
             Some(port) => {
-                let path = adapter_path(self.model, port)?;
-                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                let path = adapter_path(&project, self.model, port)?;
+                let source = tokio::fs::read_to_string(project.root().join(&path))
                     .await
                     .with_context(|| format!("reading {path}"))?;
                 Ok(theseus_modeling::adapter_source(
@@ -192,8 +266,8 @@ impl TheseusService for Ctx<'_> {
                 )?)
             }
             None => {
-                let path = handler_path(self.model, &request.method)?;
-                let source = tokio::fs::read_to_string(workspace_root().join(&path))
+                let path = handler_path(&project, self.model, &request.method)?;
+                let source = tokio::fs::read_to_string(project.root().join(&path))
                     .await
                     .with_context(|| format!("reading {path}"))?;
                 Ok(handler_source(self.model, &source, &request.method)?)
@@ -202,6 +276,8 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn check(&self) -> anyhow::Result<crate::CheckReport> {
+        let project = self.project.context().await?;
+        ensure_toolchain_project(&project, self.toolchain).await?;
         self.toolchain.check().await
     }
 
@@ -222,7 +298,10 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn implement(&self, request: ImplementRequest) -> anyhow::Result<ImplementResult> {
+        let project = self.project.context().await?;
+        ensure_workspace_toolchain_project(&project, self.workspace, self.toolchain).await?;
         implement_model(
+            &project,
             self.model,
             self.model,
             request,
@@ -233,15 +312,24 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
+        let project = self.project.context().await?;
         let (outcome, proposed) = apply_patch(self.model, &request)?;
         if request.write
             && let Some(proposed) = proposed
         {
+            ensure_workspace_toolchain_project(&project, self.workspace, self.toolchain).await?;
             // Reproject every file from the proposed model — the self-model source
             // and the generated scaffolding update together. A new operation's
             // handler defaults to unimplemented until authored here, and `coverage`
             // reports what is left to write.
-            persist_model(self.model, &proposed, self.workspace, self.toolchain).await?;
+            persist_model(
+                &project,
+                self.model,
+                &proposed,
+                self.workspace,
+                self.toolchain,
+            )
+            .await?;
         }
         Ok(outcome)
     }
@@ -254,49 +342,56 @@ enum TransactionCheck {
 
 /// The generated projection that exists for a model in the current workspace.
 /// Crates without a manifest are deferred until `scaffold` creates them.
-pub(crate) fn projected_files(model: &Model) -> anyhow::Result<Vec<GeneratedFile>> {
-    let root = workspace_root();
-    Ok(generated_files(model)?
-        .into_iter()
-        .filter(|file| crate_is_scaffolded(&root, file))
-        .collect())
+pub(crate) fn projected_files(
+    project: &ProjectContext,
+    model: &Model,
+) -> anyhow::Result<Vec<GeneratedFile>> {
+    Ok(project.projected_files(model)?)
 }
 
-pub(crate) fn projected_expectations(model: &Model) -> anyhow::Result<ExpectedFileSet> {
-    Ok(checkpoint_expectations(&workspace_root(), model)?)
+pub(crate) fn projected_expectations(
+    project: &ProjectContext,
+    model: &Model,
+) -> anyhow::Result<ExpectedFileSet> {
+    Ok(project.expected_files(model)?)
 }
 
 pub(crate) fn checkpoint_snapshot_request(
+    project: &ProjectContext,
     model: &Model,
     label: String,
 ) -> anyhow::Result<CheckpointSnapshotRequest> {
     Ok(CheckpointSnapshotRequest {
         label,
-        expected: projected_expectations(model)?,
-        owned_paths: checkpoint_paths(model)?,
+        expected: projected_expectations(project, model)?,
+        owned_paths: project.owned_paths(model)?,
         model: model.clone(),
+        project: project.descriptor(),
     })
 }
 
 pub(crate) fn checkpoint_state_request(
+    project: &ProjectContext,
     model: &Model,
     reference: String,
 ) -> anyhow::Result<CheckpointStateRequest> {
     Ok(CheckpointStateRequest {
         reference,
-        expected: projected_expectations(model)?,
-        owned_paths: checkpoint_paths(model)?,
+        expected: projected_expectations(project, model)?,
+        owned_paths: project.owned_paths(model)?,
         model: model.clone(),
+        project: project.descriptor(),
     })
 }
 
 async fn begin_mutation(
+    project: &ProjectContext,
     expected: &Model,
     desired: &Model,
     workspace: &dyn Workspace,
 ) -> anyhow::Result<PendingMutation> {
-    let mut expected = projected_expectations(expected)?;
-    for file in generated_files(desired)? {
+    let mut expected = projected_expectations(project, expected)?;
+    for file in project.generated_files(desired)? {
         if !expected.iter().any(|entry| entry.path == file.path) {
             expected.push(ExpectedFile {
                 path: file.path,
@@ -339,14 +434,16 @@ fn validation_failed(report: &CheckReport) -> anyhow::Error {
 }
 
 pub(crate) async fn generate_model(
+    project: &ProjectContext,
     model: &Model,
     expected: &Model,
     workspace: &dyn Workspace,
     toolchain: &dyn Toolchain,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
-    let files = projected_files(model)?;
-    let mut mutation = begin_mutation(expected, model, workspace).await?;
-    let mut changes = mutation_changes(expected, model, files.clone())?;
+    ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
+    let files = projected_files(project, model)?;
+    let mut mutation = begin_mutation(project, expected, model, workspace).await?;
+    let mut changes = mutation_changes(project, expected, model, files.clone())?;
     protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
     mutation.apply(&changes).await?;
     match finish_mutation(mutation, toolchain).await? {
@@ -356,12 +453,14 @@ pub(crate) async fn generate_model(
 }
 
 pub(crate) async fn scaffold_model(
+    project: &ProjectContext,
     model: &Model,
     expected: &Model,
     workspace: &dyn Workspace,
     toolchain: &dyn Toolchain,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
-    let mut mutation = begin_mutation(expected, model, workspace).await?;
+    ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
+    let mut mutation = begin_mutation(project, expected, model, workspace).await?;
     let mut files = Vec::new();
     for file in scaffold_files(model) {
         if !mutation.exists(&file.path).await? {
@@ -369,7 +468,7 @@ pub(crate) async fn scaffold_model(
         }
     }
     let mut writes = files.clone();
-    for generated in generated_files(model)? {
+    for generated in project.generated_files(model)? {
         let Some(manifest) = crate_manifest_for(&generated) else {
             writes.push(generated);
             continue;
@@ -380,7 +479,7 @@ pub(crate) async fn scaffold_model(
             writes.push(generated);
         }
     }
-    let mut changes = mutation_changes(expected, model, writes)?;
+    let mut changes = mutation_changes(project, expected, model, writes)?;
     protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
     mutation.apply(&changes).await?;
     match finish_mutation(mutation, toolchain).await? {
@@ -412,16 +511,18 @@ async fn protect_cargo_lock(
 }
 
 fn mutation_changes(
+    project: &ProjectContext,
     expected: &Model,
     desired: &Model,
     writes: Vec<GeneratedFile>,
 ) -> anyhow::Result<Vec<MutationFile>> {
-    let desired_paths: std::collections::HashSet<String> = generated_files(desired)?
+    let desired_paths: std::collections::HashSet<String> = project
+        .generated_files(desired)?
         .into_iter()
         .map(|file| file.path)
         .collect();
     let mut changes: Vec<MutationFile> = writes.into_iter().map(mutation_file).collect();
-    for previous in generated_files(expected)? {
+    for previous in project.generated_files(expected)? {
         if !desired_paths.contains(&previous.path)
             && !changes.iter().any(|change| change.path == previous.path)
         {
@@ -432,16 +533,18 @@ fn mutation_changes(
 }
 
 pub(crate) async fn implement_model(
+    project: &ProjectContext,
     model: &Model,
     expected: &Model,
     request: ImplementRequest,
     workspace: &dyn Workspace,
     toolchain: &dyn Toolchain,
 ) -> anyhow::Result<ImplementResult> {
-    let mut mutation = begin_mutation(expected, model, workspace).await?;
+    ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
+    let mut mutation = begin_mutation(project, expected, model, workspace).await?;
     let (wrote, path, spliced) = match &request.port {
         Some(port) => {
-            let path = adapter_path(model, port)?;
+            let path = adapter_path(project, model, port)?;
             let source = mutation.read_to_string(&path).await?;
             let spliced = theseus_modeling::implement_adapter(
                 model,
@@ -459,7 +562,7 @@ pub(crate) async fn implement_model(
             )
         }
         None => {
-            let path = handler_path(model, &request.method)?;
+            let path = handler_path(project, model, &request.method)?;
             let source = mutation.read_to_string(&path).await?;
             let spliced = theseus_modeling::implement(
                 model,
@@ -503,14 +606,16 @@ fn mutation_file(file: GeneratedFile) -> MutationFile {
 }
 
 pub(crate) async fn persist_model(
+    project: &ProjectContext,
     expected: &Model,
     proposed: &Model,
     workspace: &dyn Workspace,
     toolchain: &dyn Toolchain,
 ) -> anyhow::Result<CheckReport> {
-    let files = projected_files(proposed)?;
-    let mut mutation = begin_mutation(expected, proposed, workspace).await?;
-    let mut changes = mutation_changes(expected, proposed, files)?;
+    ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
+    let files = projected_files(project, proposed)?;
+    let mut mutation = begin_mutation(project, expected, proposed, workspace).await?;
+    let mut changes = mutation_changes(project, expected, proposed, files)?;
     protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
     mutation.apply(&changes).await?;
     match finish_mutation(mutation, toolchain).await? {
@@ -533,24 +638,6 @@ pub(crate) fn apply_patch(
 
 /// The most search hits a result carries, so a broad pattern stays readable.
 const SEARCH_CAP: usize = 200;
-
-/// A workspace path, resolved and proven to stay inside the workspace. Every
-/// read surface goes through this guard — the operations cross every
-/// transport, so a wire caller is held to the same boundary as the loop.
-fn rooted(path: &str) -> anyhow::Result<std::path::PathBuf> {
-    let root = workspace_root()
-        .canonicalize()
-        .context("resolving the workspace root")?;
-    let resolved = root
-        .join(path)
-        .canonicalize()
-        .with_context(|| format!("no such path: {path}"))?;
-    anyhow::ensure!(
-        resolved.starts_with(&root),
-        "`{path}` escapes the workspace"
-    );
-    Ok(resolved)
-}
 
 /// Collect `path:line: text` hits for every line containing `pattern` under
 /// `base`, skipping build trees, version control, and files that are not text.
@@ -603,23 +690,31 @@ fn search_tree(
 
 /// The authored adapters file holding the impls for `port`: the `lib.rs` of the
 /// crate whose service carries the port.
-pub(crate) fn adapter_path(model: &Model, port: &str) -> anyhow::Result<String> {
+pub(crate) fn adapter_path(
+    project: &ProjectContext,
+    model: &Model,
+    port: &str,
+) -> anyhow::Result<String> {
     if let Some(service) = model.service_of_port(port) {
-        return Ok(adapter_impl_path(model, service));
+        return Ok(project.adapter_impl_path(model, service)?);
     }
     let inbound = model
         .inbound_of_port(port)
         .with_context(|| format!("no port named `{port}`"))?;
-    Ok(inbound_adapter_impl_path(model, inbound))
+    Ok(project.inbound_adapter_impl_path(model, inbound)?)
 }
 
 /// The authored impl file holding the handler for `method`: the `service.rs` of
 /// the crate the method's service lives in.
-pub(crate) fn handler_path(model: &Model, method: &str) -> anyhow::Result<String> {
+pub(crate) fn handler_path(
+    project: &ProjectContext,
+    model: &Model,
+    method: &str,
+) -> anyhow::Result<String> {
     let service = model
         .service_of_operation(method)
         .with_context(|| format!("no operation named `{method}`"))?;
-    Ok(authored_impl_path(model, service))
+    Ok(project.authored_impl_path(model, service)?)
 }
 
 #[cfg(test)]
@@ -633,6 +728,7 @@ mod tests {
     };
 
     use theseus_model::theseus_model;
+    use theseus_modeling::Model;
 
     use super::{SEARCH_CAP, search_tree};
     use crate::{
@@ -641,6 +737,19 @@ mod tests {
     };
 
     static NEXT_SEARCH_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn project_with_model(model: Model) -> crate::ProjectContext {
+        crate::ProjectContext::new(
+            crate::workspace_root(),
+            model,
+            theseus_model::project_layout().expect("Theseus layout is valid"),
+        )
+        .expect("Theseus project context is valid")
+    }
+
+    fn project() -> crate::ProjectContext {
+        project_with_model(theseus_model())
+    }
 
     /// A structured edit that adds a throwaway type, for exercising the `patch`
     /// tool. The no-op workspace discards any reprojection, so a write touches no
@@ -691,6 +800,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Workspace for NoopWorkspace {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+
         async fn begin_mutation(
             &self,
             _expected: &crate::ExpectedFileSet,
@@ -751,6 +864,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Workspace for RecordingWorkspace {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+
         async fn begin_mutation(
             &self,
             expected: &crate::ExpectedFileSet,
@@ -765,7 +882,11 @@ mod tests {
     struct StubCheckpoint;
 
     #[async_trait::async_trait]
-    impl crate::generated::Checkpoint for StubCheckpoint {}
+    impl crate::generated::Checkpoint for StubCheckpoint {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+    }
 
     #[derive(Default)]
     struct CheckpointRecording {
@@ -778,6 +899,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::generated::Checkpoint for RecordingCheckpoint {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+
         async fn snapshot(
             &self,
             request: &crate::CheckpointSnapshotRequest,
@@ -815,6 +940,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+
         async fn check(&self) -> anyhow::Result<crate::CheckReport> {
             Ok(crate::CheckReport::success("the workspace compiles (stub)"))
         }
@@ -828,6 +957,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Toolchain for FailingToolchain {
+        async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+            Ok(project())
+        }
+
         async fn check(&self) -> anyhow::Result<crate::CheckReport> {
             Ok(crate::CheckReport::failure(
                 "the workspace does not compile",
@@ -842,8 +975,10 @@ mod tests {
     #[tokio::test]
     async fn restart_refuses_a_failed_compile_report() {
         let model = theseus_model();
+        let project = project();
         let ctx = crate::Ctx {
             model: &model,
+            project: &project,
             workspace: &NoopWorkspace,
             checkpoint: &StubCheckpoint,
             calculator: &theseus_calculator::Calculator,
@@ -859,7 +994,7 @@ mod tests {
     #[tokio::test]
     async fn the_query_tool_finds_an_operation() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -875,10 +1010,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resumed_state_cannot_change_project_layout() {
+        let state = crate::SessionState::new(project());
+        let layout = theseus_modeling::RustWorkspaceLayout::new(
+            theseus_modeling::ProjectId::new("alternate").unwrap(),
+            theseus_modeling::ModelRecord::rust_builder(
+                "rust/alternate/src/model.rs",
+                "",
+                "theseus_model",
+            )
+            .unwrap(),
+        );
+        let alternate =
+            crate::ProjectContext::new(crate::workspace_root(), theseus_model(), layout).unwrap();
+        let result = Session::from_state(
+            alternate,
+            state,
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
+        assert!(matches!(
+            result,
+            Err(crate::ProjectBindingError::LayoutMismatch { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn the_session_sees_its_own_edit() {
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -909,7 +1073,7 @@ mod tests {
         let recording = Arc::new(Mutex::new(MutationRecording::default()));
         let workspace = RecordingWorkspace(Arc::clone(&recording));
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &workspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -980,7 +1144,7 @@ mod tests {
         let checkpoint = Arc::new(Mutex::new(CheckpointRecording::default()));
         let checkpoint_adapter = RecordingCheckpoint(Arc::clone(&checkpoint));
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &workspace,
             &checkpoint_adapter,
             &theseus_calculator::Calculator,
@@ -1067,7 +1231,7 @@ mod tests {
         let checkpoint = Arc::new(Mutex::new(CheckpointRecording::default()));
         let checkpoint_adapter = RecordingCheckpoint(Arc::clone(&checkpoint));
         let mut first = Session::new(
-            theseus_model(),
+            project(),
             &workspace,
             &checkpoint_adapter,
             &theseus_calculator::Calculator,
@@ -1098,7 +1262,7 @@ mod tests {
         assert!(later.type_def("AfterRestart").is_some());
 
         let mut resumed = Session::new(
-            later,
+            project_with_model(later),
             &workspace,
             &checkpoint_adapter,
             &theseus_calculator::Calculator,
@@ -1121,7 +1285,7 @@ mod tests {
         let recording = Arc::new(Mutex::new(MutationRecording::default()));
         let workspace = RecordingWorkspace(Arc::clone(&recording));
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &workspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1150,7 +1314,7 @@ mod tests {
     async fn a_write_is_refused_without_the_gate() {
         let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
         let error = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1181,7 +1345,7 @@ mod tests {
 
         for (name, input) in calls {
             let outcome = Session::new(
-                theseus_model(),
+                project(),
                 &NoopWorkspace,
                 &StubCheckpoint,
                 &theseus_calculator::Calculator,
@@ -1219,7 +1383,7 @@ mod tests {
         // The no-op workspace discards the reprojection, so this touches no files.
         let input = serde_json::json!({ "edit": [probe_edit()], "write": true });
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1242,7 +1406,7 @@ mod tests {
     #[tokio::test]
     async fn the_show_tool_returns_a_handler() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1262,7 +1426,7 @@ mod tests {
     async fn an_implement_is_refused_without_the_gate() {
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
         let error = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1283,7 +1447,7 @@ mod tests {
         // The no-op workspace discards the spliced source, so this touches no files.
         let input = serde_json::json!({ "method": "verify", "body": "todo!()" });
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1306,7 +1470,7 @@ mod tests {
     #[tokio::test]
     async fn the_check_tool_reports_through_the_toolchain_port() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1325,7 +1489,7 @@ mod tests {
     #[tokio::test]
     async fn the_read_tool_reads_a_workspace_file() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1341,7 +1505,7 @@ mod tests {
     #[tokio::test]
     async fn the_read_tool_refuses_an_escape() {
         let error = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1352,7 +1516,7 @@ mod tests {
         .await
         .expect_err("a path above the workspace is refused");
         assert!(
-            error.to_string().contains("escapes the workspace"),
+            error.downcast_ref::<crate::ProjectPathError>().is_some(),
             "{error}"
         );
     }
@@ -1360,7 +1524,7 @@ mod tests {
     #[tokio::test]
     async fn the_search_tool_reports_path_and_line() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1405,7 +1569,7 @@ mod tests {
     #[tokio::test]
     async fn the_show_tool_reads_a_port_adapter_method() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1431,7 +1595,7 @@ mod tests {
     #[tokio::test]
     async fn the_show_tool_reads_an_inbound_interior_adapter() {
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1456,7 +1620,7 @@ mod tests {
             "method": "check", "port": "toolchain", "body": "todo!()"
         });
         let error = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1479,7 +1643,7 @@ mod tests {
             "method": "check", "port": "toolchain", "body": "todo!()"
         });
         let result = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1498,7 +1662,7 @@ mod tests {
     #[tokio::test]
     async fn an_unexposed_operation_is_not_a_tool() {
         let error = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -1534,7 +1698,7 @@ mod tests {
             // Every exposed tool has a dispatch arm: a bare call never falls
             // through to the unknown-tool error, though it may fail on missing input.
             let mut session = Session::new(
-                theseus_model(),
+                project(),
                 &NoopWorkspace,
                 &StubCheckpoint,
                 &theseus_calculator::Calculator,

@@ -13,11 +13,11 @@
 use theseus_modeling::Model;
 
 use crate::{
-    GatedCheckpoint, GatedWorkspace,
+    GatedCheckpoint, GatedWorkspace, ProjectContext,
     generated::{Checkpoint, Ctx, Toolchain, Workspace, dispatch_tool},
     service::{
-        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, generate_model,
-        implement_model, persist_model, scaffold_model,
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request,
+        ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
     },
 };
 
@@ -26,13 +26,16 @@ use crate::{
 /// writes pass through the gated workspace port, permitted by `allow_writes`.
 #[derive(Clone)]
 pub struct SessionState {
+    project: ProjectContext,
     pub(crate) working: Model,
     pub(crate) persisted: Model,
 }
 
 impl SessionState {
-    pub fn new(model: Model) -> Self {
+    pub fn new(project: ProjectContext) -> Self {
+        let model = project.initial_model().clone();
         Self {
+            project,
             persisted: model.clone(),
             working: model,
         }
@@ -45,6 +48,7 @@ impl SessionState {
 }
 
 pub struct Session<'a> {
+    project: ProjectContext,
     state: SessionState,
     workspace: &'a dyn Workspace,
     checkpoint: &'a dyn Checkpoint,
@@ -54,34 +58,18 @@ pub struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    /// Open a session over a working copy of `model`.
+    /// Open a session over the model and immutable root policy in `project`.
     pub fn new(
-        model: Model,
+        project: ProjectContext,
         workspace: &'a dyn Workspace,
         checkpoint: &'a dyn Checkpoint,
         calculator: &'a dyn theseus_calculator::CalculatorService,
         toolchain: &'a dyn Toolchain,
         allow_writes: bool,
     ) -> Self {
-        Self::from_state(
-            SessionState::new(model),
-            workspace,
-            checkpoint,
-            calculator,
-            toolchain,
-            allow_writes,
-        )
-    }
-
-    pub fn from_state(
-        state: SessionState,
-        workspace: &'a dyn Workspace,
-        checkpoint: &'a dyn Checkpoint,
-        calculator: &'a dyn theseus_calculator::CalculatorService,
-        toolchain: &'a dyn Toolchain,
-        allow_writes: bool,
-    ) -> Self {
+        let state = SessionState::new(project.clone());
         Self {
+            project,
             state,
             workspace,
             checkpoint,
@@ -91,9 +79,28 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// The working model, taken by value. An adapter that reconstructs a session
-    /// per call reads the model back here to carry accepted edits into the next
-    /// one.
+    pub fn from_state(
+        project: ProjectContext,
+        state: SessionState,
+        workspace: &'a dyn Workspace,
+        checkpoint: &'a dyn Checkpoint,
+        calculator: &'a dyn theseus_calculator::CalculatorService,
+        toolchain: &'a dyn Toolchain,
+        allow_writes: bool,
+    ) -> Result<Self, crate::ProjectBindingError> {
+        project.ensure_same_project(&state.project)?;
+        Ok(Self {
+            project,
+            state,
+            workspace,
+            checkpoint,
+            calculator,
+            toolchain,
+            allow_writes,
+        })
+    }
+
+    /// The working model, taken by value for inspection or persistence.
     pub fn into_model(self) -> Model {
         self.state.working
     }
@@ -115,6 +122,7 @@ impl<'a> Session<'a> {
         if name == "generate" {
             let workspace = self.gate();
             let files = generate_model(
+                &self.project,
                 &self.state.working,
                 &self.state.persisted,
                 &workspace,
@@ -127,6 +135,7 @@ impl<'a> Session<'a> {
         if name == "scaffold" {
             let workspace = self.gate();
             let files = scaffold_model(
+                &self.project,
                 &self.state.working,
                 &self.state.persisted,
                 &workspace,
@@ -140,6 +149,7 @@ impl<'a> Session<'a> {
             let request = crate::generated::parse_implement_request_input(input)?;
             let workspace = self.gate();
             let result = implement_model(
+                &self.project,
                 &self.state.working,
                 &self.state.persisted,
                 request,
@@ -151,26 +161,33 @@ impl<'a> Session<'a> {
         }
         if name == "snapshot" {
             let request = crate::generated::parse_snapshot_request_input(input)?;
-            let plan = checkpoint_snapshot_request(&self.state.persisted, request.label)?;
+            ensure_checkpoint_project(&self.project, self.checkpoint).await?;
+            let plan =
+                checkpoint_snapshot_request(&self.project, &self.state.persisted, request.label)?;
             let snapshot = self.checkpoint_gate().snapshot(&plan).await?;
             return Ok(snapshot.reference);
         }
         if name == "rollback" {
             let request = crate::generated::parse_snapshot_ref_input(input)?;
-            let plan = checkpoint_state_request(&self.state.persisted, request.reference)?;
+            ensure_checkpoint_project(&self.project, self.checkpoint).await?;
+            let plan =
+                checkpoint_state_request(&self.project, &self.state.persisted, request.reference)?;
             let restored = self.checkpoint_gate().restore(&plan).await?;
             self.state.adopt_rollback(restored.model);
             return Ok(restored.detail);
         }
         if name == "diff" {
             let request = crate::generated::parse_snapshot_ref_input(input)?;
-            let plan = checkpoint_state_request(&self.state.persisted, request.reference)?;
+            ensure_checkpoint_project(&self.project, self.checkpoint).await?;
+            let plan =
+                checkpoint_state_request(&self.project, &self.state.persisted, request.reference)?;
             return self.checkpoint_gate().diff(&plan).await;
         }
         let workspace = self.gate();
         let checkpoint = self.checkpoint_gate();
         let ctx = Ctx {
             model: &self.state.working,
+            project: &self.project,
             workspace: &workspace,
             checkpoint: &checkpoint,
             calculator: self.calculator,
@@ -191,6 +208,7 @@ impl<'a> Session<'a> {
         if let Some(proposed) = proposed {
             if write {
                 persist_model(
+                    &self.project,
                     &self.state.persisted,
                     &proposed,
                     &self.gate(),

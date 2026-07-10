@@ -171,6 +171,7 @@ pub fn theseus_model() -> Model {
         .foreign_type("ModelDocument", "String")
         .foreign_type("VerifyReport", "theseus_modeling::VerifyReport")
         .foreign_type("GeneratedFiles", "Vec<theseus_modeling::GeneratedFile>")
+        .foreign_type("ProjectContext", "theseus::ProjectContext")
         .foreign_type("ExpectedProjection", "theseus::ExpectedFileSet")
         .foreign_type("WorkspaceMutation", "theseus::PendingMutation")
         .foreign_type("CheckpointSnapshotRequest", "theseus::CheckpointSnapshotRequest")
@@ -317,6 +318,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "VerifyReport",
                 )
+                .uses(&["project"])
                 .tool("Check that the workspace conforms to the model.")
                 .operation(
                     "generate",
@@ -324,7 +326,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
-                .uses(&["workspace", "toolchain"])
+                .uses(&["project", "workspace", "toolchain"])
                 .tool(
                     "Regenerate model-derived code (generated.rs files) from the self-model. Call this after scaffolding a new service crate so generated.rs exists before authoring handlers.",
                 )
@@ -343,7 +345,7 @@ pub fn theseus_model() -> Model {
                     "PatchRequest",
                     "PatchResult",
                 )
-                .uses(&["workspace", "toolchain"])
+                .uses(&["project", "workspace", "toolchain"])
                 .tool(
                     "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects under a repository transaction and compile gate; a failed check restores the prior files.",
                 )
@@ -353,6 +355,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CoverageReport",
                 )
+                .uses(&["project"])
                 .tool("Report which operations have no authored handler.")
                 .operation(
                     "implement",
@@ -360,7 +363,7 @@ pub fn theseus_model() -> Model {
                     "ImplementRequest",
                     "ImplementResult",
                 )
-                .uses(&["workspace", "toolchain"])
+                .uses(&["project", "workspace", "toolchain"])
                 .tool(
                     "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
                 )
@@ -370,6 +373,7 @@ pub fn theseus_model() -> Model {
                     "ShowRequest",
                     "HandlerSource",
                 )
+                .uses(&["project"])
                 .tool(
                     "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). With `port`, `method` names one of that port's methods and the adapter method shows instead — `adapter` picks the implementing type when the file holds more than one. For a method with no authored source yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
                 )
@@ -379,7 +383,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CheckReport",
                 )
-                .uses(&["toolchain"])
+                .uses(&["project", "toolchain"])
                 .tool(
                     "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
                 )
@@ -396,7 +400,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
-                .uses(&["workspace", "toolchain"])
+                .uses(&["project", "workspace", "toolchain"])
                 .tool(
                     "Scaffold missing library service crates under a repository transaction and compile gate. A failed check restores the prior files and removes only paths the transaction created.",
                 )
@@ -406,7 +410,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CheckReport",
                 )
-                .uses(&["toolchain"])
+                .uses(&["project", "toolchain"])
                 .tool(
                     "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
                 )
@@ -416,7 +420,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRequest",
                     "String",
                 )
-                .uses(&["checkpoint"])
+                .uses(&["project", "checkpoint"])
                 .tool(
                     "Checkpoint tracked files and the exact present or absent state of paths owned by the current persisted model before risky edits. Returns a snapshot id for rollback. Requires write permission.",
                 )
@@ -426,7 +430,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRef",
                     "String",
                 )
-                .uses(&["checkpoint"])
+                .uses(&["project", "checkpoint"])
                 .tool(
                     "Restore tracked files and the exact present or absent state of model-owned paths from a snapshot, leaving unrelated untracked files untouched. Requires write permission.",
                 )
@@ -436,7 +440,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRef",
                     "String",
                 )
-                .uses(&["checkpoint"])
+                .uses(&["project", "checkpoint"])
                 .tool(
                     "Release a snapshot by atomically deleting its validated pair of private Git refs. Requires write permission.",
                 )
@@ -446,7 +450,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRetention",
                     "String",
                 )
-                .uses(&["checkpoint"])
+                .uses(&["project", "checkpoint"])
                 .tool(
                     "Release older snapshot refs, retaining only the requested number of newest snapshots. Requires write permission.",
                 )
@@ -456,7 +460,7 @@ pub fn theseus_model() -> Model {
                     "SnapshotRef",
                     "String",
                 )
-                .uses(&["checkpoint"])
+                .uses(&["project", "checkpoint"])
                 .tool(
                     "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a bounded, escaped Git-style diff with exact mode records, or an empty string when nothing has changed. Requires write permission.",
                 )
@@ -466,7 +470,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "Empty",
                 )
-                .uses(&["toolchain"])
+                .uses(&["project", "toolchain"])
                 .tool(
                     "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
                 )
@@ -476,6 +480,7 @@ pub fn theseus_model() -> Model {
                     "ReadRequest",
                     "String",
                 )
+                .uses(&["project"])
                 .tool(
                     "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
                 )
@@ -485,6 +490,7 @@ pub fn theseus_model() -> Model {
                     "SearchRequest",
                     "String",
                 )
+                .uses(&["project"])
                 .tool(
                     "Search the workspace for lines containing `pattern`, reported as path:line: text, capped. `path` narrows the search to a subtree, e.g. `rust/agent`. Use it to find house patterns and neighbors before authoring, then `read` the file. Example: { \"pattern\": \"impl Toolchain\", \"path\": \"rust/theseus\" }.",
                 )
@@ -494,6 +500,7 @@ pub fn theseus_model() -> Model {
                     "ListRequest",
                     "String",
                 )
+                .uses(&["project"])
                 .tool(
                     "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
                 )
@@ -503,12 +510,30 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "CheckReport",
                 )
-                .uses(&["toolchain"])
+                .uses(&["project", "toolchain"])
                 .tool(
                     "Run clippy across the workspace with warnings denied and report the outcome.",
                 )
                 .port(
+                    Port::new(
+                            "project",
+                            "Provides the immutable project root and layout policy.",
+                        )
+                        .method(
+                            "context",
+                            "Return the operator-selected project context for this session.",
+                            "Empty",
+                            "ProjectContext",
+                        ),
+                )
+                .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
+                        .method(
+                            "context",
+                            "Return the project context this workspace is bound to.",
+                            "Empty",
+                            "ProjectContext",
+                        )
                         .method(
                             "begin_mutation",
                             "Acquire the repository write lease and open a recoverable mutation after checking the expected generated revision.",
@@ -519,6 +544,12 @@ pub fn theseus_model() -> Model {
                 )
                 .port(
                     Port::new("checkpoint", "Checkpoints and restores the working tree.")
+                        .method(
+                            "context",
+                            "Return the project context this checkpoint is bound to.",
+                            "Empty",
+                            "ProjectContext",
+                        )
                         .method(
                             "snapshot",
                             "Checkpoint tracked files and exact model-owned working-tree state.",
@@ -566,6 +597,12 @@ pub fn theseus_model() -> Model {
                     Port::new(
                             "toolchain",
                             "Compile-checks the workspace and reports the outcome.",
+                        )
+                        .method(
+                            "context",
+                            "Return the project context this toolchain is bound to.",
+                            "Empty",
+                            "ProjectContext",
                         )
                         .method(
                             "check",

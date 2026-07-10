@@ -17,11 +17,10 @@ mod generated;
 
 use clap::Arg;
 use generated::Invocation;
-use theseus::{CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, TheseusService};
+use theseus::{CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, TheseusService, theseus_project};
 use theseus_calculator::CalculatorService;
 use theseus_calculator_grpc_client::GrpcCalculatorClient;
 use theseus_http_client::HttpTheseusClient;
-use theseus_model::theseus_model;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -57,9 +56,10 @@ async fn main() -> anyhow::Result<()> {
         return run(&HttpTheseusClient::new(url.clone()), invocation).await;
     }
 
-    let model = theseus_model();
-    let workspace = FsWorkspace::at_repo_root();
-    let toolchain = CargoToolchain;
+    let project = theseus_project()?;
+    let model = project.initial_model();
+    let workspace = FsWorkspace::for_project(&project);
+    let toolchain = CargoToolchain::for_project(&project);
     // The calculator port takes the in-process adapter, or the generated gRPC
     // client when an endpoint names a remote calculator — the same port either
     // way.
@@ -75,9 +75,10 @@ async fn main() -> anyhow::Result<()> {
             &local_calculator
         }
     };
-    let checkpoint = GitCheckpoint::at_repo_root();
+    let checkpoint = GitCheckpoint::for_project(project.clone());
     let ctx = Ctx {
-        model: &model,
+        model,
+        project: &project,
         workspace: &workspace,
         checkpoint: &checkpoint,
         calculator,

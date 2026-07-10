@@ -16,14 +16,14 @@ use rmcp::{
     service::RequestContext,
 };
 use serde_json::Value;
-use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session, SessionState};
-use theseus_modeling::Model;
+use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, Session, SessionState};
 use tokio::sync::Mutex;
 
 /// A Model Context Protocol server over Theseus's [`Session`]. It holds the working
 /// model and the write gate. An external host lists the tool catalog and calls
 /// tools by name, driving the same surface as the agent loop.
 pub struct TheseusMcp {
+    project: ProjectContext,
     state: Mutex<SessionState>,
     workspace: FsWorkspace,
     checkpoint: GitCheckpoint,
@@ -33,15 +33,15 @@ pub struct TheseusMcp {
 }
 
 impl TheseusMcp {
-    /// Build a server over `model`, persisting writes through a filesystem
-    /// workspace rooted at the repository.
-    pub fn new(model: Model, allow_writes: bool) -> Self {
+    /// Build a server over one immutable project capability.
+    pub fn new(project: ProjectContext, allow_writes: bool) -> Self {
         Self {
-            state: Mutex::new(SessionState::new(model)),
-            workspace: FsWorkspace::at_repo_root(),
-            checkpoint: GitCheckpoint::at_repo_root(),
+            state: Mutex::new(SessionState::new(project.clone())),
+            workspace: FsWorkspace::for_project(&project),
+            checkpoint: GitCheckpoint::for_project(project.clone()),
             calculator: theseus_calculator::Calculator,
-            toolchain: CargoToolchain,
+            toolchain: CargoToolchain::for_project(&project),
+            project,
             allow_writes,
         }
     }
@@ -82,14 +82,22 @@ impl ServerHandler for TheseusMcp {
         let input = Value::Object(request.arguments.unwrap_or_default());
         // The lock holds across the call, so concurrent hosts see edits in order.
         let mut state = self.state.lock().await;
-        let mut session = Session::from_state(
+        let mut session = match Session::from_state(
+            self.project.clone(),
             state.clone(),
             &self.workspace,
             &self.checkpoint,
             &self.calculator,
             &self.toolchain,
             self.allow_writes,
-        );
+        ) {
+            Ok(session) => session,
+            Err(error) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "error: {error}"
+                ))]));
+            }
+        };
         // `restart` is an inbound's affordance: the loop rebuilds and resumes,
         // and this server restarts through `restart_server`. The session's
         // handler cannot restart anything, so the call is answered here.

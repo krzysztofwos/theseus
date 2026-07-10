@@ -561,6 +561,8 @@ impl<'de> Deserialize<'de> for CheckpointProjectDescriptor {
 #[derive(Debug, Error)]
 pub enum ProjectLayoutError {
     #[error(transparent)]
+    ProjectId(#[from] ProjectIdError),
+    #[error(transparent)]
     Render(#[from] RenderError),
     #[error("workspace path must be a non-empty normalized relative path: {path:?}")]
     InvalidPath { path: String },

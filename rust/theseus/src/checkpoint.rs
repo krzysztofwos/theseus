@@ -16,6 +16,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use theseus_modeling::{CheckpointProjectDescriptor, ProjectId};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -25,7 +26,8 @@ use crate::{
     checkpoint_model::SnapshotModelV1, validate_workspace_paths,
 };
 
-const SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+const LEGACY_SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+const SNAPSHOT_MANIFEST_VERSION: u32 = 2;
 const MAX_SNAPSHOT_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SNAPSHOT_BLOB_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SNAPSHOT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
@@ -36,6 +38,9 @@ const MAX_GIT_METADATA_BYTES: usize = MAX_SNAPSHOT_MANIFEST_BYTES + 1024 * 1024;
 const MAX_DIFF_BYTES: usize = MAX_SNAPSHOT_TOTAL_BYTES as usize;
 const MAX_GIT_ERROR_BYTES: usize = 1024 * 1024;
 const SNAPSHOT_ORDER_REF_PREFIX: &str = "refs/theseus/snapshot-order";
+const PROJECT_REF_PREFIX: &str = "refs/theseus/projects";
+const LEGACY_THESEUS_PROJECT_ID: &str = "theseus";
+const LEGACY_THESEUS_MODEL_RECORD: &str = "rust/model/src/self_model.rs";
 pub(super) const PRIMARY_PROMOTION_DIRECTORY: &str = ".theseus-checkpoint-promote";
 
 static NEXT_TEMP_INDEX: AtomicU64 = AtomicU64::new(0);
@@ -45,6 +50,8 @@ static NEXT_SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 #[serde(deny_unknown_fields)]
 struct SnapshotManifest {
     version: u32,
+    #[serde(default)]
+    project: Option<CheckpointProjectDescriptor>,
     label: String,
     created_millis: u64,
     sequence: u64,
@@ -58,6 +65,8 @@ struct SnapshotManifest {
 #[derive(Serialize)]
 struct SnapshotManifestRef<'a> {
     version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a CheckpointProjectDescriptor>,
     label: &'a str,
     created_millis: u64,
     sequence: u64,
@@ -73,6 +82,20 @@ struct LoadedSnapshot {
     tree_id: GitObjectId,
     records: Vec<TreeRecord>,
     manifest: SnapshotManifest,
+    snapshot_ref: String,
+    order_ref: String,
+}
+
+struct PinnedCommit {
+    object_id: GitObjectId,
+    namespace: SnapshotNamespace,
+    snapshot_ref: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SnapshotNamespace {
+    Project,
+    LegacyTheseus,
 }
 
 struct CapturedTree {
@@ -85,6 +108,7 @@ struct CapturedTree {
 struct SnapshotRefRecord {
     object_id: GitObjectId,
     sequence: u64,
+    snapshot_ref: String,
     order_ref: String,
 }
 
@@ -343,11 +367,72 @@ impl<T> Drop for JoiningWorker<T> {
 }
 
 impl GitCheckpoint {
-    fn snapshot_order_ref(sequence: u64, object_id: &GitObjectId) -> String {
+    fn legacy_snapshot_order_ref(sequence: u64, object_id: &GitObjectId) -> String {
         format!(
             "{SNAPSHOT_ORDER_REF_PREFIX}/{sequence:020}-{}",
             object_id.as_str()
         )
+    }
+
+    fn project_snapshot_ref_prefix(&self) -> String {
+        project_snapshot_ref_prefix(self.project.descriptor().project_id())
+    }
+
+    fn project_snapshot_order_ref_prefix(&self) -> String {
+        project_snapshot_order_ref_prefix(self.project.descriptor().project_id())
+    }
+
+    fn project_snapshot_ref(&self, object_id: &GitObjectId) -> String {
+        format!(
+            "{}/{}",
+            self.project_snapshot_ref_prefix(),
+            object_id.as_str()
+        )
+    }
+
+    fn project_snapshot_order_ref(&self, sequence: u64, object_id: &GitObjectId) -> String {
+        format!(
+            "{}/{sequence:020}-{}",
+            self.project_snapshot_order_ref_prefix(),
+            object_id.as_str()
+        )
+    }
+
+    fn snapshot_order_ref(
+        &self,
+        namespace: SnapshotNamespace,
+        sequence: u64,
+        object_id: &GitObjectId,
+    ) -> String {
+        match namespace {
+            SnapshotNamespace::Project => self.project_snapshot_order_ref(sequence, object_id),
+            SnapshotNamespace::LegacyTheseus => {
+                Self::legacy_snapshot_order_ref(sequence, object_id)
+            }
+        }
+    }
+
+    fn supports_legacy_theseus_snapshots(&self) -> bool {
+        let descriptor = self.project.descriptor();
+        descriptor.project_id().as_str() == LEGACY_THESEUS_PROJECT_ID
+            && descriptor.model_record().path() == LEGACY_THESEUS_MODEL_RECORD
+            && theseus_model::project_layout()
+                .map(|layout| descriptor == layout.checkpoint_descriptor())
+                .unwrap_or(false)
+    }
+
+    fn validate_request_project(
+        &self,
+        project: &CheckpointProjectDescriptor,
+    ) -> Result<(), GitCheckpointError> {
+        let expected = self.project.descriptor();
+        if project != &expected {
+            return Err(GitCheckpointError::ProjectMismatch {
+                expected: expected.project_id().clone(),
+                actual: project.project_id().clone(),
+            });
+        }
+        Ok(())
     }
 
     fn validate_snapshot_request(
@@ -355,15 +440,19 @@ impl GitCheckpoint {
         request: &CheckpointSnapshotRequest,
     ) -> Result<(), GitCheckpointError> {
         Self::validate_label(&request.label)?;
+        self.validate_request_project(&request.project)?;
         validate_workspace_paths(&request.owned_paths)?;
-        let expected = theseus_model::checkpoint_paths(&request.model)
+        let expected = self
+            .project
+            .owned_paths(&request.model)
             .map_err(|source| GitCheckpointError::InvalidModel { source })?;
         if expected != request.owned_paths {
             return Err(GitCheckpointError::OwnershipMismatch);
         }
-        let expected_projection =
-            theseus_model::checkpoint_expectations(&self.root, &request.model)
-                .map_err(|source| GitCheckpointError::InvalidModel { source })?;
+        let expected_projection = self
+            .project
+            .expected_files(&request.model)
+            .map_err(|source| GitCheckpointError::InvalidModel { source })?;
         if expected_projection != request.expected {
             return Err(GitCheckpointError::ProjectionMismatch);
         }
@@ -375,23 +464,71 @@ impl GitCheckpoint {
         &self,
         request: &CheckpointStateRequest,
     ) -> Result<(), GitCheckpointError> {
+        self.validate_request_project(&request.project)?;
         validate_workspace_paths(&request.owned_paths)?;
-        let expected = theseus_model::checkpoint_paths(&request.model)
+        let expected = self
+            .project
+            .owned_paths(&request.model)
             .map_err(|source| GitCheckpointError::InvalidModel { source })?;
         if expected != request.owned_paths {
             return Err(GitCheckpointError::OwnershipMismatch);
         }
-        let expected_projection =
-            theseus_model::checkpoint_expectations(&self.root, &request.model)
-                .map_err(|source| GitCheckpointError::InvalidModel { source })?;
+        let expected_projection = self
+            .project
+            .expected_files(&request.model)
+            .map_err(|source| GitCheckpointError::InvalidModel { source })?;
         if expected_projection != request.expected {
             return Err(GitCheckpointError::ProjectionMismatch);
         }
         Ok(())
     }
 
+    async fn validate_repository_root(&self) -> Result<(), GitCheckpointError> {
+        let output = self
+            .git_output(
+                "git rev-parse repository root",
+                &["rev-parse", "--show-toplevel"],
+                None,
+            )
+            .await?;
+        let actual =
+            String::from_utf8(output.stdout).map_err(|_| GitCheckpointError::NonUtf8Path)?;
+        let actual = PathBuf::from(actual.trim_end_matches(['\r', '\n']));
+        if actual.as_os_str().is_empty() {
+            return Err(GitCheckpointError::InvalidManifest {
+                message: "Git returned an empty repository root".to_string(),
+            });
+        }
+        let configured = self.project.root().to_path_buf();
+        let canonical_configured = configured.clone();
+        let canonical_actual = actual.clone();
+        let (canonical_configured, canonical_actual) = JoiningWorker::spawn(move || {
+            let configured =
+                canonical_configured
+                    .canonicalize()
+                    .map_err(|source| MutationError::Io {
+                        operation: "canonicalizing configured project root",
+                        path: canonical_configured,
+                        source,
+                    })?;
+            let actual = canonical_actual
+                .canonicalize()
+                .map_err(|source| MutationError::Io {
+                    operation: "canonicalizing Git repository root",
+                    path: canonical_actual,
+                    source,
+                })?;
+            Ok::<_, MutationError>((configured, actual))
+        })?
+        .await??;
+        if canonical_configured != canonical_actual {
+            return Err(GitCheckpointError::RepositoryRootMismatch { configured, actual });
+        }
+        Ok(())
+    }
+
     async fn cleanup_temporary_indices(&self) -> Result<(), GitCheckpointError> {
-        let root = self.root.clone();
+        let root = self.project.root().to_path_buf();
         JoiningWorker::spawn(move || cleanup_temporary_indices(&root))?.await?
     }
 
@@ -400,13 +537,13 @@ impl GitCheckpoint {
         paths: Vec<String>,
     ) -> Result<BTreeMap<String, MutationTarget>, GitCheckpointError> {
         ensure_path_limit(paths.len())?;
-        let root = self.root.clone();
+        let root = self.project.root().to_path_buf();
         JoiningWorker::spawn(move || read_current_targets(&root, paths))?.await?
     }
 
     async fn temporary_object_store(&self) -> Result<TemporaryObjectStore, GitCheckpointError> {
         let path = self.object_directory().await?;
-        let root = self.root.clone();
+        let root = self.project.root().to_path_buf();
         JoiningWorker::spawn(move || TemporaryObjectStore::new(&root, path))?.await?
     }
 
@@ -445,47 +582,41 @@ impl GitCheckpoint {
         Self::snapshot_id("git rev-parse HEAD", &output)
     }
 
-    async fn pinned_commit(&self, reference: &str) -> Result<GitObjectId, GitCheckpointError> {
+    async fn pinned_commit(&self, reference: &str) -> Result<PinnedCommit, GitCheckpointError> {
         let object_id = GitObjectId::try_from(reference)
             .map_err(|source| GitCheckpointError::invalid_reference(reference, source))?;
-        let snapshot_ref = Self::snapshot_ref(&object_id);
-        let output = self
-            .git_output(
-                "git for-each-ref snapshot",
-                &[
-                    "for-each-ref",
-                    "--format=%(refname)%00%(objectname)%00%(symref)",
-                    &snapshot_ref,
-                ],
-                None,
-            )
-            .await?;
-        let line = String::from_utf8(output.stdout)
-            .map_err(|_| GitCheckpointError::NonUtf8Path)?
-            .trim_end_matches('\n')
-            .to_string();
-        let mut fields = line.split('\0');
-        let name = fields.next().unwrap_or_default();
-        let target = fields.next().unwrap_or_default();
-        let symbolic = fields.next().unwrap_or_default();
-        if !symbolic.is_empty() {
-            return Err(GitCheckpointError::SymbolicSnapshot {
-                reference: object_id.into_string(),
-            });
-        }
-        if name != snapshot_ref
-            || target != object_id.as_str()
-            || fields.next().is_some()
-            || self
-                .git_text("git cat-file type", &["cat-file", "-t", object_id.as_str()])
-                .await?
-                != "commit"
+        let project_ref = self.project_snapshot_ref(&object_id);
+        let (namespace, snapshot_ref) =
+            if self.has_exact_pinned_ref(&project_ref, &object_id).await? {
+                (SnapshotNamespace::Project, project_ref)
+            } else if self.supports_legacy_theseus_snapshots() {
+                let legacy_ref = Self::snapshot_ref(&object_id);
+                if self.has_exact_pinned_ref(&legacy_ref, &object_id).await? {
+                    (SnapshotNamespace::LegacyTheseus, legacy_ref)
+                } else {
+                    return Err(GitCheckpointError::UnknownSnapshot {
+                        reference: object_id.into_string(),
+                    });
+                }
+            } else {
+                return Err(GitCheckpointError::UnknownSnapshot {
+                    reference: object_id.into_string(),
+                });
+            };
+        if self
+            .git_text("git cat-file type", &["cat-file", "-t", object_id.as_str()])
+            .await?
+            != "commit"
         {
             return Err(GitCheckpointError::UnknownSnapshot {
                 reference: object_id.into_string(),
             });
         }
-        Ok(object_id)
+        Ok(PinnedCommit {
+            object_id,
+            namespace,
+            snapshot_ref,
+        })
     }
 
     async fn capture_tree_in(
@@ -509,7 +640,7 @@ impl GitCheckpoint {
         validate_workspace_paths(&candidates)?;
         let mut current_targets = self.current_targets(candidates.clone()).await?;
 
-        let index = TemporaryIndex::new(&self.root);
+        let index = TemporaryIndex::new(self.project.root());
         self.git_output_limited_in(
             "git read-tree",
             &["read-tree", "--empty"],
@@ -597,7 +728,11 @@ impl GitCheckpoint {
     }
 
     async fn load_snapshot(&self, reference: &str) -> Result<LoadedSnapshot, GitCheckpointError> {
-        let object_id = self.pinned_commit(reference).await?;
+        let PinnedCommit {
+            object_id,
+            namespace,
+            snapshot_ref,
+        } = self.pinned_commit(reference).await?;
         let size = self
             .git_text("git cat-file size", &["cat-file", "-s", object_id.as_str()])
             .await?
@@ -648,9 +783,9 @@ impl GitCheckpoint {
         }
         let manifest: SnapshotManifest = serde_json::from_slice(body)
             .map_err(|source| GitCheckpointError::ParseManifest { source })?;
-        self.validate_manifest(&manifest)?;
-        self.validate_order_ref(&object_id, manifest.sequence)
-            .await?;
+        self.validate_manifest(&manifest, namespace)?;
+        let order_ref = self.snapshot_order_ref(namespace, manifest.sequence, &object_id);
+        self.validate_order_ref(&object_id, &order_ref).await?;
         let records = self.tree_records(&tree_id).await?;
         self.validate_manifest_tree(&manifest, &records)?;
         Ok(LoadedSnapshot {
@@ -658,15 +793,16 @@ impl GitCheckpoint {
             tree_id,
             records,
             manifest,
+            snapshot_ref,
+            order_ref,
         })
     }
 
-    fn validate_manifest(&self, manifest: &SnapshotManifest) -> Result<(), GitCheckpointError> {
-        if manifest.version != SNAPSHOT_MANIFEST_VERSION {
-            return Err(GitCheckpointError::UnsupportedManifest {
-                version: manifest.version,
-            });
-        }
+    fn validate_manifest(
+        &self,
+        manifest: &SnapshotManifest,
+        namespace: SnapshotNamespace,
+    ) -> Result<(), GitCheckpointError> {
         Self::validate_label(&manifest.label)?;
         validate_workspace_paths(&manifest.owned_paths)?;
         validate_workspace_paths(&manifest.tracked_paths)?;
@@ -677,7 +813,39 @@ impl GitCheckpoint {
             .map(String::as_str)
             .collect();
         ensure_path_limit(declared_paths.len())?;
-        let expected = manifest.model.owned_paths()?;
+        let expected = match manifest.version {
+            LEGACY_SNAPSHOT_MANIFEST_VERSION => {
+                if namespace != SnapshotNamespace::LegacyTheseus
+                    || manifest.project.is_some()
+                    || !self.supports_legacy_theseus_snapshots()
+                {
+                    return Err(GitCheckpointError::InvalidManifest {
+                        message:
+                            "version-one snapshot is not pinned in the legacy Theseus namespace"
+                                .to_string(),
+                    });
+                }
+                manifest.model.owned_paths()?
+            }
+            SNAPSHOT_MANIFEST_VERSION => {
+                if namespace != SnapshotNamespace::Project {
+                    return Err(GitCheckpointError::InvalidManifest {
+                        message: "version-two snapshot is not pinned in its project namespace"
+                            .to_string(),
+                    });
+                }
+                let project = manifest.project.as_ref().ok_or_else(|| {
+                    GitCheckpointError::InvalidManifest {
+                        message: "version-two snapshot has no project descriptor".to_string(),
+                    }
+                })?;
+                self.validate_request_project(project)?;
+                project
+                    .owned_paths(&manifest.model.clone().into())
+                    .map_err(|source| GitCheckpointError::InvalidModel { source })?
+            }
+            version => return Err(GitCheckpointError::UnsupportedManifest { version }),
+        };
         if expected != manifest.owned_paths {
             return Err(GitCheckpointError::OwnershipMismatch);
         }
@@ -973,13 +1141,32 @@ impl GitCheckpoint {
         Ok(refs)
     }
 
+    async fn has_exact_pinned_ref(
+        &self,
+        reference: &str,
+        object_id: &GitObjectId,
+    ) -> Result<bool, GitCheckpointError> {
+        let refs = self.listed_commit_refs(reference).await?;
+        if refs.is_empty() {
+            return Ok(false);
+        }
+        if refs.len() != 1
+            || refs[0].name != reference
+            || refs[0].object_id.as_str() != object_id.as_str()
+        {
+            return Err(GitCheckpointError::InvalidManifest {
+                message: "snapshot ref does not uniquely name its target".to_string(),
+            });
+        }
+        Ok(true)
+    }
+
     async fn validate_order_ref(
         &self,
         object_id: &GitObjectId,
-        sequence: u64,
+        expected: &str,
     ) -> Result<(), GitCheckpointError> {
-        let expected = Self::snapshot_order_ref(sequence, object_id);
-        let refs = self.listed_commit_refs(&expected).await?;
+        let refs = self.listed_commit_refs(expected).await?;
         if refs.len() != 1
             || refs[0].name != expected
             || refs[0].object_id.as_str() != object_id.as_str()
@@ -991,12 +1178,16 @@ impl GitCheckpoint {
         Ok(())
     }
 
-    async fn discover_retained_refs(&self) -> Result<Vec<SnapshotRefRecord>, GitCheckpointError> {
+    async fn discover_namespace_refs(
+        &self,
+        snapshot_prefix: &str,
+        order_prefix: &str,
+    ) -> Result<Vec<SnapshotRefRecord>, GitCheckpointError> {
         let mut snapshots = BTreeMap::new();
-        for listed in self.listed_commit_refs(SNAPSHOT_REF_PREFIX).await? {
+        for listed in self.listed_commit_refs(snapshot_prefix).await? {
             let suffix = listed
                 .name
-                .strip_prefix(&format!("{SNAPSHOT_REF_PREFIX}/"))
+                .strip_prefix(&format!("{snapshot_prefix}/"))
                 .ok_or_else(|| GitCheckpointError::InvalidManifest {
                     message: "snapshot ref escaped its namespace".to_string(),
                 })?;
@@ -1013,10 +1204,10 @@ impl GitCheckpoint {
 
         let mut retained = Vec::with_capacity(snapshots.len());
         let mut sequences = BTreeSet::new();
-        for listed in self.listed_commit_refs(SNAPSHOT_ORDER_REF_PREFIX).await? {
+        for listed in self.listed_commit_refs(order_prefix).await? {
             let suffix = listed
                 .name
-                .strip_prefix(&format!("{SNAPSHOT_ORDER_REF_PREFIX}/"))
+                .strip_prefix(&format!("{order_prefix}/"))
                 .ok_or_else(|| GitCheckpointError::InvalidManifest {
                     message: "snapshot order ref escaped its namespace".to_string(),
                 })?;
@@ -1057,6 +1248,7 @@ impl GitCheckpoint {
             retained.push(SnapshotRefRecord {
                 object_id: listed.object_id,
                 sequence,
+                snapshot_ref: snapshot.name,
                 order_ref: listed.name,
             });
         }
@@ -1064,6 +1256,21 @@ impl GitCheckpoint {
             return Err(GitCheckpointError::InvalidManifest {
                 message: "snapshot ref has no order ref".to_string(),
             });
+        }
+        Ok(retained)
+    }
+
+    async fn discover_retained_refs(&self) -> Result<Vec<SnapshotRefRecord>, GitCheckpointError> {
+        let snapshot_prefix = self.project_snapshot_ref_prefix();
+        let order_prefix = self.project_snapshot_order_ref_prefix();
+        let mut retained = self
+            .discover_namespace_refs(&snapshot_prefix, &order_prefix)
+            .await?;
+        if self.supports_legacy_theseus_snapshots() {
+            retained.extend(
+                self.discover_namespace_refs(SNAPSHOT_REF_PREFIX, SNAPSHOT_ORDER_REF_PREFIX)
+                    .await?,
+            );
         }
         Ok(retained)
     }
@@ -1150,7 +1357,7 @@ impl GitCheckpoint {
         configure_tokio_git(&mut command);
         command
             .args(args)
-            .current_dir(&self.root)
+            .current_dir(self.project.root())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1195,7 +1402,7 @@ impl GitCheckpoint {
         configure_tokio_git(&mut command);
         command
             .args(args)
-            .current_dir(&self.root)
+            .current_dir(self.project.root())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1250,11 +1457,18 @@ impl GitCheckpoint {
 
 #[async_trait::async_trait]
 impl Checkpoint for GitCheckpoint {
+    async fn context(&self) -> anyhow::Result<crate::ProjectContext> {
+        self.project.validate_root()?;
+        Ok(self.project.clone())
+    }
+
     async fn snapshot(
         &self,
         request: &CheckpointSnapshotRequest,
     ) -> anyhow::Result<CheckpointSnapshot> {
+        self.project.validate_root()?;
         self.validate_snapshot_request(request)?;
+        self.validate_repository_root().await?;
         let lease = self.repository_lease(request.expected.clone()).await?;
         let object_lease = self.object_database_lease().await?;
         let retained = self.retained_refs().await?;
@@ -1269,9 +1483,10 @@ impl Checkpoint for GitCheckpoint {
                 message: "snapshot order sequence is exhausted".to_string(),
             })?;
         let snapshot_model = SnapshotModelV1::from(&request.model);
-        if snapshot_model
-            .owned_paths()
-            .map_err(GitCheckpointError::from)?
+        if request
+            .project
+            .owned_paths(&snapshot_model.clone().into())
+            .map_err(|source| GitCheckpointError::InvalidModel { source })?
             != request.owned_paths
         {
             return Err(GitCheckpointError::OwnershipMismatch.into());
@@ -1289,6 +1504,7 @@ impl Checkpoint for GitCheckpoint {
         let empty_modes = BTreeMap::new();
         let preflight = SnapshotManifestRef {
             version: SNAPSHOT_MANIFEST_VERSION,
+            project: Some(&request.project),
             label: &request.label,
             created_millis,
             sequence,
@@ -1307,6 +1523,7 @@ impl Checkpoint for GitCheckpoint {
             .await?;
         let manifest = SnapshotManifestRef {
             version: SNAPSHOT_MANIFEST_VERSION,
+            project: Some(&request.project),
             label: &request.label,
             created_millis,
             sequence,
@@ -1320,16 +1537,16 @@ impl Checkpoint for GitCheckpoint {
             .create_snapshot_commit(&tree.object_id, &manifest, Some(&objects.environment))
             .await?;
         #[cfg(test)]
-        pause_after_snapshot_quarantine(&self.root);
+        pause_after_snapshot_quarantine(self.project.root());
 
         let source = objects.environment.directory.clone();
         let primary = objects.environment.primary.clone();
         JoiningWorker::spawn(move || promote_loose_objects(&source, &primary))?.await??;
 
         let create = [
-            (Self::snapshot_ref(&snapshot), snapshot.clone()),
+            (self.project_snapshot_ref(&snapshot), snapshot.clone()),
             (
-                Self::snapshot_order_ref(sequence, &snapshot),
+                self.project_snapshot_order_ref(sequence, &snapshot),
                 snapshot.clone(),
             ),
         ];
@@ -1343,14 +1560,16 @@ impl Checkpoint for GitCheckpoint {
     }
 
     async fn restore(&self, request: &CheckpointStateRequest) -> anyhow::Result<CheckpointRestore> {
+        self.project.validate_root()?;
         self.validate_state_request(request)?;
+        self.validate_repository_root().await?;
         let mut mutation = self.repository_lease(request.expected.clone()).await?;
         let object_lease = self.object_database_lease().await?;
         let snapshot = self.load_snapshot(&request.reference).await?;
         let changes = self.restore_plan(&snapshot, &request.owned_paths).await?;
         mutation.apply(&changes).await?;
         #[cfg(test)]
-        pause_after_restore_apply(&self.root);
+        pause_after_restore_apply(self.project.root());
         mutation.commit().map_err(GitCheckpointError::from)?;
         object_lease.commit().map_err(GitCheckpointError::from)?;
         Ok(CheckpointRestore {
@@ -1363,7 +1582,9 @@ impl Checkpoint for GitCheckpoint {
     }
 
     async fn diff(&self, request: &CheckpointStateRequest) -> anyhow::Result<String> {
+        self.project.validate_root()?;
         self.validate_state_request(request)?;
+        self.validate_repository_root().await?;
         let lease = self.repository_lease(request.expected.clone()).await?;
         let object_lease = self.object_database_lease().await?;
         let snapshot = self.load_snapshot(&request.reference).await?;
@@ -1373,7 +1594,7 @@ impl Checkpoint for GitCheckpoint {
             .capture_tree_in(&request.owned_paths, Some(&objects.environment))
             .await?;
         #[cfg(test)]
-        pause_after_diff_capture(&self.root);
+        pause_after_diff_capture(self.project.root());
         let output = self
             .git_output_limited_in(
                 "git diff",
@@ -1408,18 +1629,14 @@ impl Checkpoint for GitCheckpoint {
     }
 
     async fn release(&self, request: &str) -> anyhow::Result<String> {
+        self.project.validate_root()?;
+        self.validate_repository_root().await?;
         let lease = self.repository_lease(Vec::new()).await?;
         let object_lease = self.object_database_lease().await?;
         let snapshot = self.load_snapshot(request).await?;
         let delete = [
-            (
-                Self::snapshot_ref(&snapshot.object_id),
-                snapshot.object_id.clone(),
-            ),
-            (
-                Self::snapshot_order_ref(snapshot.manifest.sequence, &snapshot.object_id),
-                snapshot.object_id.clone(),
-            ),
+            (snapshot.snapshot_ref, snapshot.object_id.clone()),
+            (snapshot.order_ref, snapshot.object_id.clone()),
         ];
         self.update_refs(&[], &delete).await?;
         object_lease.commit().map_err(GitCheckpointError::from)?;
@@ -1428,6 +1645,8 @@ impl Checkpoint for GitCheckpoint {
     }
 
     async fn prune(&self, request: &SnapshotRetention) -> anyhow::Result<String> {
+        self.project.validate_root()?;
+        self.validate_repository_root().await?;
         let lease = self.repository_lease(Vec::new()).await?;
         let object_lease = self.object_database_lease().await?;
         let mut retained = self.discover_retained_refs().await?;
@@ -1441,10 +1660,7 @@ impl Checkpoint for GitCheckpoint {
         if !released.is_empty() {
             let mut delete = Vec::with_capacity(released.len() * 2);
             for record in &released {
-                delete.push((
-                    Self::snapshot_ref(&record.object_id),
-                    record.object_id.clone(),
-                ));
+                delete.push((record.snapshot_ref.clone(), record.object_id.clone()));
                 delete.push((record.order_ref.clone(), record.object_id.clone()));
             }
             self.update_refs(&[], &delete).await?;
@@ -1474,6 +1690,14 @@ impl Write for LimitedWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+fn project_snapshot_ref_prefix(project_id: &ProjectId) -> String {
+    format!("{PROJECT_REF_PREFIX}/{project_id}/snapshots")
+}
+
+fn project_snapshot_order_ref_prefix(project_id: &ProjectId) -> String {
+    format!("{PROJECT_REF_PREFIX}/{project_id}/snapshot-order")
 }
 
 fn encode_manifest(manifest: &(impl Serialize + ?Sized)) -> Result<Vec<u8>, GitCheckpointError> {

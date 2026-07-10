@@ -8,15 +8,16 @@ use thiserror::Error;
 
 const SELF_MODEL_PATH_V1: &str = "rust/model/src/self_model.rs";
 
+/// A frozen checkpoint model cannot reconstruct its declared workspace.
 #[derive(Debug, Error)]
-pub(crate) enum SnapshotModelError {
+pub enum SnapshotModelError {
     #[error("checkpoint model names unmodeled crate {crate_name:?}")]
     MissingCrate { crate_name: String },
     #[error("checkpoint model names unmodeled service {service:?}")]
     MissingService { service: String },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SnapshotModelV1 {
     name: String,
@@ -28,7 +29,7 @@ pub(crate) struct SnapshotModelV1 {
     clients: Vec<SnapshotClientV1>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotCrateV1 {
     name: String,
@@ -37,14 +38,14 @@ struct SnapshotCrateV1 {
     depends_on: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotTypeDefV1 {
     name: String,
     shape: SnapshotTypeShapeV1,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 enum SnapshotTypeShapeV1 {
     Struct(Vec<SnapshotFieldV1>),
@@ -56,14 +57,14 @@ enum SnapshotTypeShapeV1 {
     Foreign(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotVariantV1 {
     name: String,
     fields: Vec<SnapshotFieldV1>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotFieldV1 {
     name: String,
@@ -71,7 +72,7 @@ struct SnapshotFieldV1 {
     doc: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotServiceV1 {
     name: String,
@@ -80,7 +81,7 @@ struct SnapshotServiceV1 {
     outbound: Vec<SnapshotPortV1>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotOperationV1 {
     name: String,
@@ -91,7 +92,7 @@ struct SnapshotOperationV1 {
     tool: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotPortV1 {
     name: String,
@@ -100,7 +101,7 @@ struct SnapshotPortV1 {
     methods: Vec<SnapshotMethodV1>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotMethodV1 {
     name: String,
@@ -110,7 +111,7 @@ struct SnapshotMethodV1 {
     gated: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotInboundV1 {
     name: String,
@@ -121,7 +122,7 @@ struct SnapshotInboundV1 {
     turns: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotClientV1 {
     name: String,

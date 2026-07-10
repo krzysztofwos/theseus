@@ -415,10 +415,13 @@ pub fn resume(
 mod tests {
     use serde_json::json;
     use theseus::{Session, Toolchain, Workspace};
-    use theseus_model::theseus_model;
 
     use super::*;
     use crate::adapters::OfflineLlm;
+
+    fn project() -> theseus::ProjectContext {
+        theseus::theseus_project().expect("Theseus project context is valid")
+    }
 
     /// A workspace that writes nowhere. The loop's read-only tools never reach it.
     struct NoopWorkspace;
@@ -469,7 +472,7 @@ mod tests {
             Reply::answer("Theseus exposes a verify operation."),
         ]);
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -489,7 +492,7 @@ mod tests {
     async fn a_solo_restart_ends_the_run_and_the_resumed_transcript_continues() {
         let llm = OfflineLlm::new([calls(vec![call("r1", RESTART_TOOL, json!({}))])]);
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,
@@ -569,7 +572,7 @@ mod tests {
             Reply::answer("done"),
         ]);
         let mut session = Session::new(
-            theseus_model(),
+            project(),
             &NoopWorkspace,
             &StubCheckpoint,
             &theseus_calculator::Calculator,

@@ -13,11 +13,11 @@ use tokio::sync::Mutex;
 
 use crate::{
     CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedWorkspace, GitCheckpoint,
-    ImplementRequest, ListRequest, PatchRequest, QueryRequest, ReadRequest, ShowRequest,
-    SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace,
+    ImplementRequest, ListRequest, PatchRequest, ProjectContext, ProjectContextError, QueryRequest,
+    ReadRequest, ShowRequest, SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace,
     service::{
-        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, generate_model,
-        implement_model, persist_model, scaffold_model,
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request,
+        ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
     },
 };
 
@@ -27,6 +27,7 @@ use crate::{
 /// the workspace and checkpoint once at construction, preserving the same
 /// read-only default as [`crate::Session`].
 pub struct StatefulSession<W, C, A, T> {
+    project: ProjectContext,
     state: Mutex<crate::SessionState>,
     workspace: GatedWorkspace<W>,
     checkpoint: GatedCheckpoint<C>,
@@ -35,17 +36,19 @@ pub struct StatefulSession<W, C, A, T> {
 }
 
 impl<W, C, A, T> StatefulSession<W, C, A, T> {
-    /// Build a serialized service over the supplied model and adapters.
+    /// Build a serialized service over one immutable project and its adapters.
     pub fn new(
-        model: Model,
+        project: ProjectContext,
         workspace: W,
         checkpoint: C,
         calculator: A,
         toolchain: T,
         allow_writes: bool,
     ) -> Self {
+        let state = crate::SessionState::new(project.clone());
         Self {
-            state: Mutex::new(crate::SessionState::new(model)),
+            project,
+            state: Mutex::new(state),
             workspace: GatedWorkspace {
                 workspace,
                 allow_writes,
@@ -62,15 +65,16 @@ impl<W, C, A, T> StatefulSession<W, C, A, T> {
 
 impl StatefulSession<FsWorkspace, GitCheckpoint, theseus_calculator::Calculator, CargoToolchain> {
     /// Theseus's repository-rooted server composition.
-    pub fn at_repo_root(allow_writes: bool) -> Self {
-        Self::new(
-            theseus_model::theseus_model(),
-            FsWorkspace::at_repo_root(),
-            GitCheckpoint::at_repo_root(),
+    pub fn at_repo_root(allow_writes: bool) -> Result<Self, ProjectContextError> {
+        let project = crate::theseus_project()?;
+        Ok(Self::new(
+            project.clone(),
+            FsWorkspace::for_project(&project),
+            GitCheckpoint::for_project(project.clone()),
             theseus_calculator::Calculator,
-            CargoToolchain,
+            CargoToolchain::for_project(&project),
             allow_writes,
-        )
+        ))
     }
 }
 
@@ -84,6 +88,7 @@ where
     fn ctx<'a>(&'a self, model: &'a Model) -> Ctx<'a> {
         Ctx {
             model,
+            project: &self.project,
             workspace: &self.workspace,
             checkpoint: &self.checkpoint,
             calculator: &self.calculator,
@@ -113,6 +118,7 @@ where
     async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
         let mut state = self.state.lock().await;
         let files = generate_model(
+            &self.project,
             &state.working,
             &state.persisted,
             &self.workspace,
@@ -135,6 +141,7 @@ where
         if let Some(proposed) = proposed {
             if write {
                 persist_model(
+                    &self.project,
                     &state.persisted,
                     &proposed,
                     &self.workspace,
@@ -156,6 +163,7 @@ where
     async fn implement(&self, request: ImplementRequest) -> anyhow::Result<crate::ImplementResult> {
         let state = self.state.lock().await;
         implement_model(
+            &self.project,
             &state.working,
             &state.persisted,
             request,
@@ -183,6 +191,7 @@ where
     async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
         let mut state = self.state.lock().await;
         let files = scaffold_model(
+            &self.project,
             &state.working,
             &state.persisted,
             &self.workspace,
@@ -205,13 +214,15 @@ where
 
     async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
-        let plan = checkpoint_snapshot_request(&state.persisted, request.label)?;
+        ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
+        let plan = checkpoint_snapshot_request(&self.project, &state.persisted, request.label)?;
         Ok(self.checkpoint.snapshot(&plan).await?.reference)
     }
 
     async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let mut state = self.state.lock().await;
-        let plan = checkpoint_state_request(&state.persisted, request.reference)?;
+        ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
+        let plan = checkpoint_state_request(&self.project, &state.persisted, request.reference)?;
         let restored = self.checkpoint.restore(&plan).await?;
         state.adopt_rollback(restored.model);
         Ok(restored.detail)
@@ -219,17 +230,20 @@ where
 
     async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let state = self.state.lock().await;
-        let plan = checkpoint_state_request(&state.persisted, request.reference)?;
+        ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
+        let plan = checkpoint_state_request(&self.project, &state.persisted, request.reference)?;
         self.checkpoint.diff(&plan).await
     }
 
     async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let _state = self.state.lock().await;
+        ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         self.checkpoint.release(&request.reference).await
     }
 
     async fn prune(&self, request: crate::SnapshotRetention) -> anyhow::Result<String> {
         let _state = self.state.lock().await;
+        ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         self.checkpoint.prune(&request).await
     }
 
@@ -263,21 +277,37 @@ mod tests {
 
     use super::*;
 
+    fn project() -> ProjectContext {
+        crate::theseus_project().expect("Theseus project context is valid")
+    }
+
     struct NoopWorkspace;
 
     #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {}
+    impl Workspace for NoopWorkspace {
+        async fn context(&self) -> anyhow::Result<ProjectContext> {
+            Ok(project())
+        }
+    }
 
     struct StubCheckpoint;
 
     #[async_trait::async_trait]
-    impl Checkpoint for StubCheckpoint {}
+    impl Checkpoint for StubCheckpoint {
+        async fn context(&self) -> anyhow::Result<ProjectContext> {
+            Ok(project())
+        }
+    }
 
     #[derive(Default)]
     struct ModelCheckpoint(std::sync::Mutex<Option<Model>>);
 
     #[async_trait::async_trait]
     impl Checkpoint for ModelCheckpoint {
+        async fn context(&self) -> anyhow::Result<ProjectContext> {
+            Ok(project())
+        }
+
         async fn snapshot(
             &self,
             request: &crate::CheckpointSnapshotRequest,
@@ -308,7 +338,11 @@ mod tests {
     struct StubToolchain;
 
     #[async_trait::async_trait]
-    impl Toolchain for StubToolchain {}
+    impl Toolchain for StubToolchain {
+        async fn context(&self) -> anyhow::Result<ProjectContext> {
+            Ok(project())
+        }
+    }
 
     type TestSession = StatefulSession<
         NoopWorkspace,
@@ -319,7 +353,7 @@ mod tests {
 
     fn session() -> TestSession {
         StatefulSession::new(
-            theseus_model(),
+            project(),
             NoopWorkspace,
             StubCheckpoint,
             theseus_calculator::Calculator,
@@ -397,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn rollback_adopts_the_snapshot_model_in_the_stateful_session() {
         let service = StatefulSession::new(
-            theseus_model(),
+            project(),
             NoopWorkspace,
             ModelCheckpoint::default(),
             theseus_calculator::Calculator,

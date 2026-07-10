@@ -76,19 +76,31 @@ mod tests {
     struct NoopWorkspace;
 
     #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {}
+    impl Workspace for NoopWorkspace {
+        async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+            Ok(theseus::theseus_project()?)
+        }
+    }
 
     /// A checkpoint on its trait defaults, for handlers that never snapshot.
     struct StubCheckpoint;
 
     #[async_trait::async_trait]
-    impl theseus::Checkpoint for StubCheckpoint {}
+    impl theseus::Checkpoint for StubCheckpoint {
+        async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+            Ok(theseus::theseus_project()?)
+        }
+    }
 
     /// A toolchain that reports success without running a build.
     struct StubToolchain;
 
     #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
+        async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+            Ok(theseus::theseus_project()?)
+        }
+
         async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
             Ok(theseus::CheckReport::success(
                 "the workspace compiles (stub)",
@@ -103,12 +115,14 @@ mod tests {
     #[tokio::test]
     async fn a_result_is_200() {
         let model = theseus_model();
+        let project = theseus::theseus_project().unwrap();
         let workspace = GatedWorkspace {
             workspace: &NoopWorkspace,
             allow_writes: false,
         };
         let ctx = theseus::Ctx {
             model: &model,
+            project: &project,
             workspace: &workspace,
             checkpoint: &StubCheckpoint,
             calculator: &theseus_calculator::Calculator,
@@ -143,12 +157,14 @@ mod tests {
     #[tokio::test]
     async fn a_refused_write_is_403() {
         let model = theseus_model();
+        let project = theseus::theseus_project().unwrap();
         let workspace = GatedWorkspace {
             workspace: &NoopWorkspace,
             allow_writes: false,
         };
         let ctx = theseus::Ctx {
             model: &model,
+            project: &project,
             workspace: &workspace,
             checkpoint: &StubCheckpoint,
             calculator: &theseus_calculator::Calculator,
@@ -166,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_patch_updates_the_model_used_by_the_next_http_call() {
-        let service = StatefulSession::at_repo_root(false);
+        let service = StatefulSession::at_repo_root(false).unwrap();
         let patch = handle(
             &service,
             "patch",

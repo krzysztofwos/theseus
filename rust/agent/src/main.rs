@@ -26,18 +26,20 @@ use agent::{
     save_transcript,
 };
 use generated::Llm;
-use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session, workspace_root};
-use theseus_model::theseus_model;
+use theseus::{
+    CargoToolchain, FsWorkspace, GitCheckpoint, Session, theseus_project, workspace_root,
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let (mode, allow_writes) = parse_args()?;
-    let workspace = FsWorkspace::at_repo_root();
-    let checkpoint = GitCheckpoint::at_repo_root();
+    let project = theseus_project()?;
+    let workspace = FsWorkspace::for_project(&project);
+    let checkpoint = GitCheckpoint::for_project(project.clone());
     let calculator = theseus_calculator::Calculator;
-    let toolchain = CargoToolchain;
+    let toolchain = CargoToolchain::for_project(&project);
     let mut session = Session::new(
-        theseus_model(),
+        project,
         &workspace,
         &checkpoint,
         &calculator,

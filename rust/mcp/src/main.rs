@@ -10,14 +10,13 @@ mod server;
 
 use anyhow::Context;
 use rmcp::{ServiceExt, transport};
-use theseus_model::theseus_model;
 
 use crate::server::TheseusMcp;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let allow_writes = std::env::args().skip(1).any(|arg| arg == "--allow-writes");
-    let server = TheseusMcp::new(theseus_model(), allow_writes);
+    let server = TheseusMcp::new(theseus::theseus_project()?, allow_writes);
     let running = server
         .serve(transport::stdio())
         .await

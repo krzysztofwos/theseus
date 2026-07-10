@@ -34,6 +34,8 @@ const JOURNAL_VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_STATE_BYTES: u64 = 64;
 const MAX_BACKUP_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_TOTAL_BACKUP_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_MUTATION_PATHS: usize = 100_000;
 
 /// The persisted state expected for one model-owned workspace path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -404,6 +406,7 @@ impl MutationCore {
             let mut entries = Vec::with_capacity(files.len());
             let mut created_dirs = Vec::new();
             let mut known_created_dirs = HashSet::new();
+            let mut total_backup_bytes = 0u64;
             let declared_paths: HashSet<&str> =
                 files.iter().map(|file| file.path.as_str()).collect();
             for (index, file) in files.iter().enumerate() {
@@ -443,6 +446,10 @@ impl MutationCore {
                 }
                 let entry = match read_target_backup(&target, &file.path)? {
                     Some(backup_contents) => {
+                        total_backup_bytes = checked_backup_total(
+                            total_backup_bytes,
+                            backup_contents.contents.len() as u64,
+                        )?;
                         write_private(&preparing.join(&backup), &backup_contents.contents)?;
                         JournalEntry {
                             path: file.path.clone(),
@@ -757,6 +764,10 @@ pub enum MutationError {
         length: u64,
         maximum: u64,
     },
+    #[error("mutation backups total {length} bytes; the maximum is {maximum}")]
+    BackupSetTooLarge { length: u64, maximum: u64 },
+    #[error("mutation declares {length} paths; the maximum is {maximum}")]
+    TooManyPaths { length: usize, maximum: usize },
     #[error("the mutation write set was already applied")]
     AlreadyApplied,
     #[error(
@@ -818,6 +829,12 @@ fn validate_expected_set(files: &[ExpectedFile]) -> Result<(), MutationError> {
 
 fn validate_paths<'a>(paths: impl Iterator<Item = &'a str>) -> Result<(), MutationError> {
     let paths: Vec<&str> = paths.collect();
+    if paths.len() > MAX_MUTATION_PATHS {
+        return Err(MutationError::TooManyPaths {
+            length: paths.len(),
+            maximum: MAX_MUTATION_PATHS,
+        });
+    }
     let mut seen = HashSet::with_capacity(paths.len());
     let mut seen_folded = HashSet::with_capacity(paths.len());
     let mut parsed: Vec<(String, WorkspacePath)> = Vec::with_capacity(paths.len());
@@ -830,39 +847,40 @@ fn validate_paths<'a>(paths: impl Iterator<Item = &'a str>) -> Result<(), Mutati
                 path: path.to_string(),
             });
         }
-        for (other_path, other) in &parsed {
-            if relative.as_path().starts_with(other.as_path()) {
-                return Err(MutationError::OverlappingPaths {
-                    ancestor: other_path.clone(),
-                    descendant: path.to_string(),
-                });
-            }
-            if other.as_path().starts_with(relative.as_path()) {
-                return Err(MutationError::OverlappingPaths {
-                    ancestor: path.to_string(),
-                    descendant: other_path.clone(),
-                });
-            }
-        }
         let folded_path = PathBuf::from(&folded);
-        for (other_path, other) in &parsed_folded {
-            if folded_path.starts_with(other) {
-                return Err(MutationError::OverlappingPaths {
-                    ancestor: other_path.clone(),
-                    descendant: path.to_string(),
-                });
-            }
-            if other.starts_with(&folded_path) {
-                return Err(MutationError::OverlappingPaths {
-                    ancestor: path.to_string(),
-                    descendant: other_path.clone(),
-                });
-            }
-        }
         parsed.push((path.to_string(), relative));
         parsed_folded.push((path.to_string(), folded_path));
     }
+    parsed.sort_by(|left, right| left.1.as_path().cmp(right.1.as_path()));
+    for pair in parsed.windows(2) {
+        if pair[1].1.as_path().starts_with(pair[0].1.as_path()) {
+            return Err(MutationError::OverlappingPaths {
+                ancestor: pair[0].0.clone(),
+                descendant: pair[1].0.clone(),
+            });
+        }
+    }
+    parsed_folded.sort_by(|left, right| left.1.cmp(&right.1));
+    for pair in parsed_folded.windows(2) {
+        if pair[1].1.starts_with(&pair[0].1) {
+            return Err(MutationError::OverlappingPaths {
+                ancestor: pair[0].0.clone(),
+                descendant: pair[1].0.clone(),
+            });
+        }
+    }
     Ok(())
+}
+
+fn checked_backup_total(total: u64, length: u64) -> Result<u64, MutationError> {
+    let total = total.saturating_add(length);
+    if total > MAX_TOTAL_BACKUP_BYTES {
+        return Err(MutationError::BackupSetTooLarge {
+            length: total,
+            maximum: MAX_TOTAL_BACKUP_BYTES,
+        });
+    }
+    Ok(total)
 }
 
 #[cfg(unix)]
@@ -892,13 +910,12 @@ fn parse_path(path: &str) -> Result<WorkspacePath, MutationError> {
         reason: "path must be normalized and relative to the repository",
     })?;
     if relative.components().next().is_some_and(|component| {
-        component
-            .to_string_lossy()
-            .eq_ignore_ascii_case(CONTROL_DIR)
+        let component = component.to_string_lossy();
+        component.eq_ignore_ascii_case(CONTROL_DIR) || component.eq_ignore_ascii_case(".git")
     }) {
         return Err(MutationError::UnsafeTarget {
             path: path.to_owned(),
-            reason: "the .theseus control directory is reserved",
+            reason: "the .theseus control directory and .git metadata are reserved",
         });
     }
     Ok(relative)
@@ -1994,6 +2011,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn aggregate_resource_limits_fail_before_journal_publication() {
+        assert_eq!(
+            checked_backup_total(MAX_TOTAL_BACKUP_BYTES - 1, 1).unwrap(),
+            MAX_TOTAL_BACKUP_BYTES
+        );
+        assert!(matches!(
+            checked_backup_total(MAX_TOTAL_BACKUP_BYTES, 1),
+            Err(MutationError::BackupSetTooLarge { .. })
+        ));
+        assert!(matches!(
+            validate_paths(std::iter::repeat_n("file.rs", MAX_MUTATION_PATHS + 1)),
+            Err(MutationError::TooManyPaths { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn commit_keeps_the_complete_batch_and_cleans_the_journal() {
         let repository = TestRepository::new();
@@ -2388,6 +2421,14 @@ mod tests {
             mutation
                 .apply(&[generated(".THESEUS/state", "changed")])
                 .await,
+            Err(MutationError::UnsafeTarget { .. })
+        ));
+        assert!(matches!(
+            mutation.apply(&[generated(".git/config", "changed")]).await,
+            Err(MutationError::UnsafeTarget { .. })
+        ));
+        assert!(matches!(
+            mutation.apply(&[generated(".GIT/index", "changed")]).await,
             Err(MutationError::UnsafeTarget { .. })
         ));
         mutation.commit().expect("lease is released");

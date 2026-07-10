@@ -6,6 +6,7 @@ description = "The journal's model of record — a second adopter of the Theseus
 
 [dependencies]
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 
 theseus-modeling = { path = "../../../../rust/modeling" }

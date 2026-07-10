@@ -1,7 +1,7 @@
 //! The journal's projection binary: write the crate skeletons that are missing
-//! and every generated file, straight from the model. The adopter's analog of
-//! `theseus scaffold` + `theseus generate`, standing only on the engine and
-//! this model.
+//! and every generated file, straight from the model record. The adopter's
+//! analog of `theseus scaffold` + `theseus generate`, standing only on the
+//! engine and this model.
 
 use journal_model::{generated_files, journal_model, workspace_root};
 use theseus_workspace::{FsMutation, MutationFile};

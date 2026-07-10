@@ -1,0 +1,124 @@
+{
+  "name": "Journal",
+  "crates": [
+    {
+      "name": "journal-model",
+      "dir": "model",
+      "layer": 0,
+      "depends_on": []
+    },
+    {
+      "name": "journal",
+      "dir": "journal",
+      "layer": 1,
+      "depends_on": []
+    },
+    {
+      "name": "journal-cli",
+      "dir": "cli",
+      "layer": 2,
+      "depends_on": [
+        "journal",
+        "journal-model"
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "AddRequest",
+      "shape": {
+        "Struct": [
+          {
+            "name": "text",
+            "ty": "String",
+            "doc": "The entry to record."
+          }
+        ]
+      }
+    },
+    {
+      "name": "SearchRequest",
+      "shape": {
+        "Struct": [
+          {
+            "name": "term",
+            "ty": "String",
+            "doc": "The text to look for."
+          }
+        ]
+      }
+    }
+  ],
+  "services": [
+    {
+      "name": "Journal",
+      "crate_name": "journal",
+      "operations": [
+        {
+          "name": "add",
+          "summary": "Record one journal entry.",
+          "request": "AddRequest",
+          "response": "String",
+          "uses": [
+            "store"
+          ],
+          "tool": null
+        },
+        {
+          "name": "list",
+          "summary": "Print every journal entry.",
+          "request": "Empty",
+          "response": "String",
+          "uses": [
+            "store"
+          ],
+          "tool": null
+        },
+        {
+          "name": "search",
+          "summary": "Print the entries containing a term.",
+          "request": "SearchRequest",
+          "response": "String",
+          "uses": [
+            "store"
+          ],
+          "tool": null
+        }
+      ],
+      "outbound": [
+        {
+          "name": "store",
+          "summary": "Persists the journal's entries.",
+          "target": null,
+          "methods": [
+            {
+              "name": "append",
+              "summary": "Append one entry.",
+              "request": "String",
+              "response": "Empty",
+              "gated": false
+            },
+            {
+              "name": "read_all",
+              "summary": "Read every entry.",
+              "request": "Empty",
+              "response": "String",
+              "gated": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inbounds": [
+    {
+      "name": "journal",
+      "transport": "Cli",
+      "service": "Journal",
+      "crate_name": "journal-cli",
+      "outbound": [],
+      "turns": null
+    }
+  ],
+  "clients": []
+}

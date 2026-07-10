@@ -11,20 +11,28 @@ Mutation safety also moved from a backlog item into the runtime contract:
 - `patch --write`, `generate`, `scaffold`, and `implement` declare one path set, acquire an OS repository lease, verify the persisted projection, publish through a durable WAL, and compile-check before commit.
 - Failed checks, canceled applies, dropped transactions, and killed prepared writers restore the declared files; successful commits retain generated-file deletions and `Cargo.lock` updates as part of the same batch.
 - The recovery bootstrap and the journal adopter's projector use the same lower-level transaction crate instead of sequential writes.
-- Long-lived sessions distinguish speculative and persisted models. Known rollback IDs restore both; unknown IDs are rejected before the checkpoint adapter is called.
-- Snapshots are bounded, pinned under `refs/theseus/snapshots/`, survive Git GC, and share the repository lease.
+- Long-lived sessions distinguish speculative and persisted models. A checkpoint stores the persisted model, and rollback adopts it only after the WAL restore commits.
+- Snapshots hash raw bytes without Git filters, preserve supported Unix regular-file modes and symlinks, and inventory tracked paths plus exact model-owned present or absent state. Restore unions the snapshot and current inventories so removed tracked or model-owned files become tombstones without broad cleaning.
+- Every snapshot is a distinct immutable commit pinned under `refs/theseus/snapshots/<full-object-id>` with a transactional companion ref that orders retained snapshots deterministically, survives Git GC, and remains until an explicit `release` or `prune`; creation never evicts another session's recovery point. A second lease in the canonical Git object database serializes linked worktrees that share those refs and objects.
+- `diff` uses the same raw-tree comparison, including permission-only changes. It returns a bounded, escaped Git-style diff and requires write permission because its temporary comparison tree writes Git objects.
 
 ### Current order
 
-1. **Finish checkpoint semantics.** Capture only model-owned untracked paths without broad `git clean`, restore tracked paths through a crash-recoverable plan, and add snapshot release/retention so private refs do not grow forever.
-2. **Root sessions in foreign adopters.** Thread an explicit workspace root, model of record, and path policy through handlers and adapters; then drive the journal-class workflow from the agent rather than its standalone projector.
-3. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
+1. **Root sessions in foreign adopters.** Thread an explicit workspace root, model of record, and path policy through handlers and adapters; then drive the journal-class workflow from the agent rather than its standalone projector.
+2. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
+3. **Make server bootstrap explicit.** The agent's `restart` rebuilds and resumes its transcript, but starting an already-built HTTP, gRPC, or MCP binary still initializes from that binary's compiled model. Process-managed restarts must rebuild first until the model of record is durable startup input.
 
 ### Explicit boundaries
 
 - Workspace WAL support is Unix-only. It protects against malformed paths and corrupt internal files, not a hostile same-account process racing pathname components; closing that requires fd-relative traversal and publication.
 - Drop-time rollback is synchronous but cannot report a rollback error to the canceled caller. The next lease retries recovery and fails closed if recovery remains impossible.
-- Git rollback is still tracked-only and Git's multi-file restore is not WAL-backed. A rollback can leave new untracked scaffold files, and power loss during restore is not transactionally repaired.
+- Snapshot manifests use a strict versioned schema. Version one freezes all nested model shapes and its ownership derivation behind explicit conversions and a golden fixture; unknown fields or versions fail closed. Current limits are 4 MiB per manifest, 64 MiB per blob, 256 MiB in aggregate, 4,096 paths, and 1,024 retained snapshots.
+- Raw contents and Unix symlink targets may be non-text, but Git workspace paths must be UTF-8. Submodules, unmerged index entries, and tree modes other than regular files or symlinks are unsupported.
+- Exact regular-file restoration covers Unix permission bits, not ownership, ACLs, extended attributes, or timestamps. Unrelated untracked files are intentionally outside the checkpoint inventory.
+- Model ownership is scoped to the snapshot and current persisted models, not a permanent provenance ledger. Once neither model declares an untracked path, later checkpoints intentionally treat it as unrelated.
+- `diff` is not a read-only filesystem operation: it creates a temporary index and private alternate Git object store under the repository lease, so the modeled write gate applies even though it does not change source paths. Invalid UTF-8 and non-layout control bytes are escaped in the returned string; stale quarantine stores are removed by the next snapshot or diff.
+- Snapshot objects are quarantined until their commit is complete, and interrupted cross-device promotion copies are recovered from a private primary-side directory. A crash, cancellation, or late failure in the narrow promotion-before-ref window can still leave valid unreachable loose objects for ordinary Git garbage collection.
+- Rollback adopts the snapshot model in the live session after commit. Source changes become executable only after the inbound rebuilds; only the agent loop currently owns a rebuild-and-resume handoff.
 - Cargo commands hold the repository lease and ordinary checks use `--locked`, but the harness trusts build scripts and descendants not to keep mutating source after their direct Cargo child is canceled.
 
 The remainder of this document is the original roadmap and rationale. It is retained because the foreign-adopter analysis still describes the next product milestone.

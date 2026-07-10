@@ -10,6 +10,7 @@ use theseus_modeling::{
     GeneratedFile, Model, RenderError, Service, Transport, render_model_source,
     render_module_for_crate, render_proto, scaffold_files,
 };
+use theseus_workspace::{ExpectedFile, ExpectedFileSet};
 
 /// The self-model source file, relative to the workspace root. It is the model's
 /// own projection — `generate` and `patch` reproject it.
@@ -85,6 +86,22 @@ pub fn checkpoint_paths(model: &Model) -> Result<Vec<String>, RenderError> {
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+/// The exact generated revision a checkpoint plan must observe after taking the
+/// repository lease. Generated files for crates not yet scaffolded are expected
+/// to remain absent.
+pub fn checkpoint_expectations(
+    root: &std::path::Path,
+    model: &Model,
+) -> Result<ExpectedFileSet, RenderError> {
+    Ok(generated_files(model)?
+        .into_iter()
+        .map(|file| ExpectedFile {
+            contents: crate_is_scaffolded(root, &file).then_some(file.contents),
+            path: file.path,
+        })
+        .collect())
 }
 
 /// Whether a generated file's crate is scaffolded — has a `Cargo.toml` on disk.

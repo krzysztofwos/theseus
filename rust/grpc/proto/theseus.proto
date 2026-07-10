@@ -201,4 +201,6 @@ service Theseus {
   rpc Search (SearchRequest) returns (String);
   // List a workspace directory.
   rpc List (ListRequest) returns (String);
+  // Run clippy across the workspace with warnings denied.
+  rpc Lint (Empty) returns (CheckReport);
 }

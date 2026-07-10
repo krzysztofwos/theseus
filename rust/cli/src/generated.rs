@@ -256,6 +256,10 @@ pub fn command() -> Command {
                         ),
                 ),
         )
+        .subcommand(
+            Command::new("lint")
+                .about("Run clippy across the workspace with warnings denied."),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -370,6 +374,7 @@ pub enum Invocation {
     Read(theseus::ReadRequest),
     Search(theseus::SearchRequest),
     List(theseus::ListRequest),
+    Lint,
 }
 
 impl Invocation {
@@ -399,6 +404,7 @@ impl Invocation {
             Some(("read", sub)) => Ok(Invocation::Read(parse_read_request(sub)?)),
             Some(("search", sub)) => Ok(Invocation::Search(parse_search_request(sub)?)),
             Some(("list", sub)) => Ok(Invocation::List(parse_list_request(sub)?)),
+            Some(("lint", _)) => Ok(Invocation::Lint),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -455,6 +461,7 @@ pub async fn dispatch(
         Invocation::Read(request) => println!("{}", service.read(request). await ?),
         Invocation::Search(request) => println!("{}", service.search(request). await ?),
         Invocation::List(request) => println!("{}", service.list(request). await ?),
+        Invocation::Lint => println!("{}", service.lint(). await ?),
     }
     Ok(())
 }

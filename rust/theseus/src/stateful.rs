@@ -165,6 +165,11 @@ where
         self.ctx(&model).test().await
     }
 
+    async fn lint(&self) -> anyhow::Result<String> {
+        let model = self.model.lock().await;
+        self.ctx(&model).lint().await
+    }
+
     async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
         let model = self.model.lock().await;
         self.ctx(&model).snapshot(request).await

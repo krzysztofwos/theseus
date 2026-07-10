@@ -300,6 +300,31 @@ pub struct CargoToolchain;
 
 #[async_trait::async_trait]
 impl Toolchain for CargoToolchain {
+    async fn lint(&self) -> anyhow::Result<String> {
+        let output = tokio::process::Command::new("cargo")
+            .args(["clippy", "--workspace", "--quiet", "--", "-D", "warnings"])
+            .current_dir(workspace_root())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("running `cargo clippy --workspace -- -D warnings`")?;
+        // clippy emits diagnostics to stderr
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        Ok(if output.status.success() {
+            if diagnostics.is_empty() {
+                "clippy: no warnings or errors".to_string()
+            } else {
+                format!("clippy: clean (with notes):\n{}", crate::head(diagnostics))
+            }
+        } else {
+            format!(
+                "clippy: warnings or errors found:\n{}",
+                crate::head(diagnostics)
+            )
+        })
+    }
+
     async fn test(&self) -> anyhow::Result<String> {
         let output = tokio::process::Command::new("cargo")
             .args(["test", "--workspace", "--quiet"])

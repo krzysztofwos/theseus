@@ -260,6 +260,7 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
+        "lint" => reply_text(service.lint().await),
         other => {
             HttpReply {
                 status: 404,

@@ -27,6 +27,10 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn lint(&self) -> anyhow::Result<String> {
+        self.toolchain.lint().await
+    }
+
     async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<String> {
         let path = rooted(&request.path)?;
         let text = tokio::fs::read_to_string(&path)

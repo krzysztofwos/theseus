@@ -467,6 +467,16 @@ pub fn theseus_model() -> Model {
                 .tool(
                     "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
                 )
+                .operation(
+                    "lint",
+                    "Run clippy across the workspace with warnings denied.",
+                    "Empty",
+                    "CheckReport",
+                )
+                .uses(&["toolchain"])
+                .tool(
+                    "Run clippy across the workspace with warnings denied and report the outcome.",
+                )
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
@@ -520,6 +530,12 @@ pub fn theseus_model() -> Model {
                         .method(
                             "test",
                             "Run the workspace tests and report the outcome.",
+                            "Empty",
+                            "CheckReport",
+                        )
+                        .method(
+                            "lint",
+                            "Run clippy across the workspace with warnings denied and report the outcome.",
                             "Empty",
                             "CheckReport",
                         ),

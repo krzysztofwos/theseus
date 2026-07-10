@@ -73,6 +73,11 @@ pub trait Toolchain: Send + Sync {
     async fn test(&self) -> anyhow::Result<String> {
         Err(Unimplemented("toolchain.test").into())
     }
+
+    /// Run clippy across the workspace with warnings denied and report the outcome.
+    async fn lint(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("toolchain.lint").into())
+    }
 }
 
 /// A borrowed adapter serves the port its target serves, so a wrapper
@@ -85,6 +90,10 @@ impl<T: Toolchain + ?Sized> Toolchain for &T {
 
     async fn test(&self) -> anyhow::Result<String> {
         (**self).test().await
+    }
+
+    async fn lint(&self) -> anyhow::Result<String> {
+        (**self).lint().await
     }
 }
 
@@ -366,6 +375,11 @@ pub trait TheseusService: Send + Sync {
     async fn list(&self, _request: ListRequest) -> anyhow::Result<String> {
         Err(Unimplemented("list").into())
     }
+
+    /// Run clippy across the workspace with warnings denied.
+    async fn lint(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("lint").into())
+    }
 }
 
 /// An owned composition root: the service over one owned adapter per port,
@@ -496,6 +510,10 @@ for Standalone<
     async fn list(&self, request: ListRequest) -> anyhow::Result<String> {
         self.ctx().list(request).await
     }
+
+    async fn lint(&self) -> anyhow::Result<String> {
+        self.ctx().lint().await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -577,7 +595,9 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         serde_json::json!({ "name" : "list", "description" :
         "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
-        "string" } } } })
+        "string" } } } }), serde_json::json!({ "name" : "lint", "description" :
+        "Run clippy across the workspace with warnings denied and report the outcome.",
+        "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -761,9 +781,10 @@ pub async fn dispatch_tool(
         "read" => Ok(service.read(parse_read_request_input(input)?).await?),
         "search" => Ok(service.search(parse_search_request_input(input)?).await?),
         "list" => Ok(service.list(parse_list_request_input(input)?).await?),
+        "lint" => Ok(service.lint().await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart, read, search, list"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart, read, search, list, lint"
             )
         }
     }

@@ -62,7 +62,6 @@ mod tests {
     use serde_json::json;
     use theseus::{GatedWorkspace, StatefulSession, TheseusService, Toolchain, Workspace};
     use theseus_model::theseus_model;
-    use theseus_modeling::GeneratedFile;
 
     use crate::generated::handle;
 
@@ -77,11 +76,7 @@ mod tests {
     struct NoopWorkspace;
 
     #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {
-        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    impl Workspace for NoopWorkspace {}
 
     /// A checkpoint on its trait defaults, for handlers that never snapshot.
     struct StubCheckpoint;
@@ -98,6 +93,10 @@ mod tests {
             Ok(theseus::CheckReport::success(
                 "the workspace compiles (stub)",
             ))
+        }
+
+        async fn check_mutation(&self) -> anyhow::Result<theseus::CheckReport> {
+            self.check().await
         }
     }
 

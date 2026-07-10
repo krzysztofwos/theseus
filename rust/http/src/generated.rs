@@ -204,7 +204,7 @@ pub async fn handle(
         "coverage" => reply_json(service.coverage().await),
         "implement" => {
             match parse_implement_request_http(input) {
-                Ok(request) => reply_text(service.implement(request).await),
+                Ok(request) => reply_json(service.implement(request).await),
                 Err(error) => error_body(400, &error),
             }
         }

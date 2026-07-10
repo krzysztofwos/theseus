@@ -439,7 +439,10 @@ pub async fn dispatch(
             println!("{}", serde_json::to_string_pretty(& service.coverage(). await ?) ?)
         }
         Invocation::Implement(request) => {
-            println!("{}", service.implement(request). await ?)
+            println!(
+                "{}", serde_json::to_string_pretty(& service.implement(request). await ?)
+                ?
+            )
         }
         Invocation::Show(request) => println!("{}", service.show(request). await ?),
         Invocation::Check => {

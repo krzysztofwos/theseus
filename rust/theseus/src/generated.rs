@@ -4,12 +4,12 @@
 /// Writes generated files into the workspace.
 #[async_trait::async_trait]
 pub trait Workspace: Send + Sync {
-    /// Write one generated file to disk.
-    async fn write_file(
+    /// Acquire the repository write lease and open a recoverable mutation after checking the expected generated revision.
+    async fn begin_mutation(
         &self,
-        _request: &theseus_modeling::GeneratedFile,
-    ) -> anyhow::Result<()> {
-        Err(Unimplemented("workspace.write_file").into())
+        _request: &theseus::ExpectedFileSet,
+    ) -> anyhow::Result<theseus::PendingMutation> {
+        Err(Unimplemented("workspace.begin_mutation").into())
     }
 }
 
@@ -17,11 +17,11 @@ pub trait Workspace: Send + Sync {
 /// generic over the port holds a borrow as readily as an owned adapter.
 #[async_trait::async_trait]
 impl<T: Workspace + ?Sized> Workspace for &T {
-    async fn write_file(
+    async fn begin_mutation(
         &self,
-        request: &theseus_modeling::GeneratedFile,
-    ) -> anyhow::Result<()> {
-        (**self).write_file(request).await
+        request: &theseus::ExpectedFileSet,
+    ) -> anyhow::Result<theseus::PendingMutation> {
+        (**self).begin_mutation(request).await
     }
 }
 
@@ -69,6 +69,11 @@ pub trait Toolchain: Send + Sync {
         Err(Unimplemented("toolchain.check").into())
     }
 
+    /// Compile-check an already leased workspace mutation, allowing its journal to cover lockfile updates.
+    async fn check_mutation(&self) -> anyhow::Result<theseus::CheckReport> {
+        Err(Unimplemented("toolchain.check_mutation").into())
+    }
+
     /// Run the workspace tests and report the outcome.
     async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("toolchain.test").into())
@@ -86,6 +91,10 @@ pub trait Toolchain: Send + Sync {
 impl<T: Toolchain + ?Sized> Toolchain for &T {
     async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         (**self).check().await
+    }
+
+    async fn check_mutation(&self) -> anyhow::Result<theseus::CheckReport> {
+        (**self).check_mutation().await
     }
 
     async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
@@ -107,14 +116,14 @@ pub struct GatedWorkspace<A> {
 
 #[async_trait::async_trait]
 impl<A: Workspace> Workspace for GatedWorkspace<A> {
-    async fn write_file(
+    async fn begin_mutation(
         &self,
-        request: &theseus_modeling::GeneratedFile,
-    ) -> anyhow::Result<()> {
+        request: &theseus::ExpectedFileSet,
+    ) -> anyhow::Result<theseus::PendingMutation> {
         if !self.allow_writes {
             return Err(Refused.into());
         }
-        self.workspace.write_file(request).await
+        self.workspace.begin_mutation(request).await
     }
 }
 
@@ -129,6 +138,9 @@ pub struct GatedCheckpoint<A> {
 #[async_trait::async_trait]
 impl<A: Checkpoint> Checkpoint for GatedCheckpoint<A> {
     async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
         self.checkpoint.snapshot(request).await
     }
 
@@ -312,7 +324,10 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Splice an authored handler or adapter method and compile-check it.
-    async fn implement(&self, _request: ImplementRequest) -> anyhow::Result<String> {
+    async fn implement(
+        &self,
+        _request: ImplementRequest,
+    ) -> anyhow::Result<theseus::ImplementResult> {
         Err(Unimplemented("implement").into())
     }
 
@@ -459,7 +474,10 @@ for Standalone<
         self.ctx().coverage().await
     }
 
-    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
+    async fn implement(
+        &self,
+        request: ImplementRequest,
+    ) -> anyhow::Result<theseus::ImplementResult> {
         self.ctx().implement(request).await
     }
 
@@ -533,7 +551,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : { "find" : { "type" :
         "string" }, "node" : { "type" : "string" }, "kind" : { "type" : "string" } } }
         }), serde_json::json!({ "name" : "patch", "description" :
-        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects to disk.",
+        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects under a repository transaction and compile gate; a failed check restores the prior files.",
         "input_schema" : { "type" : "object", "properties" : { "edit" : { "type" :
         "array", "items" : { "oneOf" : [{ "type" : "object", "properties" : { "verb" : {
         "const" : "add" }, "parent" : { "type" : "string" }, "kind" : { "type" : "string"
@@ -564,7 +582,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "scaffold", "description" :
-        "Scaffold missing library service crates — writes the skeleton src/lib.rs and Cargo.toml for each service crate that does not yet have one.",
+        "Scaffold missing library service crates under a repository transaction and compile gate. A failed check restores the prior files and removes only paths the transaction created.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "test", "description" :
         "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
@@ -768,7 +786,11 @@ pub async fn dispatch_tool(
         }
         "coverage" => Ok(serde_json::to_string(&service.coverage().await?)?),
         "implement" => {
-            Ok(service.implement(parse_implement_request_input(input)?).await?)
+            Ok(
+                serde_json::to_string(
+                    &service.implement(parse_implement_request_input(input)?).await?,
+                )?,
+            )
         }
         "show" => Ok(service.show(parse_show_request_input(input)?).await?),
         "check" => Ok(serde_json::to_string(&service.check().await?)?),

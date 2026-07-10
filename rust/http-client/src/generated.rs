@@ -97,7 +97,7 @@ impl theseus::TheseusService for HttpTheseusClient {
     async fn implement(
         &self,
         request: theseus::ImplementRequest,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<theseus::ImplementResult> {
         let (status, body) = self
             .post(
                 "implement",
@@ -108,7 +108,7 @@ impl theseus::TheseusService for HttpTheseusClient {
             )
             .await?;
         checked("implement", status, &body)?;
-        Ok(body)
+        parsed("implement", &body)
     }
 
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {

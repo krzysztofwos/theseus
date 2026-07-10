@@ -15,7 +15,10 @@ mod adapters;
 mod agent;
 mod generated;
 
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use adapters::{AnthropicLlm, OfflineLlm};
 use agent::{
@@ -94,9 +97,9 @@ with `agent --resume` (the transcript is saved at {})",
                 );
             }
             Outcome::Restart(transcript) => match rebuild().await {
-                Ok(()) => {
+                Ok(executable) => {
                     save_transcript(&session_path(), &transcript)?;
-                    return Err(resume_exec(allow_writes));
+                    return Err(resume_exec(&executable, allow_writes));
                 }
                 Err(diagnostics) => {
                     messages =
@@ -109,27 +112,64 @@ with `agent --resume` (the transcript is saved at {})",
 
 /// Build the agent and its dependency graph, returning the compiler's output on
 /// failure. The child dies with a dropped future.
-async fn rebuild() -> Result<(), String> {
+async fn rebuild() -> Result<PathBuf, String> {
+    let lease = theseus::FsMutation::begin_async(workspace_root(), Vec::new())
+        .await
+        .map_err(|error| format!("locking the workspace for rebuild: {error}"))?;
     let output = tokio::process::Command::new("cargo")
-        .args(["build", "-p", "theseus-agent"])
+        .args([
+            "build",
+            "-p",
+            "theseus-agent",
+            "--locked",
+            "--message-format=json-render-diagnostics",
+        ])
         .current_dir(workspace_root())
         .kill_on_drop(true)
         .output()
         .await
         .map_err(|error| format!("running `cargo build`: {error}"))?;
     if output.status.success() {
-        return Ok(());
+        let executable = cargo_artifact(&output.stdout).ok_or_else(|| {
+            "cargo succeeded without reporting the rebuilt agent executable".to_string()
+        })?;
+        lease
+            .commit()
+            .map_err(|error| format!("finishing the rebuild lease: {error}"))?;
+        return Ok(executable);
     }
-    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    let diagnostics = cargo_diagnostics(&output.stdout, &output.stderr);
     Err(theseus::head(diagnostics.trim()))
+}
+
+fn cargo_artifact(stdout: &[u8]) -> Option<PathBuf> {
+    let mut artifacts = stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter(|message| message["target"]["name"] == "agent")
+        .filter_map(|message| message["executable"].as_str().map(PathBuf::from));
+    artifacts.next_back()
+}
+
+fn cargo_diagnostics(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut diagnostics: Vec<String> = stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .filter_map(|message| message["message"]["rendered"].as_str().map(str::to_owned))
+        .collect();
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.trim().is_empty() {
+        diagnostics.push(stderr.into_owned());
+    }
+    diagnostics.join("\n")
 }
 
 /// Replace this process with a fresh run of the agent, resuming the persisted
 /// session in the newly built binary. Returns only on failure to launch.
-fn resume_exec(allow_writes: bool) -> anyhow::Error {
+fn resume_exec(executable: &Path, allow_writes: bool) -> anyhow::Error {
     use std::os::unix::process::CommandExt;
-    let mut command = Command::new("cargo");
-    command.args(["run", "-p", "theseus-agent", "--"]);
+    let mut command = Command::new(executable);
     if allow_writes {
         command.arg("--allow-writes");
     }

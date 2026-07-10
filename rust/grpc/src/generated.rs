@@ -138,7 +138,12 @@ for GrpcTheseus<S> {
             })
             .await;
         match outcome {
-            Ok(value) => Ok(tonic::Response::new(proto::ImplementResult { value })),
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::ImplementResult { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
             Err(error) => Err(status(&error)),
         }
     }

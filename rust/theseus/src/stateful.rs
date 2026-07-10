@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 use crate::{
     CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedWorkspace, GitCheckpoint,
     ImplementRequest, ListRequest, PatchRequest, QueryRequest, ReadRequest, ShowRequest,
-    SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace, service::apply_patch,
-    session::persist,
+    SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace,
+    service::{apply_patch, generate_model, implement_model, persist_model, scaffold_model},
 };
 
 /// A long-lived service over one serialized working model.
@@ -24,7 +24,7 @@ use crate::{
 /// the workspace and checkpoint once at construction, preserving the same
 /// read-only default as [`crate::Session`].
 pub struct StatefulSession<W, C, A, T> {
-    model: Mutex<Model>,
+    state: Mutex<crate::SessionState>,
     workspace: GatedWorkspace<W>,
     checkpoint: GatedCheckpoint<C>,
     calculator: A,
@@ -42,7 +42,7 @@ impl<W, C, A, T> StatefulSession<W, C, A, T> {
         allow_writes: bool,
     ) -> Self {
         Self {
-            model: Mutex::new(model),
+            state: Mutex::new(crate::SessionState::new(model)),
             workspace: GatedWorkspace {
                 workspace,
                 allow_writes,
@@ -98,111 +98,146 @@ where
     T: Toolchain,
 {
     async fn model(&self) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).model().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).model().await
     }
 
     async fn verify(&self) -> anyhow::Result<VerifyReport> {
-        let model = self.model.lock().await;
-        self.ctx(&model).verify().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).verify().await
     }
 
     async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        let model = self.model.lock().await;
-        self.ctx(&model).generate().await
+        let mut state = self.state.lock().await;
+        let files = generate_model(
+            &state.working,
+            &state.persisted,
+            &self.workspace,
+            &self.toolchain,
+        )
+        .await?;
+        state.persisted = state.working.clone();
+        Ok(files)
     }
 
     async fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
-        let model = self.model.lock().await;
-        self.ctx(&model).query(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).query(request).await
     }
 
     async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
-        let mut model = self.model.lock().await;
+        let mut state = self.state.lock().await;
         let write = request.write;
-        let (outcome, proposed) = apply_patch(&model, &request)?;
+        let (outcome, proposed) = apply_patch(&state.working, &request)?;
         if let Some(proposed) = proposed {
             if write {
-                persist(&proposed, &self.workspace).await?;
+                persist_model(
+                    &state.persisted,
+                    &proposed,
+                    &self.workspace,
+                    &self.toolchain,
+                )
+                .await?;
+                state.persisted = proposed.clone();
             }
-            *model = proposed;
+            state.working = proposed;
         }
         Ok(outcome)
     }
 
     async fn coverage(&self) -> anyhow::Result<CoverageReport> {
-        let model = self.model.lock().await;
-        self.ctx(&model).coverage().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).coverage().await
     }
 
-    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).implement(request).await
+    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<crate::ImplementResult> {
+        let state = self.state.lock().await;
+        implement_model(
+            &state.working,
+            &state.persisted,
+            request,
+            &self.workspace,
+            &self.toolchain,
+        )
+        .await
     }
 
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).show(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).show(request).await
     }
 
     async fn check(&self) -> anyhow::Result<crate::CheckReport> {
-        let model = self.model.lock().await;
-        self.ctx(&model).check().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).check().await
     }
 
     async fn calc(&self, request: crate::CalcRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).calc(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).calc(request).await
     }
 
     async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        let model = self.model.lock().await;
-        self.ctx(&model).scaffold().await
+        let mut state = self.state.lock().await;
+        let files = scaffold_model(
+            &state.working,
+            &state.persisted,
+            &self.workspace,
+            &self.toolchain,
+        )
+        .await?;
+        state.persisted = state.working.clone();
+        Ok(files)
     }
 
     async fn test(&self) -> anyhow::Result<crate::CheckReport> {
-        let model = self.model.lock().await;
-        self.ctx(&model).test().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).test().await
     }
 
     async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
-        let model = self.model.lock().await;
-        self.ctx(&model).lint().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).lint().await
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).snapshot(request).await
+        let mut state = self.state.lock().await;
+        let reference = self.checkpoint.snapshot(&request.label).await?;
+        state.record_snapshot(reference.clone());
+        Ok(reference)
     }
 
     async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).rollback(request).await
+        let mut state = self.state.lock().await;
+        let model = state.snapshot_model(&request.reference)?;
+        let result = self.checkpoint.restore(&request.reference).await?;
+        state.adopt_rollback(model);
+        Ok(result)
     }
 
     async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).diff(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).diff(request).await
     }
 
     async fn restart(&self) -> anyhow::Result<()> {
-        let model = self.model.lock().await;
-        self.ctx(&model).restart().await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).restart().await
     }
 
     async fn read(&self, request: ReadRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).read(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).read(request).await
     }
 
     async fn search(&self, request: crate::SearchRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).search(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).search(request).await
     }
 
     async fn list(&self, request: ListRequest) -> anyhow::Result<String> {
-        let model = self.model.lock().await;
-        self.ctx(&model).list(request).await
+        let state = self.state.lock().await;
+        self.ctx(&state.working).list(request).await
     }
 }
 
@@ -211,18 +246,14 @@ mod tests {
     use std::sync::Arc;
 
     use theseus_model::theseus_model;
-    use theseus_modeling::{Edit, GeneratedFile};
+    use theseus_modeling::Edit;
 
     use super::*;
 
     struct NoopWorkspace;
 
     #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {
-        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    impl Workspace for NoopWorkspace {}
 
     struct StubCheckpoint;
 

@@ -101,7 +101,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
     async fn implement(
         &self,
         request: theseus::ImplementRequest,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<theseus::ImplementResult> {
         let reply = self
             .stub
             .clone()
@@ -113,7 +113,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             })
             .await
             .map_err(|status| failed("implement", status))?;
-        Ok(reply.into_inner().value)
+        parsed("implement", &reply.into_inner().json)
     }
 
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {

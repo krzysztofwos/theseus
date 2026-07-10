@@ -14,6 +14,18 @@ impl TheseusService for FailedCheck {
     async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         Ok(theseus::CheckReport::failure("compile failure over gRPC"))
     }
+
+    async fn implement(
+        &self,
+        _request: ImplementRequest,
+    ) -> anyhow::Result<theseus::ImplementResult> {
+        Ok(theseus::ImplementResult {
+            applied: false,
+            path: "rust/service.rs".to_string(),
+            detail: "compile gate rolled the edit back".to_string(),
+            check: theseus::CheckReport::failure("implement failure over gRPC"),
+        })
+    }
 }
 
 /// Serve the glue on an ephemeral port and return a client against it.
@@ -116,4 +128,23 @@ async fn a_failed_check_report_crosses_as_a_result() {
         .expect("a completed failing check is still a typed result");
     assert!(!report.ok);
     assert_eq!(report.detail, "compile failure over gRPC");
+}
+
+#[tokio::test]
+async fn a_structured_implement_result_crosses_the_wire() {
+    let result = serve(FailedCheck)
+        .await
+        .implement(ImplementRequest {
+            method: "verify".to_string(),
+            body: "todo!()".to_string(),
+            port: None,
+            adapter: None,
+        })
+        .await
+        .expect("the structured implement result crosses gRPC");
+    assert!(!result.applied);
+    assert_eq!(result.path, "rust/service.rs");
+    assert_eq!(result.detail, "compile gate rolled the edit back");
+    assert!(!result.check.ok);
+    assert_eq!(result.check.detail, "implement failure over gRPC");
 }

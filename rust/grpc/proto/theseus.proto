@@ -61,8 +61,9 @@ message ImplementRequest {
   optional string adapter = 4;
 }
 
+// The JSON rendering of the `ImplementResult` response.
 message ImplementResult {
-  string value = 1;
+  string json = 1;
 }
 
 message ShowRequest {

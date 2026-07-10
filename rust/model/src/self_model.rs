@@ -171,10 +171,12 @@ pub fn theseus_model() -> Model {
         .foreign_type("ModelDocument", "String")
         .foreign_type("VerifyReport", "theseus_modeling::VerifyReport")
         .foreign_type("GeneratedFiles", "Vec<theseus_modeling::GeneratedFile>")
+        .foreign_type("ExpectedProjection", "theseus::ExpectedFileSet")
+        .foreign_type("WorkspaceMutation", "theseus::PendingMutation")
         .foreign_type("QueryResult", "theseus_modeling::QueryOutcome")
         .foreign_type("PatchResult", "theseus_modeling::PatchOutcome")
         .foreign_type("CoverageReport", "theseus_modeling::CoverageReport")
-        .foreign_type("ImplementResult", "String")
+        .foreign_type("ImplementResult", "theseus::ImplementResult")
         .struct_type(
             "ImplementRequest",
             &[
@@ -314,7 +316,7 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
-                .uses(&["workspace"])
+                .uses(&["workspace", "toolchain"])
                 .tool(
                     "Regenerate model-derived code (generated.rs files) from the self-model. Call this after scaffolding a new service crate so generated.rs exists before authoring handlers.",
                 )
@@ -333,9 +335,9 @@ pub fn theseus_model() -> Model {
                     "PatchRequest",
                     "PatchResult",
                 )
-                .uses(&["workspace"])
+                .uses(&["workspace", "toolchain"])
                 .tool(
-                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects to disk.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects under a repository transaction and compile gate; a failed check restores the prior files.",
                 )
                 .operation(
                     "coverage",
@@ -386,9 +388,9 @@ pub fn theseus_model() -> Model {
                     "Empty",
                     "GeneratedFiles",
                 )
-                .uses(&["workspace"])
+                .uses(&["workspace", "toolchain"])
                 .tool(
-                    "Scaffold missing library service crates — writes the skeleton src/lib.rs and Cargo.toml for each service crate that does not yet have one.",
+                    "Scaffold missing library service crates under a repository transaction and compile gate. A failed check restores the prior files and removes only paths the transaction created.",
                 )
                 .operation(
                     "test",
@@ -480,10 +482,10 @@ pub fn theseus_model() -> Model {
                 .port(
                     Port::new("workspace", "Writes generated files into the workspace.")
                         .method(
-                            "write_file",
-                            "Write one generated file to disk.",
-                            "GeneratedFile",
-                            "Empty",
+                            "begin_mutation",
+                            "Acquire the repository write lease and open a recoverable mutation after checking the expected generated revision.",
+                            "ExpectedProjection",
+                            "WorkspaceMutation",
                         )
                         .gated(),
                 )
@@ -495,6 +497,7 @@ pub fn theseus_model() -> Model {
                             "String",
                             "String",
                         )
+                        .gated()
                         .method(
                             "restore",
                             "Restore the working tree to a snapshot.",
@@ -524,6 +527,12 @@ pub fn theseus_model() -> Model {
                         .method(
                             "check",
                             "Compile-check the workspace and report the outcome.",
+                            "Empty",
+                            "CheckReport",
+                        )
+                        .method(
+                            "check_mutation",
+                            "Compile-check an already leased workspace mutation, allowing its journal to cover lockfile updates.",
                             "Empty",
                             "CheckReport",
                         )

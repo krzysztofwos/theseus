@@ -16,7 +16,7 @@ use rmcp::{
     service::RequestContext,
 };
 use serde_json::Value;
-use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session};
+use theseus::{CargoToolchain, FsWorkspace, GitCheckpoint, Session, SessionState};
 use theseus_modeling::Model;
 use tokio::sync::Mutex;
 
@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 /// model and the write gate. An external host lists the tool catalog and calls
 /// tools by name, driving the same surface as the agent loop.
 pub struct TheseusMcp {
-    model: Mutex<Model>,
+    state: Mutex<SessionState>,
     workspace: FsWorkspace,
     checkpoint: GitCheckpoint,
     calculator: theseus_calculator::Calculator,
@@ -37,7 +37,7 @@ impl TheseusMcp {
     /// workspace rooted at the repository.
     pub fn new(model: Model, allow_writes: bool) -> Self {
         Self {
-            model: Mutex::new(model),
+            state: Mutex::new(SessionState::new(model)),
             workspace: FsWorkspace::at_repo_root(),
             checkpoint: GitCheckpoint::at_repo_root(),
             calculator: theseus_calculator::Calculator,
@@ -81,9 +81,9 @@ impl ServerHandler for TheseusMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let input = Value::Object(request.arguments.unwrap_or_default());
         // The lock holds across the call, so concurrent hosts see edits in order.
-        let mut model = self.model.lock().await;
-        let mut session = Session::new(
-            model.clone(),
+        let mut state = self.state.lock().await;
+        let mut session = Session::from_state(
+            state.clone(),
             &self.workspace,
             &self.checkpoint,
             &self.calculator,
@@ -101,11 +101,11 @@ impl ServerHandler for TheseusMcp {
         } else {
             session.call(request.name.as_ref(), &input).await
         };
-        // A host that cancels mid-call drops the future here: a write that
-        // already reprojected stays on disk while the working model reverts,
-        // and the drift gate reports the divergence on the next verify.
-        *model = session.into_model();
-        drop(model);
+        // A cancelled mutation drops its leased transaction and restores the
+        // declared write set before this carried state can change. Durable
+        // commit and session adoption have no await point between them.
+        *state = session.into_state();
+        drop(state);
         Ok(match outcome {
             Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
             // A failed tool returns its error as the result so the host can recover,

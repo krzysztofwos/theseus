@@ -296,7 +296,6 @@ mod tests {
     use serde_json::json;
     use theseus::{Session, Toolchain, Workspace};
     use theseus_model::theseus_model;
-    use theseus_modeling::GeneratedFile;
 
     use super::*;
     use crate::adapters::OfflineLlm;
@@ -305,11 +304,7 @@ mod tests {
     struct NoopWorkspace;
 
     #[async_trait::async_trait]
-    impl Workspace for NoopWorkspace {
-        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    impl Workspace for NoopWorkspace {}
 
     /// A checkpoint on its trait defaults, for a loop that never snapshots.
     struct StubCheckpoint;

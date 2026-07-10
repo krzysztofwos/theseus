@@ -18,10 +18,11 @@ use theseus_modeling::{
 };
 
 use crate::{
+    CheckReport, ExpectedFile, ExpectedFileSet, ImplementResult, MutationFile, PendingMutation,
     generated::{
-        CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest, TheseusService,
+        CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
+        TheseusService, Toolchain, Workspace,
     },
-    session::persist,
     workspace_root,
 };
 
@@ -126,32 +127,11 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        // A crate's generated code is deferred until the crate is scaffolded, so
-        // adding a crate to the model does not write into a manifest-less
-        // directory and break the workspace before `scaffold` runs.
-        let root = workspace_root();
-        let mut written = Vec::new();
-        for file in generated_files(self.model)? {
-            if crate_is_scaffolded(&root, &file) {
-                self.workspace.write_file(&file).await?;
-                written.push(file);
-            }
-        }
-        Ok(written)
+        generate_model(self.model, self.model, self.workspace, self.toolchain).await
     }
 
     async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
-        // The skeleton files are authored leaves, so only the absent ones are
-        // written. An existing file is left as the author left it.
-        let root = workspace_root();
-        let mut written = Vec::new();
-        for file in scaffold_files(self.model) {
-            if !root.join(&file.path).exists() {
-                self.workspace.write_file(&file).await?;
-                written.push(file);
-            }
-        }
-        Ok(written)
+        scaffold_model(self.model, self.model, self.workspace, self.toolchain).await
     }
 
     async fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
@@ -221,54 +201,15 @@ impl TheseusService for Ctx<'_> {
         }
     }
 
-    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<String> {
-        let (wrote, path, spliced) = match &request.port {
-            Some(port) => {
-                let path = adapter_path(self.model, port)?;
-                let source = tokio::fs::read_to_string(workspace_root().join(&path))
-                    .await
-                    .with_context(|| format!("reading {path}"))?;
-                let spliced = theseus_modeling::implement_adapter(
-                    self.model,
-                    &source,
-                    port,
-                    &request.method,
-                    request.adapter.as_deref(),
-                    &request.body,
-                    "crate::generated::",
-                )?;
-                let wrote = format!("the adapter method `{port}.{}`", request.method);
-                (wrote, path, spliced)
-            }
-            None => {
-                let path = handler_path(self.model, &request.method)?;
-                let source = tokio::fs::read_to_string(workspace_root().join(&path))
-                    .await
-                    .with_context(|| format!("reading {path}"))?;
-                let spliced = theseus_modeling::implement(
-                    self.model,
-                    &source,
-                    &request.method,
-                    &request.body,
-                    "crate::generated::",
-                )?;
-                (
-                    format!("the handler for `{}`", request.method),
-                    path,
-                    spliced,
-                )
-            }
-        };
-        self.workspace
-            .write_file(&GeneratedFile {
-                path: path.clone(),
-                contents: spliced,
-            })
-            .await?;
-        let outcome = self.toolchain.check().await?;
-        Ok(format!(
-            "wrote {wrote} into {path}. Rebuild to load it.\n{outcome}"
-        ))
+    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<ImplementResult> {
+        implement_model(
+            self.model,
+            self.model,
+            request,
+            self.workspace,
+            self.toolchain,
+        )
+        .await
     }
 
     async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
@@ -280,9 +221,270 @@ impl TheseusService for Ctx<'_> {
             // and the generated scaffolding update together. A new operation's
             // handler defaults to unimplemented until authored here, and `coverage`
             // reports what is left to write.
-            persist(&proposed, self.workspace).await?;
+            persist_model(self.model, &proposed, self.workspace, self.toolchain).await?;
         }
         Ok(outcome)
+    }
+}
+
+enum TransactionCheck {
+    Committed(CheckReport),
+    RolledBack(CheckReport),
+}
+
+/// The generated projection that exists for a model in the current workspace.
+/// Crates without a manifest are deferred until `scaffold` creates them.
+pub(crate) fn projected_files(model: &Model) -> anyhow::Result<Vec<GeneratedFile>> {
+    let root = workspace_root();
+    Ok(generated_files(model)?
+        .into_iter()
+        .filter(|file| crate_is_scaffolded(&root, file))
+        .collect())
+}
+
+pub(crate) fn projected_expectations(model: &Model) -> anyhow::Result<ExpectedFileSet> {
+    let root = workspace_root();
+    Ok(generated_files(model)?
+        .into_iter()
+        .map(|file| ExpectedFile {
+            contents: crate_is_scaffolded(&root, &file).then_some(file.contents),
+            path: file.path,
+        })
+        .collect())
+}
+
+async fn begin_mutation(
+    expected: &Model,
+    desired: &Model,
+    workspace: &dyn Workspace,
+) -> anyhow::Result<PendingMutation> {
+    let mut expected = projected_expectations(expected)?;
+    for file in generated_files(desired)? {
+        if !expected.iter().any(|entry| entry.path == file.path) {
+            expected.push(ExpectedFile {
+                path: file.path,
+                contents: None,
+            });
+        }
+    }
+    workspace.begin_mutation(&expected).await
+}
+
+async fn finish_mutation(
+    mutation: PendingMutation,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<TransactionCheck> {
+    let report = match toolchain.check_mutation().await {
+        Ok(report) => report,
+        Err(primary) => {
+            return match mutation.rollback() {
+                Ok(()) => Err(primary.context("the mutation was rolled back after check failed")),
+                Err(rollback) => Err(anyhow::anyhow!(
+                    "workspace check could not run: {primary}; rollback also failed: {rollback}"
+                )),
+            };
+        }
+    };
+    if report.ok {
+        mutation.commit()?;
+        Ok(TransactionCheck::Committed(report))
+    } else {
+        mutation.rollback()?;
+        Ok(TransactionCheck::RolledBack(report))
+    }
+}
+
+fn validation_failed(report: &CheckReport) -> anyhow::Error {
+    anyhow::anyhow!(
+        "mutation failed its compile gate and was rolled back: {}",
+        report.detail
+    )
+}
+
+pub(crate) async fn generate_model(
+    model: &Model,
+    expected: &Model,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<Vec<GeneratedFile>> {
+    let files = projected_files(model)?;
+    let mut mutation = begin_mutation(expected, model, workspace).await?;
+    let mut changes = mutation_changes(expected, model, files.clone())?;
+    protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
+    mutation.apply(&changes).await?;
+    match finish_mutation(mutation, toolchain).await? {
+        TransactionCheck::Committed(_) => Ok(files),
+        TransactionCheck::RolledBack(report) => Err(validation_failed(&report)),
+    }
+}
+
+pub(crate) async fn scaffold_model(
+    model: &Model,
+    expected: &Model,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<Vec<GeneratedFile>> {
+    let mut mutation = begin_mutation(expected, model, workspace).await?;
+    let mut files = Vec::new();
+    for file in scaffold_files(model) {
+        if !mutation.exists(&file.path).await? {
+            files.push(file);
+        }
+    }
+    let mut writes = files.clone();
+    for generated in generated_files(model)? {
+        let Some(manifest) = crate_manifest_for(&generated) else {
+            writes.push(generated);
+            continue;
+        };
+        let scaffolded_now = mutation.exists(&manifest).await?;
+        let scaffolded_by_batch = files.iter().any(|file| file.path == manifest);
+        if scaffolded_now || scaffolded_by_batch {
+            writes.push(generated);
+        }
+    }
+    let mut changes = mutation_changes(expected, model, writes)?;
+    protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
+    mutation.apply(&changes).await?;
+    match finish_mutation(mutation, toolchain).await? {
+        TransactionCheck::Committed(_) => Ok(files),
+        TransactionCheck::RolledBack(report) => Err(validation_failed(&report)),
+    }
+}
+
+fn crate_manifest_for(file: &GeneratedFile) -> Option<String> {
+    let rest = file.path.strip_prefix("rust/")?;
+    let (directory, _) = rest.split_once('/')?;
+    Some(format!("rust/{directory}/Cargo.toml"))
+}
+
+async fn protect_cargo_lock(
+    mutation: &dyn crate::WorkspaceMutation,
+    files: &mut Vec<MutationFile>,
+) -> anyhow::Result<()> {
+    let contents = if mutation.exists("Cargo.lock").await? {
+        Some(mutation.read_to_string("Cargo.lock").await?)
+    } else {
+        None
+    };
+    files.push(MutationFile {
+        path: "Cargo.lock".to_string(),
+        contents,
+    });
+    Ok(())
+}
+
+fn mutation_changes(
+    expected: &Model,
+    desired: &Model,
+    writes: Vec<GeneratedFile>,
+) -> anyhow::Result<Vec<MutationFile>> {
+    let desired_paths: std::collections::HashSet<String> = generated_files(desired)?
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    let mut changes: Vec<MutationFile> = writes.into_iter().map(mutation_file).collect();
+    for previous in generated_files(expected)? {
+        if !desired_paths.contains(&previous.path)
+            && !changes.iter().any(|change| change.path == previous.path)
+        {
+            changes.push(MutationFile {
+                path: previous.path,
+                contents: None,
+            });
+        }
+    }
+    Ok(changes)
+}
+
+pub(crate) async fn implement_model(
+    model: &Model,
+    expected: &Model,
+    request: ImplementRequest,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<ImplementResult> {
+    let mut mutation = begin_mutation(expected, model, workspace).await?;
+    let (wrote, path, spliced) = match &request.port {
+        Some(port) => {
+            let path = adapter_path(model, port)?;
+            let source = mutation.read_to_string(&path).await?;
+            let spliced = theseus_modeling::implement_adapter(
+                model,
+                &source,
+                port,
+                &request.method,
+                request.adapter.as_deref(),
+                &request.body,
+                "crate::generated::",
+            )?;
+            (
+                format!("the adapter method `{port}.{}`", request.method),
+                path,
+                spliced,
+            )
+        }
+        None => {
+            let path = handler_path(model, &request.method)?;
+            let source = mutation.read_to_string(&path).await?;
+            let spliced = theseus_modeling::implement(
+                model,
+                &source,
+                &request.method,
+                &request.body,
+                "crate::generated::",
+            )?;
+            (
+                format!("the handler for `{}`", request.method),
+                path,
+                spliced,
+            )
+        }
+    };
+    let writes = vec![GeneratedFile {
+        path: path.clone(),
+        contents: spliced,
+    }];
+    let mut changes: Vec<MutationFile> = writes.into_iter().map(mutation_file).collect();
+    protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
+    mutation.apply(&changes).await?;
+    match finish_mutation(mutation, toolchain).await? {
+        TransactionCheck::Committed(check) => Ok(ImplementResult {
+            applied: true,
+            path: path.clone(),
+            detail: format!("wrote {wrote} into {path}. Rebuild to load it."),
+            check,
+        }),
+        TransactionCheck::RolledBack(check) => Ok(ImplementResult {
+            applied: false,
+            path: path.clone(),
+            detail: format!("did not write {wrote} into {path}; the compile gate rolled it back"),
+            check,
+        }),
+    }
+}
+
+fn mutation_file(file: GeneratedFile) -> MutationFile {
+    MutationFile {
+        path: file.path,
+        contents: Some(file.contents),
+    }
+}
+
+pub(crate) async fn persist_model(
+    expected: &Model,
+    proposed: &Model,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<CheckReport> {
+    let files = projected_files(proposed)?;
+    let mut mutation = begin_mutation(expected, proposed, workspace).await?;
+    let mut changes = mutation_changes(expected, proposed, files)?;
+    protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
+    mutation.apply(&changes).await?;
+    match finish_mutation(mutation, toolchain).await? {
+        TransactionCheck::Committed(report) => Ok(report),
+        TransactionCheck::RolledBack(report) => Err(validation_failed(&report)),
     }
 }
 
@@ -330,9 +532,16 @@ fn search_tree(
     let mut entries: Vec<_> = std::fs::read_dir(base)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
+        if hits.len() >= SEARCH_CAP {
+            return Ok(());
+        }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             if matches!(
                 name.as_str(),
                 ".git" | "target" | ".theseus" | ".trunk" | "node_modules"
@@ -342,6 +551,9 @@ fn search_tree(
             search_tree(&path, root, pattern, hits)?;
             continue;
         }
+        if !file_type.is_file() {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -349,6 +561,9 @@ fn search_tree(
         for (number, line) in text.lines().enumerate() {
             if line.contains(pattern) {
                 hits.push(format!("{rel}:{}: {}", number + 1, line.trim()));
+                if hits.len() >= SEARCH_CAP {
+                    return Ok(());
+                }
             }
         }
     }
@@ -378,13 +593,20 @@ pub(crate) fn handler_path(model: &Model, method: &str) -> anyhow::Result<String
 
 #[cfg(test)]
 mod tests {
-    use theseus_model::theseus_model;
-    use theseus_modeling::GeneratedFile;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
 
+    use theseus_model::theseus_model;
+
+    use super::{SEARCH_CAP, search_tree};
     use crate::{
         generated::{Refused, TheseusService as _, Toolchain, Workspace, tool_catalog},
         session::Session,
     };
+
+    static NEXT_SEARCH_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     /// A structured edit that adds a throwaway type, for exercising the `patch`
     /// tool. The no-op workspace discards any reprojection, so a write touches no
@@ -399,10 +621,108 @@ mod tests {
     /// A workspace that writes nowhere. A read-only tool never reaches it.
     struct NoopWorkspace;
 
+    struct NoopMutation;
+
+    #[async_trait::async_trait]
+    impl crate::WorkspaceMutation for NoopMutation {
+        async fn read_to_string(&self, path: &str) -> Result<String, crate::MutationError> {
+            std::fs::read_to_string(crate::workspace_root().join(path)).map_err(|source| {
+                crate::MutationError::Io {
+                    operation: "reading test workspace file",
+                    path: crate::workspace_root().join(path),
+                    source,
+                }
+            })
+        }
+
+        async fn exists(&self, path: &str) -> Result<bool, crate::MutationError> {
+            Ok(crate::workspace_root().join(path).is_file())
+        }
+
+        async fn apply(
+            &mut self,
+            _files: &[crate::MutationFile],
+        ) -> Result<(), crate::MutationError> {
+            Ok(())
+        }
+
+        fn commit(self: Box<Self>) -> Result<(), crate::MutationError> {
+            Ok(())
+        }
+
+        fn rollback(self: Box<Self>) -> Result<(), crate::MutationError> {
+            Ok(())
+        }
+    }
+
     #[async_trait::async_trait]
     impl Workspace for NoopWorkspace {
-        async fn write_file(&self, _file: &GeneratedFile) -> anyhow::Result<()> {
+        async fn begin_mutation(
+            &self,
+            _expected: &crate::ExpectedFileSet,
+        ) -> anyhow::Result<crate::PendingMutation> {
+            Ok(Box::new(NoopMutation))
+        }
+    }
+
+    #[derive(Default)]
+    struct MutationRecording {
+        expected: Vec<crate::ExpectedFile>,
+        applied: Vec<crate::MutationFile>,
+        commits: usize,
+        rollbacks: usize,
+    }
+
+    struct RecordingWorkspace(Arc<Mutex<MutationRecording>>);
+
+    struct RecordingMutation(Arc<Mutex<MutationRecording>>);
+
+    #[async_trait::async_trait]
+    impl crate::WorkspaceMutation for RecordingMutation {
+        async fn read_to_string(&self, path: &str) -> Result<String, crate::MutationError> {
+            std::fs::read_to_string(crate::workspace_root().join(path)).map_err(|source| {
+                crate::MutationError::Io {
+                    operation: "reading recorded workspace file",
+                    path: crate::workspace_root().join(path),
+                    source,
+                }
+            })
+        }
+
+        async fn exists(&self, path: &str) -> Result<bool, crate::MutationError> {
+            if path == "Cargo.lock" {
+                return Ok(false);
+            }
+            Ok(crate::workspace_root().join(path).is_file())
+        }
+
+        async fn apply(
+            &mut self,
+            files: &[crate::MutationFile],
+        ) -> Result<(), crate::MutationError> {
+            self.0.lock().unwrap().applied = files.to_vec();
             Ok(())
+        }
+
+        fn commit(self: Box<Self>) -> Result<(), crate::MutationError> {
+            self.0.lock().unwrap().commits += 1;
+            Ok(())
+        }
+
+        fn rollback(self: Box<Self>) -> Result<(), crate::MutationError> {
+            self.0.lock().unwrap().rollbacks += 1;
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Workspace for RecordingWorkspace {
+        async fn begin_mutation(
+            &self,
+            expected: &crate::ExpectedFileSet,
+        ) -> anyhow::Result<crate::PendingMutation> {
+            self.0.lock().unwrap().expected = expected.clone();
+            Ok(Box::new(RecordingMutation(Arc::clone(&self.0))))
         }
     }
 
@@ -413,6 +733,28 @@ mod tests {
     #[async_trait::async_trait]
     impl crate::generated::Checkpoint for StubCheckpoint {}
 
+    #[derive(Default)]
+    struct CheckpointRecording {
+        snapshots: usize,
+        restores: Vec<String>,
+    }
+
+    struct RecordingCheckpoint(Arc<Mutex<CheckpointRecording>>);
+
+    #[async_trait::async_trait]
+    impl crate::generated::Checkpoint for RecordingCheckpoint {
+        async fn snapshot(&self, _request: &str) -> anyhow::Result<String> {
+            let mut recording = self.0.lock().unwrap();
+            recording.snapshots += 1;
+            Ok(format!("snapshot-{}", recording.snapshots))
+        }
+
+        async fn restore(&self, request: &str) -> anyhow::Result<String> {
+            self.0.lock().unwrap().restores.push(request.to_owned());
+            Ok(format!("restored {request}"))
+        }
+    }
+
     /// A toolchain that reports success without running a build, so a `check`
     /// call stays in-process.
     struct StubToolchain;
@@ -421,6 +763,10 @@ mod tests {
     impl Toolchain for StubToolchain {
         async fn check(&self) -> anyhow::Result<crate::CheckReport> {
             Ok(crate::CheckReport::success("the workspace compiles (stub)"))
+        }
+
+        async fn check_mutation(&self) -> anyhow::Result<crate::CheckReport> {
+            self.check().await
         }
     }
 
@@ -432,6 +778,10 @@ mod tests {
             Ok(crate::CheckReport::failure(
                 "the workspace does not compile",
             ))
+        }
+
+        async fn check_mutation(&self) -> anyhow::Result<crate::CheckReport> {
+            self.check().await
         }
     }
 
@@ -498,6 +848,214 @@ mod tests {
             result.contains("Probe"),
             "the edit should be visible to a later call: {result}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_write_uses_the_persisted_revision_and_commits_the_whole_working_model() {
+        let recording = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&recording));
+        let mut session = Session::new(
+            theseus_model(),
+            &workspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        );
+        session
+            .call(
+                "patch",
+                &serde_json::json!({ "edit": [{
+                    "verb": "add", "parent": "model:theseus", "kind": "type",
+                    "name": "DryProbe", "attrs": { "shape": "foreign:String" }
+                }] }),
+            )
+            .await
+            .expect("the dry edit applies");
+        session
+            .call(
+                "patch",
+                &serde_json::json!({
+                    "edit": [{
+                        "verb": "add", "parent": "model:theseus", "kind": "type",
+                        "name": "WrittenProbe", "attrs": { "shape": "foreign:String" }
+                    }],
+                    "write": true
+                }),
+            )
+            .await
+            .expect("the written edit commits");
+
+        let recording = recording.lock().unwrap();
+        let expected_model = recording
+            .expected
+            .iter()
+            .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
+            .and_then(|file| file.contents.as_deref())
+            .expect("the persisted self-model is expected");
+        assert!(!expected_model.contains("DryProbe"));
+        assert!(!expected_model.contains("WrittenProbe"));
+        let applied_model = recording
+            .applied
+            .iter()
+            .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
+            .and_then(|file| file.contents.as_deref())
+            .expect("the proposed self-model is applied");
+        assert!(applied_model.contains("DryProbe"));
+        assert!(applied_model.contains("WrittenProbe"));
+        assert!(
+            recording
+                .applied
+                .iter()
+                .any(|file| { file.path == "Cargo.lock" && file.contents.is_none() })
+        );
+        assert_eq!(recording.commits, 1);
+        assert_eq!(recording.rollbacks, 0);
+        drop(recording);
+
+        let state = session.into_state();
+        assert_eq!(state.working, state.persisted);
+        assert!(state.persisted.type_def("DryProbe").is_some());
+        assert!(state.persisted.type_def("WrittenProbe").is_some());
+    }
+
+    #[tokio::test]
+    async fn rollback_restores_both_session_models_and_the_next_expected_revision() {
+        let mutation = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&mutation));
+        let checkpoint = Arc::new(Mutex::new(CheckpointRecording::default()));
+        let checkpoint_adapter = RecordingCheckpoint(Arc::clone(&checkpoint));
+        let mut session = Session::new(
+            theseus_model(),
+            &workspace,
+            &checkpoint_adapter,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        );
+        let reference = session
+            .call("snapshot", &serde_json::json!({ "label": "before edits" }))
+            .await
+            .expect("the session snapshot succeeds");
+        assert_eq!(reference, "snapshot-1");
+
+        session
+            .call(
+                "patch",
+                &serde_json::json!({ "edit": [{
+                    "verb": "add", "parent": "model:theseus", "kind": "type",
+                    "name": "DryAfterSnapshot", "attrs": { "shape": "foreign:String" }
+                }] }),
+            )
+            .await
+            .expect("the dry edit applies");
+        session
+            .call(
+                "patch",
+                &serde_json::json!({
+                    "edit": [{
+                        "verb": "add", "parent": "model:theseus", "kind": "type",
+                        "name": "WrittenAfterSnapshot", "attrs": { "shape": "foreign:String" }
+                    }],
+                    "write": true
+                }),
+            )
+            .await
+            .expect("the written edit commits");
+        session
+            .call("rollback", &serde_json::json!({ "reference": reference }))
+            .await
+            .expect("the known snapshot restores");
+
+        session
+            .call(
+                "patch",
+                &serde_json::json!({
+                    "edit": [{
+                        "verb": "add", "parent": "model:theseus", "kind": "type",
+                        "name": "AfterRollback", "attrs": { "shape": "foreign:String" }
+                    }],
+                    "write": true
+                }),
+            )
+            .await
+            .expect("a write after rollback uses the restored revision");
+
+        let state = session.into_state();
+        assert!(state.working.type_def("DryAfterSnapshot").is_none());
+        assert!(state.working.type_def("WrittenAfterSnapshot").is_none());
+        assert!(state.persisted.type_def("AfterRollback").is_some());
+        let mutation = mutation.lock().unwrap();
+        let expected_model = mutation
+            .expected
+            .iter()
+            .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
+            .and_then(|file| file.contents.as_deref())
+            .expect("the restored self-model is expected");
+        assert!(!expected_model.contains("DryAfterSnapshot"));
+        assert!(!expected_model.contains("WrittenAfterSnapshot"));
+        let applied_model = mutation
+            .applied
+            .iter()
+            .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
+            .and_then(|file| file.contents.as_deref())
+            .expect("the post-rollback self-model is applied");
+        assert!(applied_model.contains("AfterRollback"));
+        assert!(!applied_model.contains("DryAfterSnapshot"));
+        assert!(!applied_model.contains("WrittenAfterSnapshot"));
+        assert_eq!(checkpoint.lock().unwrap().restores, ["snapshot-1"]);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_session_snapshot_never_reaches_the_checkpoint_adapter() {
+        let checkpoint = Arc::new(Mutex::new(CheckpointRecording::default()));
+        let checkpoint_adapter = RecordingCheckpoint(Arc::clone(&checkpoint));
+        let error = Session::new(
+            theseus_model(),
+            &NoopWorkspace,
+            &checkpoint_adapter,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        )
+        .call(
+            "rollback",
+            &serde_json::json!({ "reference": "not-created-here" }),
+        )
+        .await
+        .expect_err("an unknown long-lived snapshot is refused");
+        assert!(error.to_string().contains("not created in this session"));
+        assert!(checkpoint.lock().unwrap().restores.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_implement_check_rolls_back_and_reports_not_applied() {
+        let recording = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&recording));
+        let mut session = Session::new(
+            theseus_model(),
+            &workspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &FailingToolchain,
+            true,
+        );
+        let result = session
+            .call(
+                "implement",
+                &serde_json::json!({
+                    "method": "calc",
+                    "body": "Ok(\"replacement\".to_string())"
+                }),
+            )
+            .await
+            .expect("a failed compile check is a structured implement result");
+        let result: crate::ImplementResult = serde_json::from_str(&result).unwrap();
+        assert!(!result.applied);
+        assert!(!result.check.ok);
+        let recording = recording.lock().unwrap();
+        assert_eq!(recording.commits, 0);
+        assert_eq!(recording.rollbacks, 1);
     }
 
     #[tokio::test]
@@ -680,6 +1238,32 @@ mod tests {
         .await
         .expect("the search tool runs");
         assert!(result.contains("rust/kernel/Cargo.toml:"), "{result}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_search_skips_symlinks_and_stops_at_its_cap() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = NEXT_SEARCH_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("theseus-search-{}-{nonce}", std::process::id()));
+        let outside = root.with_extension("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(&outside, "outside secret").unwrap();
+        symlink(&outside, root.join("linked.txt")).unwrap();
+        let lines = std::iter::repeat_n("match", SEARCH_CAP + 20).collect::<Vec<_>>();
+        std::fs::write(root.join("many.txt"), lines.join("\n")).unwrap();
+
+        let mut hits = Vec::new();
+        search_tree(&root, &root, "match", &mut hits).unwrap();
+        assert_eq!(hits.len(), SEARCH_CAP);
+        hits.clear();
+        search_tree(&root, &root, "outside secret", &mut hits).unwrap();
+        assert!(hits.is_empty());
+
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_file(outside).ok();
     }
 
     #[tokio::test]

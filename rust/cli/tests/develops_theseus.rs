@@ -32,7 +32,7 @@ fn query_emits_nested_handles() {
     assert!(ok);
     // A field of a struct type and a method of a port are addressable too.
     assert!(out.contains("field:theseus:PatchRequest.edit"));
-    assert!(out.contains("method:theseus:workspace.write_file"));
+    assert!(out.contains("method:theseus:workspace.begin_mutation"));
 }
 
 #[test]

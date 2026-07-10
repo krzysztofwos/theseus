@@ -15,7 +15,10 @@ use crate::{
     CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedWorkspace, GitCheckpoint,
     ImplementRequest, ListRequest, PatchRequest, QueryRequest, ReadRequest, ShowRequest,
     SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace,
-    service::{apply_patch, generate_model, implement_model, persist_model, scaffold_model},
+    service::{
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, generate_model,
+        implement_model, persist_model, scaffold_model,
+    },
 };
 
 /// A long-lived service over one serialized working model.
@@ -201,23 +204,33 @@ where
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
-        let mut state = self.state.lock().await;
-        let reference = self.checkpoint.snapshot(&request.label).await?;
-        state.record_snapshot(reference.clone());
-        Ok(reference)
+        let state = self.state.lock().await;
+        let plan = checkpoint_snapshot_request(&state.persisted, request.label)?;
+        Ok(self.checkpoint.snapshot(&plan).await?.reference)
     }
 
     async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let mut state = self.state.lock().await;
-        let model = state.snapshot_model(&request.reference)?;
-        let result = self.checkpoint.restore(&request.reference).await?;
-        state.adopt_rollback(model);
-        Ok(result)
+        let plan = checkpoint_state_request(&state.persisted, request.reference)?;
+        let restored = self.checkpoint.restore(&plan).await?;
+        state.adopt_rollback(restored.model);
+        Ok(restored.detail)
     }
 
     async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let state = self.state.lock().await;
-        self.ctx(&state.working).diff(request).await
+        let plan = checkpoint_state_request(&state.persisted, request.reference)?;
+        self.checkpoint.diff(&plan).await
+    }
+
+    async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        let _state = self.state.lock().await;
+        self.checkpoint.release(&request.reference).await
+    }
+
+    async fn prune(&self, request: crate::SnapshotRetention) -> anyhow::Result<String> {
+        let _state = self.state.lock().await;
+        self.checkpoint.prune(&request).await
     }
 
     async fn restart(&self) -> anyhow::Result<()> {
@@ -259,6 +272,38 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Checkpoint for StubCheckpoint {}
+
+    #[derive(Default)]
+    struct ModelCheckpoint(std::sync::Mutex<Option<Model>>);
+
+    #[async_trait::async_trait]
+    impl Checkpoint for ModelCheckpoint {
+        async fn snapshot(
+            &self,
+            request: &crate::CheckpointSnapshotRequest,
+        ) -> anyhow::Result<crate::CheckpointSnapshot> {
+            *self.0.lock().unwrap() = Some(request.model.clone());
+            Ok(crate::CheckpointSnapshot {
+                reference: "stateful-snapshot".to_string(),
+            })
+        }
+
+        async fn restore(
+            &self,
+            _request: &crate::CheckpointStateRequest,
+        ) -> anyhow::Result<crate::CheckpointRestore> {
+            let model = self
+                .0
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("no snapshot"))?;
+            Ok(crate::CheckpointRestore {
+                detail: "restored stateful-snapshot".to_string(),
+                model,
+            })
+        }
+    }
 
     struct StubToolchain;
 
@@ -347,6 +392,37 @@ mod tests {
                 .expect("the query runs");
             assert_eq!(query.handles.len(), 1, "{name} was lost");
         }
+    }
+
+    #[tokio::test]
+    async fn rollback_adopts_the_snapshot_model_in_the_stateful_session() {
+        let service = StatefulSession::new(
+            theseus_model(),
+            NoopWorkspace,
+            ModelCheckpoint::default(),
+            theseus_calculator::Calculator,
+            StubToolchain,
+            true,
+        );
+        let reference = service
+            .snapshot(SnapshotRequest {
+                label: "before speculation".to_string(),
+            })
+            .await
+            .expect("the stateful snapshot succeeds");
+        service
+            .patch(add_type("StatefulAfterSnapshot"))
+            .await
+            .expect("the speculative patch applies");
+
+        service
+            .rollback(SnapshotRef { reference })
+            .await
+            .expect("the stateful rollback succeeds");
+
+        let state = service.state.lock().await;
+        assert!(state.working.type_def("StatefulAfterSnapshot").is_none());
+        assert_eq!(state.working, state.persisted);
     }
 
     #[test]

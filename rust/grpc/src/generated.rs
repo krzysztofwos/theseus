@@ -268,6 +268,40 @@ for GrpcTheseus<S> {
         }
     }
 
+    async fn release(
+        &self,
+        request: tonic::Request<proto::SnapshotRef>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .release(theseus::SnapshotRef {
+                reference: request.reference,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
+
+    async fn prune(
+        &self,
+        request: tonic::Request<proto::SnapshotRetention>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .prune(theseus::SnapshotRetention {
+                keep: request.keep,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
+
     async fn diff(
         &self,
         request: tonic::Request<proto::SnapshotRef>,

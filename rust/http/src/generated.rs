@@ -136,6 +136,17 @@ fn parse_snapshot_ref_http(
     })
 }
 
+fn parse_snapshot_retention_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::SnapshotRetention> {
+    Ok(theseus::SnapshotRetention {
+        keep: serde_json::from_value(
+                input.get("keep").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `keep` field is invalid: {error}"))?,
+    })
+}
+
 fn parse_read_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::ReadRequest> {
@@ -232,6 +243,18 @@ pub async fn handle(
         "rollback" => {
             match parse_snapshot_ref_http(input) {
                 Ok(request) => reply_text(service.rollback(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "release" => {
+            match parse_snapshot_ref_http(input) {
+                Ok(request) => reply_text(service.release(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "prune" => {
+            match parse_snapshot_retention_http(input) {
+                Ok(request) => reply_text(service.prune(request).await),
                 Err(error) => error_body(400, &error),
             }
         }

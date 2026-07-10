@@ -3,10 +3,75 @@
 
 use std::sync::Arc;
 
-use theseus::{ImplementRequest, QueryRequest, Standalone, TheseusService};
+use theseus::{
+    Checkpoint, CheckpointRestore, CheckpointSnapshot, CheckpointSnapshotRequest,
+    CheckpointStateRequest, ImplementRequest, PatchRequest, QueryRequest, SnapshotRef,
+    SnapshotRequest, SnapshotRetention, Standalone, StatefulSession, TheseusService, Toolchain,
+    Workspace,
+};
 use theseus_http_client::HttpTheseusClient;
+use theseus_modeling::Edit;
 
 struct FailedCheck;
+
+struct CheckpointEcho;
+
+struct NoopWorkspace;
+
+#[async_trait::async_trait]
+impl Workspace for NoopWorkspace {}
+
+struct NoopToolchain;
+
+#[async_trait::async_trait]
+impl Toolchain for NoopToolchain {}
+
+#[derive(Default)]
+struct ModelCheckpoint(std::sync::Mutex<Option<theseus_modeling::Model>>);
+
+#[async_trait::async_trait]
+impl Checkpoint for ModelCheckpoint {
+    async fn snapshot(
+        &self,
+        request: &CheckpointSnapshotRequest,
+    ) -> anyhow::Result<CheckpointSnapshot> {
+        *self.0.lock().expect("the checkpoint mutex is available") = Some(request.model.clone());
+        Ok(CheckpointSnapshot {
+            reference: "http-stateful-snapshot".to_string(),
+        })
+    }
+
+    async fn restore(
+        &self,
+        _request: &CheckpointStateRequest,
+    ) -> anyhow::Result<CheckpointRestore> {
+        let model = self
+            .0
+            .lock()
+            .expect("the checkpoint mutex is available")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("no snapshot"))?;
+        Ok(CheckpointRestore {
+            detail: "restored http-stateful-snapshot".to_string(),
+            model,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TheseusService for CheckpointEcho {
+    async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        Ok(format!("released {}", request.reference))
+    }
+
+    async fn prune(&self, request: SnapshotRetention) -> anyhow::Result<String> {
+        Ok(format!("kept {}", request.keep))
+    }
+
+    async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        Ok(format!("diffed {}", request.reference))
+    }
+}
 
 #[async_trait::async_trait]
 impl TheseusService for FailedCheck {
@@ -75,6 +140,17 @@ async fn the_wire_crossing_preserves_the_contract() {
         error.downcast_ref::<theseus::Refused>().is_some(),
         "the refusal should come back typed: {error}"
     );
+
+    let error = client
+        .diff(SnapshotRef {
+            reference: "not-a-snapshot".to_string(),
+        })
+        .await
+        .expect_err("the checkpoint diff gate refuses");
+    assert!(
+        error.downcast_ref::<theseus::Refused>().is_some(),
+        "the diff refusal should come back typed: {error}"
+    );
 }
 
 #[tokio::test]
@@ -124,4 +200,86 @@ async fn a_structured_implement_result_crosses_the_wire() {
     assert_eq!(result.detail, "compile gate rolled the edit back");
     assert!(!result.check.ok);
     assert_eq!(result.check.detail, "implement failure over HTTP");
+}
+
+#[tokio::test]
+async fn checkpoint_lifecycle_requests_cross_http() {
+    let client = serve(CheckpointEcho).await;
+
+    let diff = client
+        .diff(SnapshotRef {
+            reference: "snapshot-a".to_string(),
+        })
+        .await
+        .expect("the diff reference crosses HTTP");
+    assert_eq!(diff, "diffed snapshot-a");
+
+    let pruned = client
+        .prune(SnapshotRetention { keep: 7 })
+        .await
+        .expect("the retention limit crosses HTTP");
+    assert_eq!(pruned, "kept 7");
+
+    let released = client
+        .release(SnapshotRef {
+            reference: "snapshot-b".to_string(),
+        })
+        .await
+        .expect("the release reference crosses HTTP");
+    assert_eq!(released, "released snapshot-b");
+}
+
+#[tokio::test]
+async fn rollback_adopts_the_snapshot_model_across_http() {
+    let one_shot = Standalone::new(false);
+    let service = StatefulSession::new(
+        one_shot.model,
+        NoopWorkspace,
+        ModelCheckpoint::default(),
+        one_shot.calculator,
+        NoopToolchain,
+        true,
+    );
+    let client = serve(service).await;
+    let reference = client
+        .snapshot(SnapshotRequest {
+            label: "before HTTP speculation".to_string(),
+        })
+        .await
+        .expect("the snapshot crosses HTTP");
+    client
+        .patch(PatchRequest {
+            edit: vec![Edit::Add {
+                parent: "model:theseus".to_string(),
+                kind: "type".to_string(),
+                name: "HttpAfterSnapshot".to_string(),
+                attrs: [("shape".to_string(), "foreign:String".to_string())].into(),
+            }],
+            write: false,
+        })
+        .await
+        .expect("the speculative patch crosses HTTP");
+    let speculative = client
+        .query(QueryRequest {
+            find: Some("HttpAfterSnapshot".to_string()),
+            node: None,
+            kind: Some("type".to_string()),
+        })
+        .await
+        .expect("the speculative model is queried over HTTP");
+    assert_eq!(speculative.handles.len(), 1);
+
+    client
+        .rollback(SnapshotRef { reference })
+        .await
+        .expect("the rollback crosses HTTP");
+    let restored = client
+        .query(QueryRequest {
+            find: Some("HttpAfterSnapshot".to_string()),
+            node: None,
+            kind: Some("type".to_string()),
+        })
+        .await
+        .expect("the restored model is queried over HTTP");
+    assert!(restored.handles.is_empty());
 }

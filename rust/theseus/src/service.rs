@@ -9,8 +9,9 @@
 
 use anyhow::Context;
 use theseus_model::{
-    adapter_impl_path, authored_impl_path, authored_impls, crate_is_scaffolded, generated_files,
-    inbound_adapter_impl_path, interior_impls,
+    adapter_impl_path, authored_impl_path, authored_impls, checkpoint_expectations,
+    checkpoint_paths, crate_is_scaffolded, generated_files, inbound_adapter_impl_path,
+    interior_impls,
 };
 use theseus_modeling::{
     CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
@@ -18,7 +19,8 @@ use theseus_modeling::{
 };
 
 use crate::{
-    CheckReport, ExpectedFile, ExpectedFileSet, ImplementResult, MutationFile, PendingMutation,
+    CheckReport, CheckpointSnapshotRequest, CheckpointStateRequest, ExpectedFile, ExpectedFileSet,
+    ImplementResult, MutationFile, PendingMutation,
     generated::{
         CalcRequest, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
         TheseusService, Toolchain, Workspace,
@@ -88,15 +90,33 @@ impl TheseusService for Ctx<'_> {
     }
 
     async fn diff(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
-        self.checkpoint.diff(&request.reference).await
+        self.checkpoint
+            .diff(&checkpoint_state_request(self.model, request.reference)?)
+            .await
     }
 
     async fn rollback(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
-        self.checkpoint.restore(&request.reference).await
+        Ok(self
+            .checkpoint
+            .restore(&checkpoint_state_request(self.model, request.reference)?)
+            .await?
+            .detail)
     }
 
     async fn snapshot(&self, request: crate::generated::SnapshotRequest) -> anyhow::Result<String> {
-        self.checkpoint.snapshot(&request.label).await
+        Ok(self
+            .checkpoint
+            .snapshot(&checkpoint_snapshot_request(self.model, request.label)?)
+            .await?
+            .reference)
+    }
+
+    async fn release(&self, request: crate::generated::SnapshotRef) -> anyhow::Result<String> {
+        self.checkpoint.release(&request.reference).await
+    }
+
+    async fn prune(&self, request: crate::generated::SnapshotRetention) -> anyhow::Result<String> {
+        self.checkpoint.prune(&request).await
     }
 
     async fn test(&self) -> anyhow::Result<crate::CheckReport> {
@@ -243,14 +263,31 @@ pub(crate) fn projected_files(model: &Model) -> anyhow::Result<Vec<GeneratedFile
 }
 
 pub(crate) fn projected_expectations(model: &Model) -> anyhow::Result<ExpectedFileSet> {
-    let root = workspace_root();
-    Ok(generated_files(model)?
-        .into_iter()
-        .map(|file| ExpectedFile {
-            contents: crate_is_scaffolded(&root, &file).then_some(file.contents),
-            path: file.path,
-        })
-        .collect())
+    Ok(checkpoint_expectations(&workspace_root(), model)?)
+}
+
+pub(crate) fn checkpoint_snapshot_request(
+    model: &Model,
+    label: String,
+) -> anyhow::Result<CheckpointSnapshotRequest> {
+    Ok(CheckpointSnapshotRequest {
+        label,
+        expected: projected_expectations(model)?,
+        owned_paths: checkpoint_paths(model)?,
+        model: model.clone(),
+    })
+}
+
+pub(crate) fn checkpoint_state_request(
+    model: &Model,
+    reference: String,
+) -> anyhow::Result<CheckpointStateRequest> {
+    Ok(CheckpointStateRequest {
+        reference,
+        expected: projected_expectations(model)?,
+        owned_paths: checkpoint_paths(model)?,
+        model: model.clone(),
+    })
 }
 
 async fn begin_mutation(
@@ -587,9 +624,12 @@ pub(crate) fn handler_path(model: &Model, method: &str) -> anyhow::Result<String
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
 
     use theseus_model::theseus_model;
@@ -731,21 +771,41 @@ mod tests {
     struct CheckpointRecording {
         snapshots: usize,
         restores: Vec<String>,
+        models: HashMap<String, theseus_modeling::Model>,
     }
 
     struct RecordingCheckpoint(Arc<Mutex<CheckpointRecording>>);
 
     #[async_trait::async_trait]
     impl crate::generated::Checkpoint for RecordingCheckpoint {
-        async fn snapshot(&self, _request: &str) -> anyhow::Result<String> {
+        async fn snapshot(
+            &self,
+            request: &crate::CheckpointSnapshotRequest,
+        ) -> anyhow::Result<crate::CheckpointSnapshot> {
             let mut recording = self.0.lock().unwrap();
             recording.snapshots += 1;
-            Ok(format!("snapshot-{}", recording.snapshots))
+            let reference = format!("snapshot-{}", recording.snapshots);
+            recording
+                .models
+                .insert(reference.clone(), request.model.clone());
+            Ok(crate::CheckpointSnapshot { reference })
         }
 
-        async fn restore(&self, request: &str) -> anyhow::Result<String> {
-            self.0.lock().unwrap().restores.push(request.to_owned());
-            Ok(format!("restored {request}"))
+        async fn restore(
+            &self,
+            request: &crate::CheckpointStateRequest,
+        ) -> anyhow::Result<crate::CheckpointRestore> {
+            let mut recording = self.0.lock().unwrap();
+            recording.restores.push(request.reference.clone());
+            let model = recording
+                .models
+                .get(&request.reference)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("unknown snapshot"))?;
+            Ok(crate::CheckpointRestore {
+                detail: format!("restored {}", request.reference),
+                model,
+            })
         }
     }
 
@@ -1001,25 +1061,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unknown_session_snapshot_never_reaches_the_checkpoint_adapter() {
+    async fn snapshot_model_metadata_survives_session_reconstruction() {
+        let mutation = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&mutation));
         let checkpoint = Arc::new(Mutex::new(CheckpointRecording::default()));
         let checkpoint_adapter = RecordingCheckpoint(Arc::clone(&checkpoint));
-        let error = Session::new(
+        let mut first = Session::new(
             theseus_model(),
-            &NoopWorkspace,
+            &workspace,
             &checkpoint_adapter,
             &theseus_calculator::Calculator,
             &StubToolchain,
             true,
-        )
-        .call(
-            "rollback",
-            &serde_json::json!({ "reference": "not-created-here" }),
-        )
-        .await
-        .expect_err("an unknown long-lived snapshot is refused");
-        assert!(error.to_string().contains("not created in this session"));
-        assert!(checkpoint.lock().unwrap().restores.is_empty());
+        );
+        let reference = first
+            .call(
+                "snapshot",
+                &serde_json::json!({ "label": "before restart" }),
+            )
+            .await
+            .expect("the first session snapshots its model");
+        first
+            .call(
+                "patch",
+                &serde_json::json!({
+                    "edit": [{
+                        "verb": "add", "parent": "model:theseus", "kind": "type",
+                        "name": "AfterRestart", "attrs": { "shape": "foreign:String" }
+                    }],
+                    "write": true
+                }),
+            )
+            .await
+            .expect("the later model is persisted");
+        let later = first.into_state().persisted;
+        assert!(later.type_def("AfterRestart").is_some());
+
+        let mut resumed = Session::new(
+            later,
+            &workspace,
+            &checkpoint_adapter,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        );
+        resumed
+            .call("rollback", &serde_json::json!({ "reference": reference }))
+            .await
+            .expect("the reconstructed session restores durable metadata");
+
+        let restored = resumed.into_state();
+        assert!(restored.working.type_def("AfterRestart").is_none());
+        assert_eq!(restored.working, restored.persisted);
+        assert_eq!(checkpoint.lock().unwrap().restores, ["snapshot-1"]);
     }
 
     #[tokio::test]
@@ -1070,6 +1164,41 @@ mod tests {
             error.downcast_ref::<Refused>().is_some(),
             "the refusal should carry the typed gate error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn every_checkpoint_mutation_is_refused_without_the_gate() {
+        let calls = [
+            ("snapshot", serde_json::json!({ "label": "read only" })),
+            (
+                "rollback",
+                serde_json::json!({ "reference": "snapshot-id" }),
+            ),
+            ("release", serde_json::json!({ "reference": "snapshot-id" })),
+            ("prune", serde_json::json!({ "keep": 3 })),
+            ("diff", serde_json::json!({ "reference": "snapshot-id" })),
+        ];
+
+        for (name, input) in calls {
+            let outcome = Session::new(
+                theseus_model(),
+                &NoopWorkspace,
+                &StubCheckpoint,
+                &theseus_calculator::Calculator,
+                &StubToolchain,
+                false,
+            )
+            .call(name, &input)
+            .await;
+            let error = match outcome {
+                Ok(result) => panic!("{name} bypassed its write gate: {result}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.downcast_ref::<Refused>().is_some(),
+                "{name} should carry the typed gate error: {error}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -173,6 +173,10 @@ pub fn theseus_model() -> Model {
         .foreign_type("GeneratedFiles", "Vec<theseus_modeling::GeneratedFile>")
         .foreign_type("ExpectedProjection", "theseus::ExpectedFileSet")
         .foreign_type("WorkspaceMutation", "theseus::PendingMutation")
+        .foreign_type("CheckpointSnapshotRequest", "theseus::CheckpointSnapshotRequest")
+        .foreign_type("CheckpointStateRequest", "theseus::CheckpointStateRequest")
+        .foreign_type("CheckpointSnapshot", "theseus::CheckpointSnapshot")
+        .foreign_type("CheckpointRestore", "theseus::CheckpointRestore")
         .foreign_type("QueryResult", "theseus_modeling::QueryOutcome")
         .foreign_type("PatchResult", "theseus_modeling::PatchOutcome")
         .foreign_type("CoverageReport", "theseus_modeling::CoverageReport")
@@ -240,6 +244,10 @@ pub fn theseus_model() -> Model {
         .struct_type(
             "SnapshotRef",
             &[("reference", "String", "The snapshot id, as returned by `snapshot`.")],
+        )
+        .struct_type(
+            "SnapshotRetention",
+            &[("keep", "u32", "Number of newest snapshots to retain.")],
         )
         .struct_type(
             "ReadRequest",
@@ -404,23 +412,43 @@ pub fn theseus_model() -> Model {
                 )
                 .operation(
                     "snapshot",
-                    "Checkpoint the working tree and return the snapshot id.",
+                    "Checkpoint tracked files and exact model-owned working-tree state, and return the snapshot id.",
                     "SnapshotRequest",
                     "String",
                 )
                 .uses(&["checkpoint"])
                 .tool(
-                    "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback. Tracked files only: a file created after the snapshot survives a rollback.",
+                    "Checkpoint tracked files and the exact present or absent state of paths owned by the current persisted model before risky edits. Returns a snapshot id for rollback. Requires write permission.",
                 )
                 .operation(
                     "rollback",
-                    "Restore the working tree to a snapshot.",
+                    "Restore tracked files and exact model-owned working-tree state from a snapshot.",
                     "SnapshotRef",
                     "String",
                 )
                 .uses(&["checkpoint"])
                 .tool(
-                    "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
+                    "Restore tracked files and the exact present or absent state of model-owned paths from a snapshot, leaving unrelated untracked files untouched. Requires write permission.",
+                )
+                .operation(
+                    "release",
+                    "Release a snapshot that is no longer needed.",
+                    "SnapshotRef",
+                    "String",
+                )
+                .uses(&["checkpoint"])
+                .tool(
+                    "Release a snapshot by atomically deleting its validated pair of private Git refs. Requires write permission.",
+                )
+                .operation(
+                    "prune",
+                    "Release older snapshots beyond a retention limit.",
+                    "SnapshotRetention",
+                    "String",
+                )
+                .uses(&["checkpoint"])
+                .tool(
+                    "Release older snapshot refs, retaining only the requested number of newest snapshots. Requires write permission.",
                 )
                 .operation(
                     "diff",
@@ -430,17 +458,17 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["checkpoint"])
                 .tool(
-                    "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
+                    "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a bounded, escaped Git-style diff with exact mode records, or an empty string when nothing has changed. Requires write permission.",
                 )
                 .operation(
                     "restart",
-                    "Rebuild the agent binary from the current workspace and resume the session.",
+                    "Compile-check readiness for an inbound-managed process restart.",
                     "Empty",
                     "Empty",
                 )
                 .uses(&["toolchain"])
                 .tool(
-                    "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+                    "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
                 )
                 .operation(
                     "read",
@@ -493,24 +521,39 @@ pub fn theseus_model() -> Model {
                     Port::new("checkpoint", "Checkpoints and restores the working tree.")
                         .method(
                             "snapshot",
-                            "Checkpoint the working tree and return the snapshot id.",
-                            "String",
-                            "String",
+                            "Checkpoint tracked files and exact model-owned working-tree state.",
+                            "CheckpointSnapshotRequest",
+                            "CheckpointSnapshot",
                         )
                         .gated()
                         .method(
                             "restore",
-                            "Restore the working tree to a snapshot.",
+                            "Restore tracked files and exact model-owned working-tree state from a snapshot.",
+                            "CheckpointStateRequest",
+                            "CheckpointRestore",
+                        )
+                        .gated()
+                        .method(
+                            "diff",
+                            "Return a bounded, escaped Git-style diff with exact mode records against the given snapshot.",
+                            "CheckpointStateRequest",
+                            "String",
+                        )
+                        .gated()
+                        .method(
+                            "release",
+                            "Release a snapshot that is no longer needed.",
                             "String",
                             "String",
                         )
                         .gated()
                         .method(
-                            "diff",
-                            "Return a unified diff of the working tree against the given snapshot ref.",
+                            "prune",
+                            "Release older snapshots beyond a retention limit.",
+                            "SnapshotRetention",
                             "String",
-                            "String",
-                        ),
+                        )
+                        .gated(),
                 )
                 .port(
                     Port::new(

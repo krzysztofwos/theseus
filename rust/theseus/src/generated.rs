@@ -28,19 +28,38 @@ impl<T: Workspace + ?Sized> Workspace for &T {
 /// Checkpoints and restores the working tree.
 #[async_trait::async_trait]
 pub trait Checkpoint: Send + Sync {
-    /// Checkpoint the working tree and return the snapshot id.
-    async fn snapshot(&self, _request: &str) -> anyhow::Result<String> {
+    /// Checkpoint tracked files and exact model-owned working-tree state.
+    async fn snapshot(
+        &self,
+        _request: &theseus::CheckpointSnapshotRequest,
+    ) -> anyhow::Result<theseus::CheckpointSnapshot> {
         Err(Unimplemented("checkpoint.snapshot").into())
     }
 
-    /// Restore the working tree to a snapshot.
-    async fn restore(&self, _request: &str) -> anyhow::Result<String> {
+    /// Restore tracked files and exact model-owned working-tree state from a snapshot.
+    async fn restore(
+        &self,
+        _request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<theseus::CheckpointRestore> {
         Err(Unimplemented("checkpoint.restore").into())
     }
 
-    /// Return a unified diff of the working tree against the given snapshot ref.
-    async fn diff(&self, _request: &str) -> anyhow::Result<String> {
+    /// Return a bounded, escaped Git-style diff with exact mode records against the given snapshot.
+    async fn diff(
+        &self,
+        _request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<String> {
         Err(Unimplemented("checkpoint.diff").into())
+    }
+
+    /// Release a snapshot that is no longer needed.
+    async fn release(&self, _request: &str) -> anyhow::Result<String> {
+        Err(Unimplemented("checkpoint.release").into())
+    }
+
+    /// Release older snapshots beyond a retention limit.
+    async fn prune(&self, _request: &SnapshotRetention) -> anyhow::Result<String> {
+        Err(Unimplemented("checkpoint.prune").into())
     }
 }
 
@@ -48,16 +67,33 @@ pub trait Checkpoint: Send + Sync {
 /// generic over the port holds a borrow as readily as an owned adapter.
 #[async_trait::async_trait]
 impl<T: Checkpoint + ?Sized> Checkpoint for &T {
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+    async fn snapshot(
+        &self,
+        request: &theseus::CheckpointSnapshotRequest,
+    ) -> anyhow::Result<theseus::CheckpointSnapshot> {
         (**self).snapshot(request).await
     }
 
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+    async fn restore(
+        &self,
+        request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<theseus::CheckpointRestore> {
         (**self).restore(request).await
     }
 
-    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+    async fn diff(
+        &self,
+        request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<String> {
         (**self).diff(request).await
+    }
+
+    async fn release(&self, request: &str) -> anyhow::Result<String> {
+        (**self).release(request).await
+    }
+
+    async fn prune(&self, request: &SnapshotRetention) -> anyhow::Result<String> {
+        (**self).prune(request).await
     }
 }
 
@@ -137,22 +173,48 @@ pub struct GatedCheckpoint<A> {
 
 #[async_trait::async_trait]
 impl<A: Checkpoint> Checkpoint for GatedCheckpoint<A> {
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
+    async fn snapshot(
+        &self,
+        request: &theseus::CheckpointSnapshotRequest,
+    ) -> anyhow::Result<theseus::CheckpointSnapshot> {
         if !self.allow_writes {
             return Err(Refused.into());
         }
         self.checkpoint.snapshot(request).await
     }
 
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
+    async fn restore(
+        &self,
+        request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<theseus::CheckpointRestore> {
         if !self.allow_writes {
             return Err(Refused.into());
         }
         self.checkpoint.restore(request).await
     }
 
-    async fn diff(&self, request: &str) -> anyhow::Result<String> {
+    async fn diff(
+        &self,
+        request: &theseus::CheckpointStateRequest,
+    ) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
         self.checkpoint.diff(request).await
+    }
+
+    async fn release(&self, request: &str) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.checkpoint.release(request).await
+    }
+
+    async fn prune(&self, request: &SnapshotRetention) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.checkpoint.prune(request).await
     }
 }
 
@@ -232,6 +294,13 @@ pub struct SnapshotRequest {
 pub struct SnapshotRef {
     /// The snapshot id, as returned by `snapshot`.
     pub reference: String,
+}
+
+/// The `SnapshotRetention` request.
+#[derive(Debug, Clone)]
+pub struct SnapshotRetention {
+    /// Number of newest snapshots to retain.
+    pub keep: u32,
 }
 
 /// The `ReadRequest` request.
@@ -356,14 +425,24 @@ pub trait TheseusService: Send + Sync {
         Err(Unimplemented("test").into())
     }
 
-    /// Checkpoint the working tree and return the snapshot id.
+    /// Checkpoint tracked files and exact model-owned working-tree state, and return the snapshot id.
     async fn snapshot(&self, _request: SnapshotRequest) -> anyhow::Result<String> {
         Err(Unimplemented("snapshot").into())
     }
 
-    /// Restore the working tree to a snapshot.
+    /// Restore tracked files and exact model-owned working-tree state from a snapshot.
     async fn rollback(&self, _request: SnapshotRef) -> anyhow::Result<String> {
         Err(Unimplemented("rollback").into())
+    }
+
+    /// Release a snapshot that is no longer needed.
+    async fn release(&self, _request: SnapshotRef) -> anyhow::Result<String> {
+        Err(Unimplemented("release").into())
+    }
+
+    /// Release older snapshots beyond a retention limit.
+    async fn prune(&self, _request: SnapshotRetention) -> anyhow::Result<String> {
+        Err(Unimplemented("prune").into())
     }
 
     /// Show what changed in the working tree since a snapshot.
@@ -371,7 +450,7 @@ pub trait TheseusService: Send + Sync {
         Err(Unimplemented("diff").into())
     }
 
-    /// Rebuild the agent binary from the current workspace and resume the session.
+    /// Compile-check readiness for an inbound-managed process restart.
     async fn restart(&self) -> anyhow::Result<()> {
         Err(Unimplemented("restart").into())
     }
@@ -509,6 +588,14 @@ for Standalone<
         self.ctx().rollback(request).await
     }
 
+    async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        self.ctx().release(request).await
+    }
+
+    async fn prune(&self, request: SnapshotRetention) -> anyhow::Result<String> {
+        self.ctx().prune(request).await
+    }
+
     async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
         self.ctx().diff(request).await
     }
@@ -588,19 +675,27 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "Run the workspace tests and report the outcome. Slower than check; use it when behavior matters.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "snapshot", "description" :
-        "Checkpoint the working tree before risky edits. Returns a snapshot id for rollback. Tracked files only: a file created after the snapshot survives a rollback.",
+        "Checkpoint tracked files and the exact present or absent state of paths owned by the current persisted model before risky edits. Returns a snapshot id for rollback. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "label" : { "type" :
         "string" } }, "required" : ["label"] } }), serde_json::json!({ "name" :
         "rollback", "description" :
-        "Restore the working tree to a snapshot id from the snapshot tool. Tracked files only. Requires write permission.",
+        "Restore tracked files and the exact present or absent state of model-owned paths from a snapshot, leaving unrelated untracked files untouched. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
         "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
-        "diff", "description" :
-        "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a unified diff, or an empty string when nothing has changed.",
+        "release", "description" :
+        "Release a snapshot by atomically deleting its validated pair of private Git refs. Requires write permission.",
+        "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
+        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
+        "prune", "description" :
+        "Release older snapshot refs, retaining only the requested number of newest snapshots. Requires write permission.",
+        "input_schema" : { "type" : "object", "properties" : { "keep" : { "type" :
+        "number" } }, "required" : ["keep"] } }), serde_json::json!({ "name" : "diff",
+        "description" :
+        "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a bounded, escaped Git-style diff with exact mode records, or an empty string when nothing has changed. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
         "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
         "restart", "description" :
-        "Rebuild the agent and resume this session in the new binary, whose compiled model, tool catalog, and tool dispatch match the workspace — an operation the applied patch exposed becomes a callable tool. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+        "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "read", "description" :
         "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
@@ -720,6 +815,16 @@ pub(crate) fn parse_snapshot_ref_input(
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `reference`"))?,
     })
 }
+pub(crate) fn parse_snapshot_retention_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<SnapshotRetention> {
+    Ok(SnapshotRetention {
+        keep: serde_json::from_value(
+                input.get("keep").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `keep` field is invalid: {error}"))?,
+    })
+}
 pub(crate) fn parse_read_request_input(
     input: &serde_json::Value,
 ) -> anyhow::Result<ReadRequest> {
@@ -798,6 +903,8 @@ pub async fn dispatch_tool(
         "test" => Ok(serde_json::to_string(&service.test().await?)?),
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
         "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
+        "release" => Ok(service.release(parse_snapshot_ref_input(input)?).await?),
+        "prune" => Ok(service.prune(parse_snapshot_retention_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
         "restart" => Ok(serde_json::to_string(&service.restart().await?)?),
         "read" => Ok(service.read(parse_read_request_input(input)?).await?),
@@ -806,7 +913,7 @@ pub async fn dispatch_tool(
         "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart, read, search, list, lint"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint"
             )
         }
     }

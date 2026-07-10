@@ -10,14 +10,15 @@
 //! the same way. Both the agent loop and an external host over MCP drive the
 //! same `Session`, so they see one tool surface with one set of semantics.
 
-use std::collections::HashMap;
-
 use theseus_modeling::Model;
 
 use crate::{
     GatedCheckpoint, GatedWorkspace,
     generated::{Checkpoint, Ctx, Toolchain, Workspace, dispatch_tool},
-    service::{apply_patch, generate_model, implement_model, persist_model, scaffold_model},
+    service::{
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, generate_model,
+        implement_model, persist_model, scaffold_model,
+    },
 };
 
 /// A working model an agent edits by calling Theseus's own operations as tools.
@@ -27,7 +28,6 @@ use crate::{
 pub struct SessionState {
     pub(crate) working: Model,
     pub(crate) persisted: Model,
-    snapshots: HashMap<String, Model>,
 }
 
 impl SessionState {
@@ -35,20 +35,7 @@ impl SessionState {
         Self {
             persisted: model.clone(),
             working: model,
-            snapshots: HashMap::new(),
         }
-    }
-
-    pub(crate) fn record_snapshot(&mut self, reference: String) {
-        self.snapshots.insert(reference, self.persisted.clone());
-    }
-
-    pub(crate) fn snapshot_model(&self, reference: &str) -> anyhow::Result<Model> {
-        self.snapshots.get(reference).cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "snapshot {reference:?} was not created in this session; use the one-shot CLI for a disk-only restore and start a fresh long-lived session afterward"
-            )
-        })
     }
 
     pub(crate) fn adopt_rollback(&mut self, model: Model) {
@@ -164,16 +151,21 @@ impl<'a> Session<'a> {
         }
         if name == "snapshot" {
             let request = crate::generated::parse_snapshot_request_input(input)?;
-            let reference = self.checkpoint_gate().snapshot(&request.label).await?;
-            self.state.record_snapshot(reference.clone());
-            return Ok(reference);
+            let plan = checkpoint_snapshot_request(&self.state.persisted, request.label)?;
+            let snapshot = self.checkpoint_gate().snapshot(&plan).await?;
+            return Ok(snapshot.reference);
         }
         if name == "rollback" {
             let request = crate::generated::parse_snapshot_ref_input(input)?;
-            let model = self.state.snapshot_model(&request.reference)?;
-            let result = self.checkpoint_gate().restore(&request.reference).await?;
-            self.state.adopt_rollback(model);
-            return Ok(result);
+            let plan = checkpoint_state_request(&self.state.persisted, request.reference)?;
+            let restored = self.checkpoint_gate().restore(&plan).await?;
+            self.state.adopt_rollback(restored.model);
+            return Ok(restored.detail);
+        }
+        if name == "diff" {
+            let request = crate::generated::parse_snapshot_ref_input(input)?;
+            let plan = checkpoint_state_request(&self.state.persisted, request.reference)?;
+            return self.checkpoint_gate().diff(&plan).await;
         }
         let workspace = self.gate();
         let checkpoint = self.checkpoint_gate();

@@ -177,7 +177,9 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("snapshot")
-                .about("Checkpoint the working tree and return the snapshot id.")
+                .about(
+                    "Checkpoint tracked files and exact model-owned working-tree state, and return the snapshot id.",
+                )
                 .arg(
                     Arg::new("label")
                         .long("label")
@@ -188,13 +190,38 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("rollback")
-                .about("Restore the working tree to a snapshot.")
+                .about(
+                    "Restore tracked files and exact model-owned working-tree state from a snapshot.",
+                )
                 .arg(
                     Arg::new("reference")
                         .long("reference")
                         .action(ArgAction::Set)
                         .required(true)
                         .help("The snapshot id, as returned by `snapshot`."),
+                ),
+        )
+        .subcommand(
+            Command::new("release")
+                .about("Release a snapshot that is no longer needed.")
+                .arg(
+                    Arg::new("reference")
+                        .long("reference")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The snapshot id, as returned by `snapshot`."),
+                ),
+        )
+        .subcommand(
+            Command::new("prune")
+                .about("Release older snapshots beyond a retention limit.")
+                .arg(
+                    Arg::new("keep")
+                        .long("keep")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .value_parser(clap::value_parser!(u32))
+                        .help("Number of newest snapshots to retain."),
                 ),
         )
         .subcommand(
@@ -210,9 +237,7 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("restart")
-                .about(
-                    "Rebuild the agent binary from the current workspace and resume the session.",
-                ),
+                .about("Compile-check readiness for an inbound-managed process restart."),
         )
         .subcommand(
             Command::new("read")
@@ -332,6 +357,14 @@ fn parse_snapshot_ref(matches: &ArgMatches) -> anyhow::Result<theseus::SnapshotR
     })
 }
 
+fn parse_snapshot_retention(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::SnapshotRetention> {
+    Ok(theseus::SnapshotRetention {
+        keep: matches.get_one::<u32>("keep").cloned().unwrap_or_default(),
+    })
+}
+
 fn parse_read_request(matches: &ArgMatches) -> anyhow::Result<theseus::ReadRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::ReadRequest {
@@ -369,6 +402,8 @@ pub enum Invocation {
     Test,
     Snapshot(theseus::SnapshotRequest),
     Rollback(theseus::SnapshotRef),
+    Release(theseus::SnapshotRef),
+    Prune(theseus::SnapshotRetention),
     Diff(theseus::SnapshotRef),
     Restart,
     Read(theseus::ReadRequest),
@@ -399,6 +434,8 @@ impl Invocation {
                 Ok(Invocation::Snapshot(parse_snapshot_request(sub)?))
             }
             Some(("rollback", sub)) => Ok(Invocation::Rollback(parse_snapshot_ref(sub)?)),
+            Some(("release", sub)) => Ok(Invocation::Release(parse_snapshot_ref(sub)?)),
+            Some(("prune", sub)) => Ok(Invocation::Prune(parse_snapshot_retention(sub)?)),
             Some(("diff", sub)) => Ok(Invocation::Diff(parse_snapshot_ref(sub)?)),
             Some(("restart", _)) => Ok(Invocation::Restart),
             Some(("read", sub)) => Ok(Invocation::Read(parse_read_request(sub)?)),
@@ -461,6 +498,8 @@ pub async fn dispatch(
         Invocation::Rollback(request) => {
             println!("{}", service.rollback(request). await ?)
         }
+        Invocation::Release(request) => println!("{}", service.release(request). await ?),
+        Invocation::Prune(request) => println!("{}", service.prune(request). await ?),
         Invocation::Diff(request) => println!("{}", service.diff(request). await ?),
         Invocation::Restart => {
             println!("{}", serde_json::to_string_pretty(& service.restart(). await ?) ?)

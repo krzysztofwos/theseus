@@ -111,6 +111,11 @@ message SnapshotRef {
   string reference = 1;
 }
 
+message SnapshotRetention {
+  // Number of newest snapshots to retain.
+  uint32 keep = 1;
+}
+
 message ReadRequest {
   // The workspace-relative file to read.
   string path = 1;
@@ -189,13 +194,17 @@ service Theseus {
   rpc Scaffold (Empty) returns (GeneratedFiles);
   // Run the workspace tests and report the outcome.
   rpc Test (Empty) returns (CheckReport);
-  // Checkpoint the working tree and return the snapshot id.
+  // Checkpoint tracked files and exact model-owned working-tree state, and return the snapshot id.
   rpc Snapshot (SnapshotRequest) returns (String);
-  // Restore the working tree to a snapshot.
+  // Restore tracked files and exact model-owned working-tree state from a snapshot.
   rpc Rollback (SnapshotRef) returns (String);
+  // Release a snapshot that is no longer needed.
+  rpc Release (SnapshotRef) returns (String);
+  // Release older snapshots beyond a retention limit.
+  rpc Prune (SnapshotRetention) returns (String);
   // Show what changed in the working tree since a snapshot.
   rpc Diff (SnapshotRef) returns (String);
-  // Rebuild the agent binary from the current workspace and resume the session.
+  // Compile-check readiness for an inbound-managed process restart.
   rpc Restart (Empty) returns (Empty);
   // Read a workspace file, capped for a tool result.
   rpc Read (ReadRequest) returns (String);

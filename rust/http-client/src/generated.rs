@@ -175,6 +175,25 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(body)
     }
 
+    async fn release(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("release", serde_json::json!({ "reference" : request.reference }))
+            .await?;
+        checked("release", status, &body)?;
+        Ok(body)
+    }
+
+    async fn prune(
+        &self,
+        request: theseus::SnapshotRetention,
+    ) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("prune", serde_json::json!({ "keep" : request.keep }))
+            .await?;
+        checked("prune", status, &body)?;
+        Ok(body)
+    }
+
     async fn diff(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let (status, body) = self
             .post("diff", serde_json::json!({ "reference" : request.reference }))

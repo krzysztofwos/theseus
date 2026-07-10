@@ -144,3 +144,21 @@ fn print_check_report(report: theseus::CheckReport) {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prune_carries_its_retention_limit_from_the_cli() {
+        let matches = generated::command()
+            .try_get_matches_from(["theseus", "prune", "--keep", "7"])
+            .expect("the prune command parses");
+        let invocation = Invocation::from_matches(&matches).expect("the invocation converts");
+
+        let Invocation::Prune(request) = invocation else {
+            panic!("prune parsed as another invocation");
+        };
+        assert_eq!(request.keep, 7);
+    }
+}

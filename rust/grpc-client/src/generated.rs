@@ -201,6 +201,33 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(reply.into_inner().value)
     }
 
+    async fn release(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .release(proto::SnapshotRef {
+                reference: request.reference,
+            })
+            .await
+            .map_err(|status| failed("release", status))?;
+        Ok(reply.into_inner().value)
+    }
+
+    async fn prune(
+        &self,
+        request: theseus::SnapshotRetention,
+    ) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .prune(proto::SnapshotRetention {
+                keep: request.keep,
+            })
+            .await
+            .map_err(|status| failed("prune", status))?;
+        Ok(reply.into_inner().value)
+    }
+
     async fn diff(&self, request: theseus::SnapshotRef) -> anyhow::Result<String> {
         let reply = self
             .stub

@@ -14,6 +14,8 @@ use anyhow::Context;
 use thiserror::Error;
 
 mod check_report;
+mod checkpoint;
+mod checkpoint_model;
 mod generated;
 mod implement_result;
 mod service;
@@ -26,8 +28,8 @@ pub use implement_result::ImplementResult;
 pub use session::{Session, SessionState};
 pub use stateful::StatefulSession;
 pub use theseus_workspace::{
-    ExpectedFile, ExpectedFileSet, FsMutation, MutationError, MutationFile, PendingMutation,
-    WorkspaceMutation,
+    ExpectedFile, ExpectedFileSet, FsMutation, MutationError, MutationFile, MutationTarget,
+    PendingMutation, WorkspaceMutation, validate_workspace_paths,
 };
 
 /// The repository root, the directory that holds `rust/`, derived from this
@@ -62,16 +64,48 @@ impl Workspace for FsWorkspace {
     }
 }
 
-/// A [`Checkpoint`] over the repository's git history: a snapshot is a pinned
-/// stash commit of the working tree, and a restore points the tree back at one.
-/// The shared checkpoint adapter for the inbound binaries. Both operate on
-/// tracked files.
+/// A [`Checkpoint`] backed by paired private Git refs that are validated and
+/// never retargeted, then deleted together on release. Snapshots store raw
+/// tracked and model-owned state; restores publish exact files, symlinks, modes,
+/// and tombstones through the workspace WAL.
 pub struct GitCheckpoint {
     root: PathBuf,
 }
 
 const SNAPSHOT_REF_PREFIX: &str = "refs/theseus/snapshots";
 const MAX_SNAPSHOT_LABEL_BYTES: usize = 256;
+
+/// The internal snapshot plan assembled from a session's persisted model.
+#[derive(Clone, Debug)]
+pub struct CheckpointSnapshotRequest {
+    pub label: String,
+    pub expected: ExpectedFileSet,
+    pub owned_paths: Vec<String>,
+    pub model: theseus_modeling::Model,
+}
+
+/// The internal plan for inspecting or restoring a snapshot from the current
+/// persisted model revision.
+#[derive(Clone, Debug)]
+pub struct CheckpointStateRequest {
+    pub reference: String,
+    pub expected: ExpectedFileSet,
+    pub owned_paths: Vec<String>,
+    pub model: theseus_modeling::Model,
+}
+
+/// A newly pinned snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointSnapshot {
+    pub reference: String,
+}
+
+/// A completed durable restore and the persisted model stored with it.
+#[derive(Clone, Debug)]
+pub struct CheckpointRestore {
+    pub detail: String,
+    pub model: theseus_modeling::Model,
+}
 
 /// A full Git object ID. Snapshot references deliberately do not accept
 /// symbolic or abbreviated revisions, so Git never interprets caller input as
@@ -118,6 +152,77 @@ enum GitCheckpointError {
     },
     #[error("snapshot reference {reference} is not pinned by Theseus")]
     UnknownSnapshot { reference: String },
+    #[error("snapshot reference {reference} is symbolic")]
+    SymbolicSnapshot { reference: String },
+    #[error("snapshot manifest is {length} bytes; the maximum is {maximum}")]
+    ManifestTooLarge { length: usize, maximum: usize },
+    #[error("snapshot manifest has unsupported version {version}")]
+    UnsupportedManifest { version: u32 },
+    #[error("snapshot manifest is invalid: {message}")]
+    InvalidManifest { message: String },
+    #[error("snapshot ownership does not match its persisted model")]
+    OwnershipMismatch,
+    #[error("snapshot expected projection does not match its persisted model")]
+    ProjectionMismatch,
+    #[error("snapshot model cannot be projected")]
+    InvalidModel {
+        #[source]
+        source: theseus_modeling::RenderError,
+    },
+    #[error("snapshot model is invalid")]
+    SnapshotModel {
+        #[from]
+        #[source]
+        source: checkpoint_model::SnapshotModelError,
+    },
+    #[error("Git returned a non-UTF-8 workspace path")]
+    NonUtf8Path,
+    #[error("Git tree entry {path:?} has unsupported mode {mode} and type {kind}")]
+    UnsupportedTreeEntry {
+        path: String,
+        mode: String,
+        kind: String,
+    },
+    #[error("Git blob for {path:?} is {length} bytes; the maximum is {maximum}")]
+    BlobTooLarge {
+        path: String,
+        length: u64,
+        maximum: u64,
+    },
+    #[error("snapshot contents total {length} bytes; the maximum is {maximum}")]
+    SnapshotTooLarge { length: u64, maximum: u64 },
+    #[error("snapshot declares {length} paths; the maximum is {maximum}")]
+    TooManyPaths { length: usize, maximum: usize },
+    #[error("repository retains {length} snapshots; the maximum is {maximum}")]
+    TooManySnapshots { length: usize, maximum: usize },
+    #[error("Git blob for {path:?} reported {expected} bytes but returned {actual}")]
+    BlobLength {
+        path: String,
+        expected: u64,
+        actual: usize,
+    },
+    #[error("system clock is before the Unix epoch")]
+    InvalidClock,
+    #[error("writing to `{operation}`")]
+    CommandInput {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading from `{operation}`")]
+    CommandOutput {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("`{operation}` {stream} exceeded {maximum} bytes")]
+    CommandOutputTooLarge {
+        operation: &'static str,
+        stream: &'static str,
+        maximum: usize,
+    },
+    #[error("checkpoint filesystem worker panicked")]
+    WorkerPanicked,
     #[error("Git returned an invalid object ID from `{operation}`: {output:?}: {source}")]
     InvalidOutput {
         operation: &'static str,
@@ -138,6 +243,16 @@ enum GitCheckpointError {
     },
     #[error(transparent)]
     Mutation(#[from] MutationError),
+    #[error("serializing snapshot manifest")]
+    SerializeManifest {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("parsing snapshot manifest")]
+    ParseManifest {
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 impl GitCheckpointError {
@@ -176,8 +291,11 @@ impl GitCheckpoint {
         }
     }
 
-    async fn repository_lease(&self) -> Result<PendingMutation, GitCheckpointError> {
-        Ok(FsMutation::begin_async(self.root.clone(), Vec::new()).await?)
+    async fn repository_lease(
+        &self,
+        expected: ExpectedFileSet,
+    ) -> Result<PendingMutation, GitCheckpointError> {
+        Ok(FsMutation::begin_async(self.root.clone(), expected).await?)
     }
 
     fn validate_label(label: &str) -> Result<(), GitCheckpointError> {
@@ -194,58 +312,6 @@ impl GitCheckpoint {
         format!("{SNAPSHOT_REF_PREFIX}/{}", object_id.as_str())
     }
 
-    async fn pinned_commit(&self, reference: &str) -> Result<GitObjectId, GitCheckpointError> {
-        let object_id = GitObjectId::try_from(reference)
-            .map_err(|source| GitCheckpointError::invalid_reference(reference, source))?;
-        let commit = format!("{}^{{commit}}", Self::snapshot_ref(&object_id));
-        let output = tokio::process::Command::new("git")
-            .args(["rev-parse", "--verify"])
-            .arg(commit)
-            .current_dir(&self.root)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|source| GitCheckpointError::Launch {
-                operation: "git rev-parse snapshot",
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::UnknownSnapshot {
-                reference: object_id.into_string(),
-            });
-        }
-        let pinned = Self::snapshot_id("git rev-parse snapshot", &output)?;
-        if pinned != object_id {
-            return Err(GitCheckpointError::UnknownSnapshot {
-                reference: object_id.into_string(),
-            });
-        }
-        Ok(object_id)
-    }
-
-    async fn pin(&self, object_id: &GitObjectId) -> Result<(), GitCheckpointError> {
-        let reference = Self::snapshot_ref(object_id);
-        let output = tokio::process::Command::new("git")
-            .args(["update-ref"])
-            .arg(reference)
-            .arg(object_id.as_str())
-            .current_dir(&self.root)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|source| GitCheckpointError::Launch {
-                operation: "git update-ref",
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::command_failed(
-                "git update-ref",
-                &output,
-            ));
-        }
-        Ok(())
-    }
-
     fn snapshot_id(
         operation: &'static str,
         output: &std::process::Output,
@@ -257,103 +323,6 @@ impl GitCheckpoint {
         let snapshot_id = stdout.trim();
         GitObjectId::try_from(snapshot_id)
             .map_err(|source| GitCheckpointError::invalid_output(operation, snapshot_id, source))
-    }
-}
-
-#[async_trait::async_trait]
-impl Checkpoint for GitCheckpoint {
-    async fn diff(&self, request: &str) -> anyhow::Result<String> {
-        let lease = self.repository_lease().await?;
-        let reference = self.pinned_commit(request).await?;
-        let output = tokio::process::Command::new("git")
-            .args(["diff", "--no-ext-diff", "--no-textconv"])
-            .arg(reference.as_str())
-            .args(["--", "."])
-            .current_dir(&self.root)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|source| GitCheckpointError::Launch {
-                operation: "git diff",
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::command_failed("git diff", &output).into());
-        }
-        let diff = String::from_utf8_lossy(&output.stdout).into_owned();
-        lease.commit().map_err(GitCheckpointError::from)?;
-        Ok(diff)
-    }
-
-    async fn snapshot(&self, request: &str) -> anyhow::Result<String> {
-        Self::validate_label(request)?;
-        let lease = self.repository_lease().await?;
-        // Prefix the caller's label so it is always one positional message and
-        // can never be parsed as an option by `git stash create`.
-        let message = format!("Theseus checkpoint: {request}");
-        let output = tokio::process::Command::new("git")
-            .args(["stash", "create"])
-            .arg(message)
-            .current_dir(&self.root)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|source| GitCheckpointError::Launch {
-                operation: "git stash create",
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::command_failed("git stash create", &output).into());
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stash_id = stdout.trim();
-        let snapshot = if stash_id.is_empty() {
-            // A clean tree snapshots HEAD.
-            let head = tokio::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(&self.root)
-                .kill_on_drop(true)
-                .output()
-                .await
-                .map_err(|source| GitCheckpointError::Launch {
-                    operation: "git rev-parse HEAD",
-                    source,
-                })?;
-            Self::snapshot_id("git rev-parse HEAD", &head)?
-        } else {
-            GitObjectId::try_from(stash_id).map_err(|source| {
-                GitCheckpointError::invalid_output("git stash create", stash_id, source)
-            })?
-        };
-        self.pin(&snapshot).await?;
-        lease.commit().map_err(GitCheckpointError::from)?;
-        Ok(snapshot.into_string())
-    }
-
-    async fn restore(&self, request: &str) -> anyhow::Result<String> {
-        let lease = self.repository_lease().await?;
-        let reference = self.pinned_commit(request).await?;
-        // Restoration, lease release, and the caller's model adoption form one
-        // cancellation-free poll. Git restore is short and owns the repository
-        // lease, so blocking here is preferable to disk/model divergence.
-        let output = std::process::Command::new("git")
-            .args(["restore", "--source"])
-            .arg(reference.as_str())
-            .args(["--staged", "--worktree", "--", "."])
-            .current_dir(&self.root)
-            .output()
-            .map_err(|source| GitCheckpointError::Launch {
-                operation: "git restore",
-                source,
-            })?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::command_failed("git restore", &output).into());
-        }
-        lease.commit().map_err(GitCheckpointError::from)?;
-        Ok(format!(
-            "restored the working tree to {}",
-            reference.as_str()
-        ))
     }
 }
 
@@ -592,13 +561,16 @@ mod git_checkpoint_tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        process::Command,
+        process::{Command, Stdio},
         sync::atomic::{AtomicU64, Ordering},
     };
 
+    use theseus_model::{checkpoint_paths, theseus_model};
+
     use super::{
-        Checkpoint, FsMutation, GitCheckpoint, GitCheckpointError, GitObjectId,
-        MAX_SNAPSHOT_LABEL_BYTES, SNAPSHOT_REF_PREFIX,
+        Checkpoint, CheckpointSnapshotRequest, CheckpointStateRequest, FsMutation, GitCheckpoint,
+        GitCheckpointError, GitObjectId, MAX_SNAPSHOT_LABEL_BYTES, SNAPSHOT_REF_PREFIX,
+        checkpoint::PRIMARY_PROMOTION_DIRECTORY,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -641,7 +613,15 @@ mod git_checkpoint_tests {
             );
             fs::write(directory.path().join("tracked.txt"), "base\n")
                 .expect("the initial file is written");
-            git(directory.path(), &["add", "--", "tracked.txt"]);
+            fs::write(
+                directory.path().join(".gitignore"),
+                "Cargo.lock\nunrelated.ignored\n",
+            )
+            .expect("the ignore rules are written");
+            git(
+                directory.path(),
+                &["add", "--", "tracked.txt", ".gitignore"],
+            );
             git(directory.path(), &["commit", "--quiet", "-m", "initial"]);
             let checkpoint = GitCheckpoint {
                 root: directory.path().to_path_buf(),
@@ -684,6 +664,37 @@ mod git_checkpoint_tests {
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
+    fn loose_object_count(root: &Path) -> u64 {
+        git_stdout(root, &["count-objects", "-v"])
+            .lines()
+            .find_map(|line| line.strip_prefix("count: "))
+            .expect("Git reports its loose object count")
+            .parse()
+            .expect("the loose object count is numeric")
+    }
+
+    fn snapshot_request(root: &Path, label: impl Into<String>) -> CheckpointSnapshotRequest {
+        let model = theseus_model();
+        CheckpointSnapshotRequest {
+            label: label.into(),
+            expected: theseus_model::checkpoint_expectations(root, &model)
+                .expect("checkpoint expectations render"),
+            owned_paths: checkpoint_paths(&model).expect("checkpoint paths render"),
+            model,
+        }
+    }
+
+    fn state_request(root: &Path, reference: impl Into<String>) -> CheckpointStateRequest {
+        let model = theseus_model();
+        CheckpointStateRequest {
+            reference: reference.into(),
+            expected: theseus_model::checkpoint_expectations(root, &model)
+                .expect("checkpoint expectations render"),
+            owned_paths: checkpoint_paths(&model).expect("checkpoint paths render"),
+            model,
+        }
+    }
+
     #[test]
     fn object_ids_must_be_full_hexadecimal_values() {
         assert!(GitObjectId::try_from("0123456789abcdef0123456789abcdef01234567").is_ok());
@@ -701,7 +712,10 @@ mod git_checkpoint_tests {
 
         let error = repository
             .checkpoint
-            .diff(&format!("--output={}", output_path.display()))
+            .diff(&state_request(
+                repository.directory.path(),
+                format!("--output={}", output_path.display()),
+            ))
             .await
             .expect_err("a Git option is not a snapshot reference");
 
@@ -722,9 +736,10 @@ mod git_checkpoint_tests {
             .expect("the snapshot content is written");
         let snapshot = repository
             .checkpoint
-            .snapshot("round trip")
+            .snapshot(&snapshot_request(repository.directory.path(), "round trip"))
             .await
-            .expect("the working tree is snapshotted");
+            .expect("the working tree is snapshotted")
+            .reference;
         GitObjectId::try_from(snapshot.as_str()).expect("snapshot returns a full object ID");
         assert_eq!(
             git_stdout(
@@ -742,7 +757,7 @@ mod git_checkpoint_tests {
         fs::write(repository.path("tracked.txt"), "after\n").expect("the later content is written");
         let diff = repository
             .checkpoint
-            .diff(&snapshot)
+            .diff(&state_request(repository.directory.path(), &snapshot))
             .await
             .expect("the snapshot can be diffed");
         assert!(diff.contains("-snapshot"), "{diff}");
@@ -750,7 +765,7 @@ mod git_checkpoint_tests {
 
         repository
             .checkpoint
-            .restore(&snapshot)
+            .restore(&state_request(repository.directory.path(), &snapshot))
             .await
             .expect("the snapshot can be restored");
         assert_eq!(
@@ -761,13 +776,171 @@ mod git_checkpoint_tests {
     }
 
     #[tokio::test]
+    async fn diff_object_stores_are_temporary_and_stale_stores_are_recovered() {
+        let repository = TestRepository::new();
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "temporary"))
+            .await
+            .expect("the snapshot succeeds")
+            .reference;
+        fs::write(repository.path("tracked.txt"), "changed\n")
+            .expect("the tracked file is changed");
+        let before = loose_object_count(repository.directory.path());
+        let marker = repository.path("checkpoint-diff-paused");
+        let mut child = Command::new(std::env::current_exe().expect("the test binary has a path"))
+            .args([
+                "--exact",
+                "git_checkpoint_tests::checkpoint_diff_process_helper",
+                "--nocapture",
+            ])
+            .env(
+                "THESEUS_CHECKPOINT_DIFF_PAUSE_ROOT",
+                repository.directory.path(),
+            )
+            .env("THESEUS_CHECKPOINT_REFERENCE", &snapshot)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the diff helper starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the diff helper did not reach its object-store pause"
+            );
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "the diff helper exited before its object-store pause"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            fs::read_dir(repository.path(".theseus"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("checkpoint-objects-"))
+        );
+        child.kill().expect("the paused diff is killed");
+        child.wait().expect("the killed diff is reaped");
+        fs::remove_file(&marker).expect("the diff marker is removed");
+
+        let diff = repository
+            .checkpoint
+            .diff(&state_request(repository.directory.path(), &snapshot))
+            .await
+            .expect("the temporary comparison succeeds");
+
+        assert!(diff.contains("+changed"), "{diff}");
+        assert_eq!(loose_object_count(repository.directory.path()), before);
+        assert!(
+            fs::read_dir(repository.path(".theseus"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("checkpoint-objects-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn killed_snapshot_quarantines_are_recovered_without_main_object_leaks() {
+        let repository = TestRepository::new();
+        fs::write(repository.path("tracked.txt"), "candidate\n")
+            .expect("the candidate state is written");
+        let before = loose_object_count(repository.directory.path());
+        let marker = repository.path("checkpoint-snapshot-paused");
+        let mut child = Command::new(std::env::current_exe().expect("the test binary has a path"))
+            .args([
+                "--exact",
+                "git_checkpoint_tests::checkpoint_snapshot_process_helper",
+                "--nocapture",
+            ])
+            .env(
+                "THESEUS_CHECKPOINT_SNAPSHOT_PAUSE_ROOT",
+                repository.directory.path(),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the snapshot helper starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the snapshot helper did not reach quarantine"
+            );
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "the snapshot helper exited before its quarantine pause"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(loose_object_count(repository.directory.path()), before);
+        child.kill().expect("the paused snapshot is killed");
+        child.wait().expect("the killed snapshot is reaped");
+        fs::remove_file(&marker).expect("the snapshot marker is removed");
+        assert_eq!(loose_object_count(repository.directory.path()), before);
+
+        repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "after recovery",
+            ))
+            .await
+            .expect("the next snapshot removes the stale quarantine");
+        assert!(
+            fs::read_dir(repository.path(".theseus"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("checkpoint-objects-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_snapshot_process_helper() {
+        let Ok(root) = std::env::var("THESEUS_CHECKPOINT_SNAPSHOT_PAUSE_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        GitCheckpoint { root: root.clone() }
+            .snapshot(&snapshot_request(&root, "quarantined"))
+            .await
+            .expect("the helper snapshot completes only when not killed");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_diff_process_helper() {
+        let Ok(root) = std::env::var("THESEUS_CHECKPOINT_DIFF_PAUSE_ROOT") else {
+            return;
+        };
+        let reference = std::env::var("THESEUS_CHECKPOINT_REFERENCE")
+            .expect("the helper receives a snapshot reference");
+        let checkpoint = GitCheckpoint {
+            root: PathBuf::from(root),
+        };
+        checkpoint
+            .diff(&state_request(&checkpoint.root, reference))
+            .await
+            .expect("the helper diff completes only when not killed");
+    }
+
+    #[tokio::test]
     async fn an_existing_but_unpinned_commit_is_rejected() {
         let repository = TestRepository::new();
         let unpinned = git_stdout(repository.directory.path(), &["rev-parse", "HEAD"]);
 
         let error = repository
             .checkpoint
-            .diff(&unpinned)
+            .diff(&state_request(repository.directory.path(), &unpinned))
             .await
             .expect_err("an unpinned commit is not accepted");
 
@@ -784,9 +957,10 @@ mod git_checkpoint_tests {
             .expect("the snapshot content is written");
         let snapshot = repository
             .checkpoint
-            .snapshot("durable")
+            .snapshot(&snapshot_request(repository.directory.path(), "durable"))
             .await
-            .expect("the working tree is snapshotted");
+            .expect("the working tree is snapshotted")
+            .reference;
 
         fs::write(repository.path("tracked.txt"), "after\n").expect("the file is changed");
         git(
@@ -797,14 +971,14 @@ mod git_checkpoint_tests {
 
         let diff = repository
             .checkpoint
-            .diff(&snapshot)
+            .diff(&state_request(repository.directory.path(), &snapshot))
             .await
             .expect("the pinned snapshot remains readable");
         assert!(diff.contains("-snapshot"), "{diff}");
         assert!(diff.contains("+after"), "{diff}");
         repository
             .checkpoint
-            .restore(&snapshot)
+            .restore(&state_request(repository.directory.path(), &snapshot))
             .await
             .expect("the pinned snapshot remains restorable");
         assert_eq!(
@@ -814,11 +988,709 @@ mod git_checkpoint_tests {
     }
 
     #[tokio::test]
+    async fn owned_untracked_state_is_exact_and_unrelated_files_are_preserved() {
+        let repository = TestRepository::new();
+        fs::write(repository.path("Cargo.lock"), "snapshot lock\n")
+            .expect("the ignored owned file is written");
+        fs::write(repository.path("unrelated.ignored"), "before\n")
+            .expect("the unrelated ignored file is written");
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "owned state",
+            ))
+            .await
+            .expect("owned untracked state is captured")
+            .reference;
+
+        fs::write(repository.path("Cargo.lock"), "after lock\n")
+            .expect("the owned file is changed");
+        let created = repository.path("rust/calculator/src/service.rs");
+        fs::create_dir_all(created.parent().unwrap()).expect("owned parents are created");
+        fs::write(&created, "created after snapshot\n").expect("the owned file is created");
+        fs::write(repository.path("unrelated.ignored"), "after unrelated\n")
+            .expect("the unrelated file is changed");
+
+        let diff = repository
+            .checkpoint
+            .diff(&state_request(repository.directory.path(), &snapshot))
+            .await
+            .expect("the exact checkpoint diff renders");
+        assert!(diff.contains("Cargo.lock"), "{diff}");
+        assert!(diff.contains("rust/calculator/src/service.rs"), "{diff}");
+        assert!(!diff.contains("unrelated.ignored"), "{diff}");
+
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), &snapshot))
+            .await
+            .expect("the exact owned state restores");
+        assert_eq!(
+            fs::read_to_string(repository.path("Cargo.lock")).unwrap(),
+            "snapshot lock\n"
+        );
+        assert!(!created.exists());
+        assert_eq!(
+            fs::read_to_string(repository.path("unrelated.ignored")).unwrap(),
+            "after unrelated\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn blobs_larger_than_git_metadata_restore_exactly() {
+        let repository = TestRepository::new();
+        let contents = vec![0xa5; 6 * 1024 * 1024];
+        fs::write(repository.path("Cargo.lock"), &contents).expect("the large blob is written");
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "large blob"))
+            .await
+            .expect("the large blob is captured")
+            .reference;
+
+        fs::write(repository.path("Cargo.lock"), b"changed").expect("the large blob is replaced");
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), snapshot))
+            .await
+            .expect("the large blob restores");
+
+        assert_eq!(fs::read(repository.path("Cargo.lock")).unwrap(), contents);
+    }
+
+    #[tokio::test]
+    async fn snapshot_capture_bypasses_git_clean_filters() {
+        let repository = TestRepository::new();
+        git(
+            repository.directory.path(),
+            &["config", "filter.checkpoint.clean", "tee filter-ran"],
+        );
+        git(
+            repository.directory.path(),
+            &["config", "filter.checkpoint.smudge", "cat"],
+        );
+        fs::write(
+            repository.path(".gitattributes"),
+            "filtered filter=checkpoint\n",
+        )
+        .expect("the attributes are written");
+        fs::write(repository.path("filtered"), "worktree bytes\n")
+            .expect("the filtered file is written");
+        git(
+            repository.directory.path(),
+            &["add", "--", ".gitattributes", "filtered"],
+        );
+        git(
+            repository.directory.path(),
+            &["commit", "--quiet", "-m", "filtered fixture"],
+        );
+        fs::remove_file(repository.path("filter-ran")).expect("the filter marker is cleared");
+
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "raw filtered bytes",
+            ))
+            .await
+            .expect("raw capture succeeds")
+            .reference;
+        assert!(
+            !repository.path("filter-ran").exists(),
+            "checkpoint capture executed a configured clean filter"
+        );
+        fs::write(repository.path("filtered"), "changed\n").expect("the worktree file is changed");
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), snapshot))
+            .await
+            .expect("the raw filtered bytes restore");
+        assert_eq!(
+            fs::read_to_string(repository.path("filtered")).unwrap(),
+            "worktree bytes\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_rejects_hardlinked_workspace_files() {
+        let repository = TestRepository::new();
+        fs::hard_link(
+            repository.path("tracked.txt"),
+            repository.path("tracked-alias.txt"),
+        )
+        .expect("the tracked file is hardlinked");
+
+        let error = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "hardlink"))
+            .await
+            .expect_err("a hardlinked workspace file is refused");
+
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::Mutation(
+                super::MutationError::UnsafeTarget { reason, .. }
+            )) if *reason == "target has multiple hard links"
+        ));
+        assert!(
+            git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn inherited_git_repository_overrides_cannot_redirect_a_snapshot() {
+        let repository = TestRepository::new();
+        let decoy = TestRepository::new();
+        let redirected_index = decoy.path("redirected-index");
+        let redirected_trace = decoy.path("redirected-trace");
+        let output = Command::new(std::env::current_exe().expect("the test binary has a path"))
+            .args([
+                "--exact",
+                "git_checkpoint_tests::checkpoint_environment_process_helper",
+                "--nocapture",
+            ])
+            .env("THESEUS_CHECKPOINT_ENV_ROOT", repository.directory.path())
+            .env("GIT_DIR", decoy.path(".git"))
+            .env("GIT_WORK_TREE", decoy.directory.path())
+            .env("GIT_INDEX_FILE", &redirected_index)
+            .env("GIT_OBJECT_DIRECTORY", decoy.path(".git/objects"))
+            .env("GIT_TRACE", &redirected_trace)
+            .output()
+            .expect("the checkpoint helper runs");
+        assert!(
+            output.status.success(),
+            "checkpoint helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+            )
+            .is_empty(),
+            "the intended repository did not receive the snapshot ref"
+        );
+        assert!(
+            git_stdout(
+                decoy.directory.path(),
+                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+            )
+            .is_empty(),
+            "an inherited Git override redirected the snapshot ref"
+        );
+        assert!(!redirected_index.exists());
+        assert!(!redirected_trace.exists());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_environment_process_helper() {
+        let Ok(root) = std::env::var("THESEUS_CHECKPOINT_ENV_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        GitCheckpoint { root: root.clone() }
+            .snapshot(&snapshot_request(&root, "environment"))
+            .await
+            .expect("the scrubbed checkpoint succeeds");
+    }
+
+    #[tokio::test]
+    async fn tracked_tombstones_are_restored_without_touching_the_index() {
+        let repository = TestRepository::new();
+        fs::write(repository.path("removed"), "tracked\n").expect("the fixture is written");
+        git(repository.directory.path(), &["add", "--", "removed"]);
+        git(
+            repository.directory.path(),
+            &["commit", "--quiet", "-m", "tracked fixture"],
+        );
+        git(
+            repository.directory.path(),
+            &["rm", "--quiet", "--", "removed"],
+        );
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "tracked deletion",
+            ))
+            .await
+            .expect("the tracked tombstone is captured")
+            .reference;
+        let index_before = fs::read(repository.path(".git/index")).expect("the index is readable");
+        fs::write(repository.path("removed"), "recreated as untracked\n")
+            .expect("the deleted path is recreated");
+
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), snapshot))
+            .await
+            .expect("the tracked tombstone restores");
+        assert!(!repository.path("removed").exists());
+        assert_eq!(
+            fs::read(repository.path(".git/index")).unwrap(),
+            index_before
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_blob_limits_do_not_reject_small_current_state() {
+        let repository = TestRepository::new();
+        let historical = fs::File::create(repository.path("historical-large"))
+            .expect("the historical file is created");
+        historical
+            .set_len(64 * 1024 * 1024 + 1)
+            .expect("the historical file is made larger than the snapshot blob limit");
+        drop(historical);
+        git(
+            repository.directory.path(),
+            &["add", "--", "historical-large"],
+        );
+        git(
+            repository.directory.path(),
+            &["commit", "--quiet", "-m", "large historical blob"],
+        );
+        fs::write(repository.path("historical-large"), b"current")
+            .expect("the current state is small");
+
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "small current state",
+            ))
+            .await
+            .expect("historical blob size does not constrain current capture")
+            .reference;
+        fs::write(repository.path("historical-large"), b"after")
+            .expect("the current state changes");
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), snapshot))
+            .await
+            .expect("the small current state restores");
+        assert_eq!(
+            fs::read(repository.path("historical-large")).unwrap(),
+            b"current"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_modes_and_symlinks_restore_without_touching_the_index() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let repository = TestRepository::new();
+        fs::write(repository.path("binary"), b"snapshot\0\xff")
+            .expect("the binary file is written");
+        fs::set_permissions(repository.path("binary"), fs::Permissions::from_mode(0o755))
+            .expect("the executable mode is set");
+        fs::write(repository.path("secret"), b"private").expect("the private file is written");
+        fs::set_permissions(repository.path("secret"), fs::Permissions::from_mode(0o600))
+            .expect("the private mode is set");
+        symlink("binary", repository.path("binary-link")).expect("the link is created");
+        git(
+            repository.directory.path(),
+            &["add", "--", "binary", "binary-link", "secret"],
+        );
+        git(
+            repository.directory.path(),
+            &["commit", "--quiet", "-m", "binary fixture"],
+        );
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "exact entries",
+            ))
+            .await
+            .expect("the exact entries are captured")
+            .reference;
+        let index_before = fs::read(repository.path(".git/index")).expect("the index is readable");
+
+        fs::write(repository.path("binary"), b"changed").expect("the binary file is changed");
+        fs::set_permissions(repository.path("binary"), fs::Permissions::from_mode(0o644))
+            .expect("the executable mode is removed");
+        fs::set_permissions(repository.path("secret"), fs::Permissions::from_mode(0o644))
+            .expect("the private mode is widened");
+        fs::remove_file(repository.path("binary-link")).expect("the link is removed");
+        fs::write(repository.path("binary-link"), b"regular")
+            .expect("the link path becomes a regular file");
+
+        repository
+            .checkpoint
+            .restore(&state_request(repository.directory.path(), &snapshot))
+            .await
+            .expect("binary state restores through the WAL");
+        assert_eq!(
+            fs::read(repository.path("binary")).unwrap(),
+            b"snapshot\0\xff"
+        );
+        assert_eq!(
+            fs::metadata(repository.path("binary"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::read_link(repository.path("binary-link")).unwrap(),
+            Path::new("binary")
+        );
+        assert_eq!(
+            fs::metadata(repository.path("secret"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::read(repository.path(".git/index")).unwrap(),
+            index_before,
+            "checkpoint restore must preserve the user's staging area"
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_snapshots_are_distinct_and_restore_their_persisted_model() {
+        let repository = TestRepository::new();
+        let first = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "same state"))
+            .await
+            .expect("the first snapshot succeeds");
+        let second = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "same state"))
+            .await
+            .expect("the second snapshot succeeds");
+        assert_ne!(first.reference, second.reference);
+
+        let restored = repository
+            .checkpoint
+            .restore(&state_request(
+                repository.directory.path(),
+                &first.reference,
+            ))
+            .await
+            .expect("the first snapshot restores");
+        assert_eq!(restored.model, theseus_model());
+    }
+
+    #[tokio::test]
+    async fn linked_worktrees_share_the_checkpoint_object_lease() {
+        let repository = TestRepository::new();
+        let worktrees = TempDirectory::new();
+        let linked_root = worktrees.path().join("linked");
+        git(
+            repository.directory.path(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                linked_root.to_str().expect("the temporary path is UTF-8"),
+            ],
+        );
+
+        let object_directory = PathBuf::from(git_stdout(
+            repository.directory.path(),
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "objects",
+            ],
+        ));
+        let blocker =
+            FsMutation::begin(&object_directory, &[]).expect("the shared object lease is acquired");
+        let request = snapshot_request(&linked_root, "linked worktree");
+        let checkpoint = GitCheckpoint {
+            root: linked_root.clone(),
+        };
+        let task = tokio::spawn(async move { checkpoint.snapshot(&request).await });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !task.is_finished(),
+            "a linked worktree must wait for the shared object lease"
+        );
+
+        blocker
+            .commit()
+            .expect("the shared object lease is released");
+        task.await
+            .expect("the linked snapshot task joins")
+            .expect("the linked snapshot succeeds");
+
+        let main_checkpoint = GitCheckpoint {
+            root: repository.directory.path().to_path_buf(),
+        };
+        let linked_checkpoint = GitCheckpoint {
+            root: linked_root.clone(),
+        };
+        let main_request = snapshot_request(repository.directory.path(), "concurrent main");
+        let linked_request = snapshot_request(&linked_root, "concurrent linked");
+        let (main_snapshot, linked_snapshot) = tokio::join!(
+            main_checkpoint.snapshot(&main_request),
+            linked_checkpoint.snapshot(&linked_request),
+        );
+        let main_snapshot = main_snapshot.expect("the main worktree snapshot succeeds");
+        let linked_snapshot = linked_snapshot.expect("the linked worktree snapshot succeeds");
+        assert_ne!(main_snapshot.reference, linked_snapshot.reference);
+        repository
+            .checkpoint
+            .prune(&super::SnapshotRetention { keep: 2 })
+            .await
+            .expect("concurrent worktree snapshots retain valid unique ordering");
+    }
+
+    #[tokio::test]
+    async fn stale_primary_promotion_files_are_recovered() {
+        let repository = TestRepository::new();
+        let promotion = repository
+            .path(".git/objects")
+            .join(PRIMARY_PROMOTION_DIRECTORY);
+        fs::create_dir(&promotion).expect("the stale promotion directory is created");
+        fs::write(promotion.join("interrupted-copy"), b"partial")
+            .expect("the stale promotion file is written");
+
+        repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "recover promotion",
+            ))
+            .await
+            .expect("the next snapshot recovers the promotion directory");
+        assert!(!promotion.exists());
+    }
+
+    #[tokio::test]
+    async fn release_and_retention_remove_only_validated_snapshot_refs() {
+        let repository = TestRepository::new();
+        let first = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "first"))
+            .await
+            .unwrap();
+        let second = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "second"))
+            .await
+            .unwrap();
+        let third = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "third"))
+            .await
+            .unwrap();
+        repository
+            .checkpoint
+            .prune(&super::SnapshotRetention { keep: 2 })
+            .await
+            .expect("explicit retention pruning succeeds");
+
+        let expired = repository
+            .checkpoint
+            .diff(&state_request(
+                repository.directory.path(),
+                &first.reference,
+            ))
+            .await
+            .expect_err("retention unpins the oldest snapshot");
+        assert!(matches!(
+            expired.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::UnknownSnapshot { .. })
+        ));
+        repository
+            .checkpoint
+            .release(&second.reference)
+            .await
+            .expect("an explicit release succeeds");
+        let released = repository
+            .checkpoint
+            .diff(&state_request(
+                repository.directory.path(),
+                &second.reference,
+            ))
+            .await
+            .expect_err("the released snapshot is no longer accepted");
+        assert!(matches!(
+            released.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::UnknownSnapshot { .. })
+        ));
+        repository
+            .checkpoint
+            .diff(&state_request(
+                repository.directory.path(),
+                &third.reference,
+            ))
+            .await
+            .expect("the newest snapshot remains pinned");
+    }
+
+    #[tokio::test]
+    async fn symbolic_snapshot_refs_cannot_delete_their_referent() {
+        let repository = TestRepository::new();
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "symbolic"))
+            .await
+            .expect("the snapshot succeeds")
+            .reference;
+        let branch = git_stdout(repository.directory.path(), &["symbolic-ref", "HEAD"]);
+        let head = git_stdout(repository.directory.path(), &["rev-parse", "HEAD"]);
+        let snapshot_ref = format!("{SNAPSHOT_REF_PREFIX}/{snapshot}");
+        git(
+            repository.directory.path(),
+            &["symbolic-ref", &snapshot_ref, &branch],
+        );
+
+        let error = repository
+            .checkpoint
+            .release(&snapshot)
+            .await
+            .expect_err("a symbolic snapshot ref is refused");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::SymbolicSnapshot { .. })
+        ));
+        assert_eq!(
+            git_stdout(repository.directory.path(), &["rev-parse", &branch]),
+            head
+        );
+        assert_eq!(
+            git_stdout(
+                repository.directory.path(),
+                &["symbolic-ref", &snapshot_ref]
+            ),
+            branch
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_snapshot_plans_are_rejected_before_a_ref_is_created() {
+        let repository = TestRepository::new();
+        let request = snapshot_request(repository.directory.path(), "stale");
+        let unexpected = repository.path("rust/model/src/self_model.rs");
+        fs::create_dir_all(unexpected.parent().unwrap()).expect("unexpected parents are created");
+        fs::write(&unexpected, "not expected by the persisted projection\n")
+            .expect("the unexpected generated file is written");
+
+        let error = repository
+            .checkpoint
+            .snapshot(&request)
+            .await
+            .expect_err("a stale session cannot bind its model to newer disk state");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::Mutation(
+                super::MutationError::StaleWorkspace { .. }
+            ))
+        ));
+        assert!(
+            git_stdout(
+                repository.directory.path(),
+                &["for-each-ref", SNAPSHOT_REF_PREFIX]
+            )
+            .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_killed_applied_restore_is_recovered_by_the_next_lease() {
+        let repository = TestRepository::new();
+        fs::write(repository.path("tracked.txt"), "snapshot\n")
+            .expect("the snapshot state is written");
+        let snapshot = repository
+            .checkpoint
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "crash recovery",
+            ))
+            .await
+            .expect("the snapshot succeeds")
+            .reference;
+        fs::write(repository.path("tracked.txt"), "before restore\n")
+            .expect("the later state is written");
+
+        let marker = repository.path("checkpoint-restore-paused");
+        let mut child = Command::new(std::env::current_exe().expect("the test binary has a path"))
+            .args([
+                "--exact",
+                "git_checkpoint_tests::checkpoint_restore_process_helper",
+                "--nocapture",
+            ])
+            .env("THESEUS_CHECKPOINT_PAUSE_ROOT", repository.directory.path())
+            .env("THESEUS_CHECKPOINT_REFERENCE", &snapshot)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the restore helper starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the restore helper did not reach its prepared pause"
+            );
+            assert!(
+                child
+                    .try_wait()
+                    .expect("the helper status is readable")
+                    .is_none(),
+                "the restore helper exited before its prepared pause"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            fs::read_to_string(repository.path("tracked.txt")).unwrap(),
+            "snapshot\n"
+        );
+        child.kill().expect("the paused restore is killed");
+        child.wait().expect("the killed restore is reaped");
+        fs::remove_file(&marker).expect("the test marker is removed");
+
+        let recovered = FsMutation::begin(repository.directory.path(), &[])
+            .expect("the next lease recovers the prepared restore");
+        assert_eq!(
+            fs::read_to_string(repository.path("tracked.txt")).unwrap(),
+            "before restore\n"
+        );
+        recovered.commit().expect("the recovered lease is released");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_restore_process_helper() {
+        let Ok(root) = std::env::var("THESEUS_CHECKPOINT_PAUSE_ROOT") else {
+            return;
+        };
+        let reference = std::env::var("THESEUS_CHECKPOINT_REFERENCE")
+            .expect("the helper receives a snapshot reference");
+        let checkpoint = GitCheckpoint {
+            root: PathBuf::from(root),
+        };
+        let request = state_request(&checkpoint.root, reference);
+        checkpoint
+            .restore(&request)
+            .await
+            .expect("the helper restore completes only when not killed");
+    }
+
+    #[tokio::test]
     async fn snapshot_labels_are_bounded() {
         let repository = TestRepository::new();
         let error = repository
             .checkpoint
-            .snapshot(&"x".repeat(MAX_SNAPSHOT_LABEL_BYTES + 1))
+            .snapshot(&snapshot_request(
+                repository.directory.path(),
+                "x".repeat(MAX_SNAPSHOT_LABEL_BYTES + 1),
+            ))
             .await
             .expect_err("an oversized label is refused");
 
@@ -838,7 +1710,8 @@ mod git_checkpoint_tests {
         let checkpoint = GitCheckpoint {
             root: repository.directory.path().to_path_buf(),
         };
-        let snapshot = tokio::spawn(async move { checkpoint.snapshot("leased").await });
+        let request = snapshot_request(repository.directory.path(), "leased");
+        let snapshot = tokio::spawn(async move { checkpoint.snapshot(&request).await });
 
         tokio::task::yield_now().await;
         std::thread::sleep(std::time::Duration::from_millis(50));

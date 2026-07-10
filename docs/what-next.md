@@ -4,7 +4,7 @@ Strategic analysis for Theseus as a self-modifying agent harness: a complete set
 
 ## July 2026 update
 
-The first two recommendations below are complete. The agent can now inspect arbitrary workspace source through root-guarded `read`, `search`, and `list`; the live goal corpus records investigation and self-edit runs; Git option injection is closed; renderer failures are structured diagnostics; and HTTP, gRPC, MCP, and the internal loop carry serialized session state.
+The first three architectural slices below are complete. The agent can inspect arbitrary workspace source through root-guarded `read`, `search`, and `list`; the live goal corpus records investigation and self-edit runs; Git option injection is closed; renderer failures are structured diagnostics; and HTTP, gRPC, MCP, and the internal loop carry serialized session state.
 
 Mutation safety also moved from a backlog item into the runtime contract:
 
@@ -13,20 +13,24 @@ Mutation safety also moved from a backlog item into the runtime contract:
 - The recovery bootstrap and the journal adopter's projector use the same lower-level transaction crate instead of sequential writes.
 - Long-lived sessions distinguish speculative and persisted models. A checkpoint stores the persisted model, and rollback adopts it only after the WAL restore commits.
 - Snapshots hash raw bytes without Git filters, preserve supported Unix regular-file modes and symlinks, and inventory tracked paths plus exact model-owned present or absent state. Restore unions the snapshot and current inventories so removed tracked or model-owned files become tombstones without broad cleaning.
-- Every snapshot is a distinct immutable commit pinned under `refs/theseus/snapshots/<full-object-id>` with a transactional companion ref that orders retained snapshots deterministically, survives Git GC, and remains until an explicit `release` or `prune`; creation never evicts another session's recovery point. A second lease in the canonical Git object database serializes linked worktrees that share those refs and objects.
+- Every snapshot is a distinct immutable commit pinned under `refs/theseus/projects/<project-id>/snapshots/<full-object-id>` with a transactional companion ref that orders retained snapshots deterministically, survives Git GC, and remains until an explicit `release` or `prune`; creation never evicts another session's recovery point. A second lease in the canonical Git object database serializes linked worktrees that share those refs and objects.
 - `diff` uses the same raw-tree comparison, including permission-only changes. It returns a bounded, escaped Git-style diff and requires write permission because its temporary comparison tree writes Git objects.
+- Sessions carry one immutable `ProjectContext`: a canonical operator-selected root, model of record, stable project ID, and versioned layout. Workspace, Cargo, and checkpoint ports expose and validate that binding before use; resumed state cannot change it.
+- Checkpoint V2 freezes the project descriptor in its manifest and scopes refs and retention by project. Legacy V1 Theseus snapshots remain readable, while nested non-top-level Git roots fail before writes.
+- The journal model is a durable JSON projection. A regression test drives verify → snapshot → patch → coverage → implement → check → test → verify → rollback through `Session`, then proves exact file restoration, untracked-file preservation, and foreign-root isolation.
 
 ### Current order
 
-1. **Root sessions in foreign adopters.** Thread an explicit workspace root, model of record, and path policy through handlers and adapters; then drive the journal-class workflow from the agent rather than its standalone projector.
-2. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
-3. **Make server bootstrap explicit.** The agent's `restart` rebuilds and resumes its transcript, but starting an already-built HTTP, gRPC, or MCP binary still initializes from that binary's compiled model. Process-managed restarts must rebuild first until the model of record is durable startup input.
+1. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
+2. **Make server bootstrap explicit.** The agent's `restart` rebuilds and resumes its transcript, but starting an already-built HTTP, gRPC, or MCP binary still initializes from the context supplied by its launcher. Process-managed restarts need an explicit load/rebuild/resume contract.
+3. **Add first-class project initialization.** Rooted sessions can develop an existing modeled workspace; they still cannot create the initial layout/model record from an empty directory as a tool operation.
 
 ### Explicit boundaries
 
 - Workspace WAL support is Unix-only. It protects against malformed paths and corrupt internal files, not a hostile same-account process racing pathname components; closing that requires fd-relative traversal and publication.
+- `ProjectContext::new` validates but does not discover its initial model and layout. A launcher opening an existing project must load the declared durable model record before constructing the context; first-class open/bootstrap tooling remains future work.
 - Drop-time rollback is synchronous but cannot report a rollback error to the canceled caller. The next lease retries recovery and fails closed if recovery remains impossible.
-- Snapshot manifests use a strict versioned schema. Version one freezes all nested model shapes and its ownership derivation behind explicit conversions and a golden fixture; unknown fields or versions fail closed. Current limits are 4 MiB per manifest, 64 MiB per blob, 256 MiB in aggregate, 4,096 paths, and 1,024 retained snapshots.
+- Snapshot manifests use a strict versioned schema. Version two freezes the project descriptor and ownership derivation; a narrow compatibility path retains version-one Theseus restores. Unknown fields, versions, or project mismatches fail closed. Current limits are 4 MiB per manifest, 64 MiB per blob, 256 MiB in aggregate, 4,096 paths, and 1,024 retained snapshots per project.
 - Raw contents and Unix symlink targets may be non-text, but Git workspace paths must be UTF-8. Submodules, unmerged index entries, and tree modes other than regular files or symlinks are unsupported.
 - Exact regular-file restoration covers Unix permission bits, not ownership, ACLs, extended attributes, or timestamps. Unrelated untracked files are intentionally outside the checkpoint inventory.
 - Model ownership is scoped to the snapshot and current persisted models, not a permanent provenance ledger. Once neither model declares an untracked path, later checkpoints intentionally treat it as unrelated.
@@ -35,7 +39,7 @@ Mutation safety also moved from a backlog item into the runtime contract:
 - Rollback adopts the snapshot model in the live session after commit. Source changes become executable only after the inbound rebuilds; only the agent loop currently owns a rebuild-and-resume handoff.
 - Cargo commands hold the repository lease and ordinary checks use `--locked`, but the harness trusts build scripts and descendants not to keep mutating source after their direct Cargo child is canceled.
 
-The remainder of this document is the original roadmap and rationale. It is retained because the foreign-adopter analysis still describes the next product milestone.
+The remainder of this document is the original roadmap and rationale. It is retained as design history; the rooted-session portion is now implemented, while cold project initialization and general authored-source editing remain open.
 
 ## Context
 

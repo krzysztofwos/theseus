@@ -1,12 +1,12 @@
 # The second adopter
 
-The engine's reusability claim, tested from outside. Everything before this was proven on the model that grew up alongside the engine; `adopters/journal/` is a workspace the Theseus self-model knows nothing about — its own `Cargo.toml`, its own model of record, its own path conventions — consuming `theseus-modeling` as an ordinary dependency.
+The harness's reusability claim, tested from outside. Everything before this was proven on the model that grew up alongside the engine; `adopters/journal/` is a workspace the Theseus self-model knows nothing about — its own `Cargo.toml`, durable model record, and project identity.
 
 ## What it is
 
-A journal: one service (`add`, `list`, `search`) over a `store` port, a `FileStore` adapter writing one entry per line, and a CLI inbound. The adopter's model of record is a hand-maintained `journal_model()` in `rust/model/src/lib.rs`, and one small binary (`project`, 32 lines) writes the crate skeletons that are missing and every generated file — the adopter's analog of `scaffold` + `generate`, standing only on the engine and the model.
+A journal: one service (`add`, `list`, `search`) over a `store` port, a `FileStore` adapter writing one entry per line, and a CLI inbound. Its canonical `model.json` is projected with every generated contract and included in checkpoint ownership. `journal-model` exposes the same versioned `RustWorkspaceLayout` data that the runtime freezes into snapshots. The small `project` binary remains a recovery/bootstrap convenience, not a separate policy implementation.
 
-The division of labor came out exactly as the architecture names it. Generated: the service contract with its `Ctx` and `Standalone` roots, the `Store` port trait with its typed defaults and borrowed forwarder, the request structs, and the whole command surface with its parsers and dispatch — 210 lines. Authored: the model of record and the projection binary (136 lines), and the three leaves — the `FileStore` adapter, the handlers on `Ctx`, and the composition root in `main` (85 lines). The adopter's conformance test runs the same ten-check `verify` over its own model and passes.
+The decisive proof is `rust/theseus/tests/foreign_project.rs`. It copies the adopter into an isolated top-level Git repository, establishes a `ProjectContext`, and first injects a foreign-only compiler failure to prove Cargo is rooted there. It then drives only public `Session` calls: verify, snapshot, add a `count` operation with a durable patch, report the coverage gap, implement the handler, check, test, verify again, and rollback. The test proves that the model record, lockfile, and authored/generated files are byte-exact, an unrelated untracked file survived, and the original adopter was untouched. Finally it reloads the restored JSON record into a cold `ProjectContext` and proves a fresh `StatefulSession` reads and queries the foreign root.
 
 ## What the adopter found
 
@@ -28,4 +28,10 @@ cargo test                                  # the ten-check conformance over the
 cargo run -p journal-cli -- add --text "hello"
 cargo run -p journal-cli -- list
 cargo run -p journal-cli -- search --term hello
+```
+
+From the repository root, the full harness workflow is executable as one regression:
+
+```sh
+cargo test -p theseus --test foreign_project
 ```

@@ -106,8 +106,8 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .implement(proto::ImplementRequest {
-                method: request.method,
-                body: request.body,
+                method: Some(request.method),
+                body: Some(request.body),
                 port: request.port,
                 adapter: request.adapter,
             })
@@ -121,7 +121,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .show(proto::ShowRequest {
-                method: request.method,
+                method: Some(request.method),
                 port: request.port,
                 adapter: request.adapter,
             })
@@ -145,9 +145,9 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .calc(proto::CalcRequest {
-                op: request.op,
-                a: request.a,
-                b: request.b,
+                op: Some(request.op),
+                a: Some(request.a),
+                b: Some(request.b),
             })
             .await
             .map_err(|status| failed("calc", status))?;
@@ -182,7 +182,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .snapshot(proto::SnapshotRequest {
-                label: request.label,
+                label: Some(request.label),
             })
             .await
             .map_err(|status| failed("snapshot", status))?;
@@ -194,7 +194,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .rollback(proto::SnapshotRef {
-                reference: request.reference,
+                reference: Some(request.reference),
             })
             .await
             .map_err(|status| failed("rollback", status))?;
@@ -206,7 +206,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .release(proto::SnapshotRef {
-                reference: request.reference,
+                reference: Some(request.reference),
             })
             .await
             .map_err(|status| failed("release", status))?;
@@ -221,7 +221,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .prune(proto::SnapshotRetention {
-                keep: request.keep,
+                keep: Some(request.keep),
             })
             .await
             .map_err(|status| failed("prune", status))?;
@@ -233,7 +233,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .diff(proto::SnapshotRef {
-                reference: request.reference,
+                reference: Some(request.reference),
             })
             .await
             .map_err(|status| failed("diff", status))?;
@@ -256,7 +256,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .read(proto::ReadRequest {
-                path: request.path,
+                path: Some(request.path),
             })
             .await
             .map_err(|status| failed("read", status))?;
@@ -268,7 +268,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .stub
             .clone()
             .search(proto::SearchRequest {
-                pattern: request.pattern,
+                pattern: Some(request.pattern),
                 path: request.path,
             })
             .await
@@ -306,9 +306,9 @@ fn edit_to_proto(value: theseus_modeling::Edit) -> proto::Edit {
             proto::Edit {
                 verb: Some(
                     proto::edit::Verb::Add(proto::edit::Add {
-                        parent,
-                        kind,
-                        name,
+                        parent: Some(parent),
+                        kind: Some(kind),
+                        name: Some(name),
                         attrs: attrs.into_iter().collect(),
                     }),
                 ),
@@ -316,19 +316,28 @@ fn edit_to_proto(value: theseus_modeling::Edit) -> proto::Edit {
         }
         theseus_modeling::Edit::Remove { target } => {
             proto::Edit {
-                verb: Some(proto::edit::Verb::Remove(proto::edit::Remove { target })),
+                verb: Some(
+                    proto::edit::Verb::Remove(proto::edit::Remove {
+                        target: Some(target),
+                    }),
+                ),
             }
         }
         theseus_modeling::Edit::Rename { target, to } => {
             proto::Edit {
-                verb: Some(proto::edit::Verb::Rename(proto::edit::Rename { target, to })),
+                verb: Some(
+                    proto::edit::Verb::Rename(proto::edit::Rename {
+                        target: Some(target),
+                        to: Some(to),
+                    }),
+                ),
             }
         }
         theseus_modeling::Edit::Set { target, attrs } => {
             proto::Edit {
                 verb: Some(
                     proto::edit::Verb::Set(proto::edit::Set {
-                        target,
+                        target: Some(target),
                         attrs: attrs.into_iter().collect(),
                     }),
                 ),

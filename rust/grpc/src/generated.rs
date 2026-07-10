@@ -131,8 +131,16 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .implement(theseus::ImplementRequest {
-                method: request.method,
-                body: request.body,
+                method: request
+                    .method
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `method` is required",
+                    ))?,
+                body: request
+                    .body
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `body` is required",
+                    ))?,
                 port: request.port,
                 adapter: request.adapter,
             })
@@ -156,7 +164,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .show(theseus::ShowRequest {
-                method: request.method,
+                method: request
+                    .method
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `method` is required",
+                    ))?,
                 port: request.port,
                 adapter: request.adapter,
             })
@@ -191,9 +203,21 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .calc(theseus::CalcRequest {
-                op: request.op,
-                a: request.a,
-                b: request.b,
+                op: request
+                    .op
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `op` is required",
+                    ))?,
+                a: request
+                    .a
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `a` is required",
+                    ))?,
+                b: request
+                    .b
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `b` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -242,7 +266,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .snapshot(theseus::SnapshotRequest {
-                label: request.label,
+                label: request
+                    .label
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `label` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -259,7 +287,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .rollback(theseus::SnapshotRef {
-                reference: request.reference,
+                reference: request
+                    .reference
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `reference` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -276,7 +308,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .release(theseus::SnapshotRef {
-                reference: request.reference,
+                reference: request
+                    .reference
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `reference` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -293,7 +329,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .prune(theseus::SnapshotRetention {
-                keep: request.keep,
+                keep: request
+                    .keep
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `keep` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -310,7 +350,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .diff(theseus::SnapshotRef {
-                reference: request.reference,
+                reference: request
+                    .reference
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `reference` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -338,7 +382,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .read(theseus::ReadRequest {
-                path: request.path,
+                path: request
+                    .path
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `path` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -355,7 +403,11 @@ for GrpcTheseus<S> {
         let outcome = self
             .0
             .search(theseus::SearchRequest {
-                pattern: request.pattern,
+                pattern: request
+                    .pattern
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `pattern` is required",
+                    ))?,
                 path: request.path,
             })
             .await;
@@ -404,26 +456,54 @@ fn edit_from_proto(value: proto::Edit) -> Result<theseus_modeling::Edit, tonic::
     match value.verb {
         Some(proto::edit::Verb::Add(data)) => {
             Ok(theseus_modeling::Edit::Add {
-                parent: data.parent,
-                kind: data.kind,
-                name: data.name,
+                parent: data
+                    .parent
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `parent` is required",
+                    ))?,
+                kind: data
+                    .kind
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `kind` is required",
+                    ))?,
+                name: data
+                    .name
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `name` is required",
+                    ))?,
                 attrs: data.attrs.into_iter().collect(),
             })
         }
         Some(proto::edit::Verb::Remove(data)) => {
             Ok(theseus_modeling::Edit::Remove {
-                target: data.target,
+                target: data
+                    .target
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `target` is required",
+                    ))?,
             })
         }
         Some(proto::edit::Verb::Rename(data)) => {
             Ok(theseus_modeling::Edit::Rename {
-                target: data.target,
-                to: data.to,
+                target: data
+                    .target
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `target` is required",
+                    ))?,
+                to: data
+                    .to
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `to` is required",
+                    ))?,
             })
         }
         Some(proto::edit::Verb::Set(data)) => {
             Ok(theseus_modeling::Edit::Set {
-                target: data.target,
+                target: data
+                    .target
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `target` is required",
+                    ))?,
                 attrs: data.attrs.into_iter().collect(),
             })
         }

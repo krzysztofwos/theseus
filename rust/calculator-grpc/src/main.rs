@@ -42,7 +42,10 @@ mod tests {
     async fn a_result_maps_to_ok() {
         let glue = GrpcCalculator(theseus_calculator::Calculator);
         let reply = glue
-            .add(tonic::Request::new(proto::Operands { a: 2.0, b: 3.0 }))
+            .add(tonic::Request::new(proto::Operands {
+                a: Some(2.0),
+                b: Some(3.0),
+            }))
             .await
             .expect("the operation runs");
         assert_eq!(reply.into_inner().value, "5");
@@ -58,7 +61,10 @@ mod tests {
 
         let glue = GrpcCalculator(Bare);
         let status = glue
-            .add(tonic::Request::new(proto::Operands { a: 2.0, b: 3.0 }))
+            .add(tonic::Request::new(proto::Operands {
+                a: Some(2.0),
+                b: Some(3.0),
+            }))
             .await
             .expect_err("the trait default reports");
         assert_eq!(status.code(), tonic::Code::Unimplemented);

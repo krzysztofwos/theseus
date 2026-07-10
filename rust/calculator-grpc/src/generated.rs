@@ -22,8 +22,16 @@ impl<
         let outcome = self
             .0
             .add(theseus_calculator::Operands {
-                a: request.a,
-                b: request.b,
+                a: request
+                    .a
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `a` is required",
+                    ))?,
+                b: request
+                    .b
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `b` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -40,8 +48,16 @@ impl<
         let outcome = self
             .0
             .subtract(theseus_calculator::Operands {
-                a: request.a,
-                b: request.b,
+                a: request
+                    .a
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `a` is required",
+                    ))?,
+                b: request
+                    .b
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `b` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -58,8 +74,16 @@ impl<
         let outcome = self
             .0
             .multiply(theseus_calculator::Operands {
-                a: request.a,
-                b: request.b,
+                a: request
+                    .a
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `a` is required",
+                    ))?,
+                b: request
+                    .b
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `b` is required",
+                    ))?,
             })
             .await;
         match outcome {
@@ -76,8 +100,16 @@ impl<
         let outcome = self
             .0
             .divide(theseus_calculator::Operands {
-                a: request.a,
-                b: request.b,
+                a: request
+                    .a
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `a` is required",
+                    ))?,
+                b: request
+                    .b
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `b` is required",
+                    ))?,
             })
             .await;
         match outcome {

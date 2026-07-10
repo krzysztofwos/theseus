@@ -163,8 +163,7 @@ pub(super) fn render_type_schema(label: &str, model: &Model) -> TokenStream {
             .map(|variant| render_variant_schema(variant, model));
         return quote! { { "oneOf": [#(#branches),*] } };
     }
-    let ty = json_schema_type(label);
-    quote! { { "type": #ty } }
+    render_scalar_schema(label)
 }
 
 /// One `oneOf` branch for an enum variant: the `verb` tag pinned to the variant's
@@ -193,13 +192,26 @@ pub(super) fn render_variant_schema(variant: &Variant, model: &Model) -> TokenSt
     }
 }
 
-/// The JSON-schema type for a contract type label.
-pub(super) fn json_schema_type(ty: &str) -> &'static str {
+/// The JSON schema for a scalar contract type. Integer schemas carry the
+/// primitive's bounds so the catalog accepts exactly the values the generated
+/// parser can deserialize.
+pub(super) fn render_scalar_schema(ty: &str) -> TokenStream {
     match ty {
-        "bool" => "boolean",
-        "f64" | "f32" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
-        | "isize" => "number",
-        _ => "string",
+        "u8" => quote! { { "type": "integer", "minimum": 0, "maximum": u8::MAX } },
+        "u16" => quote! { { "type": "integer", "minimum": 0, "maximum": u16::MAX } },
+        "u32" => quote! { { "type": "integer", "minimum": 0, "maximum": u32::MAX } },
+        "u64" => quote! { { "type": "integer", "minimum": 0, "maximum": u64::MAX } },
+        "usize" => quote! { { "type": "integer", "minimum": 0, "maximum": usize::MAX } },
+        "i8" => quote! { { "type": "integer", "minimum": i8::MIN, "maximum": i8::MAX } },
+        "i16" => quote! { { "type": "integer", "minimum": i16::MIN, "maximum": i16::MAX } },
+        "i32" => quote! { { "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX } },
+        "i64" => quote! { { "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX } },
+        "isize" => {
+            quote! { { "type": "integer", "minimum": isize::MIN, "maximum": isize::MAX } }
+        }
+        "f64" | "f32" => quote! { { "type": "number" } },
+        "bool" => quote! { { "type": "boolean" } },
+        _ => quote! { { "type": "string" } },
     }
 }
 
@@ -279,5 +291,23 @@ mod tests {
             rendered.contains("fn parse_payload_input"),
             "a struct request renders a parser"
         );
+    }
+
+    #[test]
+    fn integer_tool_schemas_match_their_rust_primitive_bounds() {
+        let unsigned = render_scalar_schema("u32").to_string();
+        assert!(unsigned.contains("\"integer\""), "{unsigned}");
+        assert!(unsigned.contains("\"minimum\" : 0"), "{unsigned}");
+        assert!(unsigned.contains("u32 :: MAX"), "{unsigned}");
+        assert!(!unsigned.contains("\"number\""), "{unsigned}");
+
+        let signed = render_scalar_schema("i16").to_string();
+        assert!(signed.contains("\"integer\""), "{signed}");
+        assert!(signed.contains("i16 :: MIN"), "{signed}");
+        assert!(signed.contains("i16 :: MAX"), "{signed}");
+
+        let float = render_scalar_schema("f64").to_string();
+        assert!(float.contains("\"number\""), "{float}");
+        assert!(!float.contains("\"maximum\""), "{float}");
     }
 }

@@ -65,9 +65,9 @@ mod tests {
         let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let edit = proto::Edit {
             verb: Some(proto::edit::Verb::Add(proto::edit::Add {
-                parent: "model:theseus".to_string(),
-                kind: "type".to_string(),
-                name: "Probe".to_string(),
+                parent: Some("model:theseus".to_string()),
+                kind: Some("type".to_string()),
+                name: Some("Probe".to_string()),
                 attrs: [("shape".to_string(), "foreign:String".to_string())].into(),
             })),
         };
@@ -114,8 +114,8 @@ mod tests {
         let glue = GrpcTheseus(StatefulSession::at_repo_root(false));
         let status = glue
             .implement(tonic::Request::new(proto::ImplementRequest {
-                method: "verify".to_string(),
-                body: "todo!()".to_string(),
+                method: Some("verify".to_string()),
+                body: Some("todo!()".to_string()),
                 port: None,
                 adapter: None,
             }))

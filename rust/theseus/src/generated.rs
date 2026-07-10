@@ -476,9 +476,9 @@ pub trait TheseusService: Send + Sync {
     }
 }
 
-/// An owned composition root: the service over one owned adapter per port,
-/// driven through a fresh borrowed `Ctx` per call. A long-lived inbound
-/// holds it where a borrowed root cannot live.
+/// An immutable, owned composition root for one-shot calls.
+/// It borrows its adapters through a fresh `Ctx` per call, but does not
+/// carry model mutations between calls; mutable inbounds need a stateful root.
 pub struct Standalone<
     WorkspaceAdapter: Workspace,
     CheckpointAdapter: Checkpoint,
@@ -689,8 +689,8 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "prune", "description" :
         "Release older snapshot refs, retaining only the requested number of newest snapshots. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "keep" : { "type" :
-        "number" } }, "required" : ["keep"] } }), serde_json::json!({ "name" : "diff",
-        "description" :
+        "integer", "minimum" : 0, "maximum" : u32::MAX } }, "required" : ["keep"] } }),
+        serde_json::json!({ "name" : "diff", "description" :
         "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a bounded, escaped Git-style diff with exact mode records, or an empty string when nothing has changed. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
         "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :

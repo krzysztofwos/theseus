@@ -1201,6 +1201,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn prune_tool_schema_matches_the_unsigned_contract() {
+        let prune = crate::tool_catalog()
+            .into_iter()
+            .find(|tool| tool["name"] == "prune")
+            .expect("prune is exposed as an agent tool");
+        let keep = &prune["input_schema"]["properties"]["keep"];
+
+        assert_eq!(keep["type"], "integer");
+        assert_eq!(keep["minimum"], 0);
+        assert_eq!(keep["maximum"], u32::MAX);
+    }
+
     #[tokio::test]
     async fn a_write_is_allowed_with_the_gate() {
         // The no-op workspace discards the reprojection, so this touches no files.

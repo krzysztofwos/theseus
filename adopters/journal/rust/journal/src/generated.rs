@@ -94,9 +94,9 @@ pub trait JournalService: Send + Sync {
     }
 }
 
-/// An owned composition root: the service over one owned adapter per port,
-/// driven through a fresh borrowed `Ctx` per call. A long-lived inbound
-/// holds it where a borrowed root cannot live.
+/// An immutable, owned composition root for one-shot calls.
+/// It borrows its adapters through a fresh `Ctx` per call, but does not
+/// carry model mutations between calls; mutable inbounds need a stateful root.
 pub struct Standalone<StoreAdapter: Store> {
     pub model: theseus_modeling::Model,
     pub store: StoreAdapter,

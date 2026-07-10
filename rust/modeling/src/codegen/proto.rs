@@ -353,21 +353,34 @@ pub(super) fn empty_message() -> (String, String) {
     ("Empty".to_string(), "message Empty {}\n".to_string())
 }
 
-/// The proto type a contract type label maps to. A map field is a proto map —
-/// never optional, absent as empty — matching a contract field that defaults.
+/// The proto type a contract type label maps to. Required scalar fields use
+/// proto3 presence so an adapter can distinguish omission from an explicit
+/// zero or empty string. A bare `bool`, vector, or map intentionally defaults
+/// when absent, matching the other generated inbounds.
 pub(super) fn proto_type(label: &str, model: &Model, field: &str) -> Result<String, RenderError> {
     if let Some(inner) = optional_inner(label) {
         let inner = proto_type(inner, model, field)?;
         if inner.starts_with("map<") {
             return Ok(inner);
         }
-        return Ok(format!("optional {inner}"));
+        return Ok(match inner.strip_prefix("optional ") {
+            Some(_) => inner,
+            None => format!("optional {inner}"),
+        });
     }
     if let Some(inner) = vec_inner(label) {
-        return Ok(format!("repeated {}", proto_type(inner, model, field)?));
+        let inner = proto_type(inner, model, field)?;
+        return Ok(format!(
+            "repeated {}",
+            inner.strip_prefix("optional ").unwrap_or(&inner)
+        ));
     }
     if let Some(value) = map_value(label) {
-        return Ok(format!("map<string, {}>", proto_type(value, model, field)?));
+        let value = proto_type(value, model, field)?;
+        return Ok(format!(
+            "map<string, {}>",
+            value.strip_prefix("optional ").unwrap_or(&value)
+        ));
     }
     let rendered = match label {
         "String" => "string".to_string(),
@@ -388,5 +401,31 @@ pub(super) fn proto_type(label: &str, model: &Model, field: &str) -> Result<Stri
             }
         },
     };
-    Ok(rendered)
+    if proto_scalar_requires_presence(label) {
+        Ok(format!("optional {rendered}"))
+    } else {
+        Ok(rendered)
+    }
+}
+
+/// Whether a scalar is required by the contract and therefore needs explicit
+/// proto3 presence. Booleans deliberately default false across every inbound;
+/// `Option<T>` already carries its own presence and is not passed here.
+pub(super) fn proto_scalar_requires_presence(label: &str) -> bool {
+    matches!(
+        label,
+        "String"
+            | "f64"
+            | "f32"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "isize"
+    )
 }

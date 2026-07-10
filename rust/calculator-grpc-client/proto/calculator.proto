@@ -5,9 +5,9 @@ package theseus.calculator;
 
 message Operands {
   // Left operand.
-  double a = 1;
+  optional double a = 1;
   // Right operand.
-  double b = 2;
+  optional double b = 2;
 }
 
 message CalcResult {

@@ -2,7 +2,7 @@
 //! the status maps inverted back onto the typed error classes.
 
 use super::{
-    proto::{proto_package, proto_request_message},
+    proto::{proto_package, proto_request_message, proto_scalar_requires_presence},
     *,
 };
 
@@ -288,7 +288,8 @@ pub(super) fn render_client_parsed(service: &Service, model: &Model) -> TokenStr
 
 /// The conversion one request field needs from the contract's form to the
 /// wire's: a map spreads into the proto map, an enum-typed field converts
-/// through its generated conversion, and a scalar passes through.
+/// through its generated conversion, a required scalar is wrapped in proto
+/// presence, and a defaulting or optional scalar passes through.
 pub(super) fn grpc_client_field_conversion(
     field: &Field,
     model: &Model,
@@ -312,6 +313,7 @@ pub(super) fn grpc_client_field_conversion(
             field: field.name.clone(),
             ty: field.ty.clone(),
         }),
+        _ if proto_scalar_requires_presence(&field.ty) => Ok(quote! { #name: Some(request.#name) }),
         _ => Ok(quote! { #name: request.#name }),
     }
 }
@@ -367,6 +369,8 @@ pub(super) fn render_grpc_client_enum_conversions(
                                 let unwrapped = optional_inner(&field.ty).unwrap_or(&field.ty);
                                 if unwrapped.starts_with("BTreeMap<") {
                                     quote! { #name: #name.into_iter().collect() }
+                                } else if proto_scalar_requires_presence(&field.ty) {
+                                    quote! { #name: Some(#name) }
                                 } else {
                                     quote! { #name }
                                 }
@@ -445,6 +449,7 @@ mod tests {
         assert!(grpc.contains("fn edit_to_proto"));
         assert!(grpc.contains("Verb::Add("));
         assert!(grpc.contains("map(edit_to_proto)"));
+        assert!(grpc.contains("name: Some(name)"), "{grpc}");
         assert!(grpc.contains("PermissionDenied"));
     }
 }

@@ -2,7 +2,10 @@
 //! with its conversions and status map.
 
 use super::{
-    proto::{proto_package, proto_request_message, proto_response_message},
+    proto::{
+        proto_package, proto_request_message, proto_response_message,
+        proto_scalar_requires_presence,
+    },
     *,
 };
 
@@ -131,7 +134,8 @@ pub(super) fn render_grpc_module(
 
 /// The conversion one request field needs from its wire form to the contract's:
 /// a map collects into the contract's ordered map, an enum-typed field converts
-/// through its generated conversion, and a scalar passes through.
+/// through its generated conversion, a required scalar is unwrapped from proto
+/// presence, and a defaulting or optional scalar passes through.
 pub(super) fn grpc_field_conversion(
     field: &Field,
     model: &Model,
@@ -154,7 +158,7 @@ pub(super) fn grpc_field_conversion(
                         .collect::<Result<Vec<_>, tonic::Status>>()?
                 })
             } else {
-                let missing = format!("the call needs a `{}`", field.name);
+                let missing = format!("field `{}` is required", field.name);
                 Ok(quote! {
                     #name: #convert(
                         request
@@ -168,6 +172,14 @@ pub(super) fn grpc_field_conversion(
             field: field.name.clone(),
             ty: field.ty.clone(),
         }),
+        _ if proto_scalar_requires_presence(&field.ty) => {
+            let missing = format!("field `{}` is required", field.name);
+            Ok(quote! {
+                #name: request
+                    .#name
+                    .ok_or_else(|| tonic::Status::invalid_argument(#missing))?
+            })
+        }
         _ => Ok(quote! { #name: request.#name }),
     }
 }
@@ -218,6 +230,13 @@ pub(super) fn render_grpc_enum_conversions(
                                 let unwrapped = optional_inner(&field.ty).unwrap_or(&field.ty);
                                 if unwrapped.starts_with("BTreeMap<") {
                                     quote! { #name: data.#name.into_iter().collect() }
+                                } else if proto_scalar_requires_presence(&field.ty) {
+                                    let missing = format!("field `{}` is required", field.name);
+                                    quote! {
+                                        #name: data
+                                            .#name
+                                            .ok_or_else(|| tonic::Status::invalid_argument(#missing))?
+                                    }
                                 } else {
                                     quote! { #name: data.#name }
                                 }
@@ -279,7 +298,7 @@ mod tests {
         let proto = render_proto(&model, service).expect("calculator proto renders");
         assert!(proto.contains("package app.calculator;"), "{proto}");
         assert!(proto.contains("message Operands {"));
-        assert!(proto.contains("double a = 1;"));
+        assert!(proto.contains("optional double a = 1;"));
         assert!(proto.contains("message CalcResult {\n  string value = 1;\n}"));
         assert!(proto.contains("rpc Add (Operands) returns (CalcResult);"));
 
@@ -289,6 +308,57 @@ mod tests {
         assert!(rendered.contains("include_proto"));
         assert!(rendered.contains("calc::Unimplemented"));
         assert!(rendered.contains("unimplemented") && rendered.contains("permission_denied"));
+        assert!(rendered.contains("field `a` is required"), "{rendered}");
+    }
+
+    #[test]
+    fn required_grpc_scalars_track_presence_across_server_and_client() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .crate_node("app-grpc", "app-grpc", 1, &["app"])
+            .crate_node("app-grpc-client", "app-grpc-client", 1, &["app"])
+            .struct_type(
+                "Retention",
+                &[
+                    ("keep", "u32", "Number to retain."),
+                    ("label", "String", "Retention label."),
+                    ("ratio", "f64", "Retention ratio."),
+                    ("dry_run", "bool", "Preview without applying."),
+                    ("ceiling", "Option<u32>", "Optional ceiling."),
+                ],
+            )
+            .service(Service::new("App").crate_name("app").operation(
+                "prune",
+                "Prune retained values.",
+                "Retention",
+                "String",
+            ))
+            .inbound("grpc", Transport::Grpc, "App", "app-grpc")
+            .client("grpc-client", Transport::Grpc, "App", "app-grpc-client");
+        let service = model.service_named("App").expect("modeled");
+
+        let proto = render_proto(&model, service).expect("presence-aware proto renders");
+        assert!(proto.contains("optional uint32 keep = 1;"), "{proto}");
+        assert!(proto.contains("optional string label = 2;"), "{proto}");
+        assert!(proto.contains("optional double ratio = 3;"), "{proto}");
+        assert!(proto.contains("bool dry_run = 4;"), "{proto}");
+        assert!(proto.contains("optional uint32 ceiling = 5;"), "{proto}");
+
+        let server =
+            render_module_for_crate(&model, "app-grpc").expect("gRPC server module renders");
+        assert!(server.contains("field `keep` is required"), "{server}");
+        assert!(server.contains("field `label` is required"), "{server}");
+        assert!(server.contains("field `ratio` is required"), "{server}");
+        assert!(!server.contains("field `dry_run` is required"), "{server}");
+        assert!(!server.contains("field `ceiling` is required"), "{server}");
+
+        let client =
+            render_module_for_crate(&model, "app-grpc-client").expect("gRPC client module renders");
+        assert!(client.contains("keep: Some(request.keep)"), "{client}");
+        assert!(client.contains("label: Some(request.label)"), "{client}");
+        assert!(client.contains("ratio: Some(request.ratio)"), "{client}");
+        assert!(client.contains("dry_run: request.dry_run"), "{client}");
+        assert!(client.contains("ceiling: request.ceiling"), "{client}");
     }
 
     #[test]
@@ -337,6 +407,7 @@ mod tests {
         assert!(proto.contains("message Edit {"));
         assert!(proto.contains("oneof verb {"));
         assert!(proto.contains("Add add = 1;"));
+        assert!(proto.contains("optional string name = 1;"), "{proto}");
         assert!(proto.contains("map<string, string> attrs"));
         assert!(
             !proto.contains("optional map"),
@@ -349,6 +420,7 @@ mod tests {
         assert!(rendered.contains("fn edit_from_proto"), "{rendered}");
         assert!(rendered.contains("Verb::Add(data)"));
         assert!(rendered.contains("into_iter().collect()"));
+        assert!(rendered.contains("field `name` is required"), "{rendered}");
         assert!(rendered.contains("serde_json::to_string"));
         assert!(rendered.contains("carries one verb"));
     }

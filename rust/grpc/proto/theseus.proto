@@ -52,9 +52,9 @@ message CoverageReport {
 
 message ImplementRequest {
   // Name of the operation — or, with `port`, the port method — to implement.
-  string method = 1;
+  optional string method = 1;
   // The handler body to splice into the impl.
-  string body = 2;
+  optional string body = 2;
   // Name of the port whose adapter method to implement.
   optional string port = 3;
   // The adapter type to target when the file holds more than one.
@@ -68,7 +68,7 @@ message ImplementResult {
 
 message ShowRequest {
   // Name of the operation — or, with `port`, the port method — to show.
-  string method = 1;
+  optional string method = 1;
   // Name of the port whose adapter method to show.
   optional string port = 2;
   // The adapter type to target when the file holds more than one.
@@ -86,11 +86,11 @@ message CheckReport {
 
 message CalcRequest {
   // The operator: add, subtract, multiply, or divide.
-  string op = 1;
+  optional string op = 1;
   // Left operand.
-  double a = 2;
+  optional double a = 2;
   // Right operand.
-  double b = 3;
+  optional double b = 3;
 }
 
 message CalcResult {
@@ -99,7 +99,7 @@ message CalcResult {
 
 message SnapshotRequest {
   // A short label naming the snapshot.
-  string label = 1;
+  optional string label = 1;
 }
 
 message String {
@@ -108,22 +108,22 @@ message String {
 
 message SnapshotRef {
   // The snapshot id, as returned by `snapshot`.
-  string reference = 1;
+  optional string reference = 1;
 }
 
 message SnapshotRetention {
   // Number of newest snapshots to retain.
-  uint32 keep = 1;
+  optional uint32 keep = 1;
 }
 
 message ReadRequest {
   // The workspace-relative file to read.
-  string path = 1;
+  optional string path = 1;
 }
 
 message SearchRequest {
   // The text to find.
-  string pattern = 1;
+  optional string pattern = 1;
   // A workspace-relative subtree to search. The whole workspace when omitted.
   optional string path = 2;
 }
@@ -136,27 +136,27 @@ message ListRequest {
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
-    string parent = 1;
+    optional string parent = 1;
     // Node kind: operation, type, port, method, field, or variant.
-    string kind = 2;
+    optional string kind = 2;
     // Name of the new node.
-    string name = 3;
+    optional string name = 3;
     // Scalar attributes, e.g. `shape`, `ty`, or `summary`.
     map<string, string> attrs = 4;
   }
   message Remove {
     // Handle of the node to remove.
-    string target = 1;
+    optional string target = 1;
   }
   message Rename {
     // Handle of the node to rename.
-    string target = 1;
+    optional string target = 1;
     // The new name.
-    string to = 2;
+    optional string to = 2;
   }
   message Set {
     // Handle of the node to edit.
-    string target = 1;
+    optional string target = 1;
     // Scalar attributes to set.
     map<string, string> attrs = 2;
   }

@@ -206,9 +206,9 @@ pub(super) fn render_standalone(
         })
         .collect::<Result<_, _>>()?;
 
-    let doc_a = doc("An owned composition root: the service over one owned adapter per port,");
-    let doc_b = doc("driven through a fresh borrowed `Ctx` per call. A long-lived inbound");
-    let doc_c = doc("holds it where a borrowed root cannot live.");
+    let doc_a = doc("An immutable, owned composition root for one-shot calls.");
+    let doc_b = doc("It borrows its adapters through a fresh `Ctx` per call, but does not");
+    let doc_c = doc("carry model mutations between calls; mutable inbounds need a stateful root.");
     Ok(quote! {
         #doc_a
         #doc_b
@@ -536,6 +536,8 @@ mod tests {
         // One generic parameter per port, bounded by the port trait, and one
         // delegation per operation through a fresh borrowed root.
         assert!(rendered.contains("pub struct Standalone<SinkAdapter: Sink>"));
+        assert!(rendered.contains("An immutable, owned composition root for one-shot calls."));
+        assert!(rendered.contains("mutable inbounds need a stateful root"));
         assert!(rendered.contains("fn ctx(&self) -> Ctx<'_>"));
         assert!(
             rendered.contains("impl<SinkAdapter: Sink> AppService for Standalone<SinkAdapter>")

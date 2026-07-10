@@ -33,8 +33,8 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .stub
             .clone()
             .add(proto::Operands {
-                a: request.a,
-                b: request.b,
+                a: Some(request.a),
+                b: Some(request.b),
             })
             .await
             .map_err(|status| failed("add", status))?;
@@ -49,8 +49,8 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .stub
             .clone()
             .subtract(proto::Operands {
-                a: request.a,
-                b: request.b,
+                a: Some(request.a),
+                b: Some(request.b),
             })
             .await
             .map_err(|status| failed("subtract", status))?;
@@ -65,8 +65,8 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .stub
             .clone()
             .multiply(proto::Operands {
-                a: request.a,
-                b: request.b,
+                a: Some(request.a),
+                b: Some(request.b),
             })
             .await
             .map_err(|status| failed("multiply", status))?;
@@ -81,8 +81,8 @@ impl theseus_calculator::CalculatorService for GrpcCalculatorClient {
             .stub
             .clone()
             .divide(proto::Operands {
-                a: request.a,
-                b: request.b,
+                a: Some(request.a),
+                b: Some(request.b),
             })
             .await
             .map_err(|status| failed("divide", status))?;

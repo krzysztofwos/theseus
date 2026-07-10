@@ -24,10 +24,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let changes: Vec<_> = files
         .iter()
-        .map(|(_, file)| MutationFile {
-            path: file.path.clone(),
-            contents: Some(file.contents.clone()),
-        })
+        .map(|(_, file)| MutationFile::text(file.path.clone(), file.contents.clone()))
         .collect();
     mutation.apply(&changes).await?;
     mutation.commit()?;

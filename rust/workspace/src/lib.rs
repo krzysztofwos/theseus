@@ -46,11 +46,76 @@ pub struct ExpectedFile {
 /// The complete optimistic revision checked after acquiring the repository lease.
 pub type ExpectedFileSet = Vec<ExpectedFile>;
 
-/// One path in a declared mutation: replacement contents or a deletion tombstone.
+/// Validate a complete declared path set using the same normalization,
+/// reservation, collision, and overlap rules as a mutation.
+pub fn validate_workspace_paths(paths: &[String]) -> Result<(), MutationError> {
+    validate_paths(paths.iter().map(String::as_str))
+}
+
+/// One path in a declared mutation and its exact desired filesystem state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MutationFile {
     pub path: String,
-    pub contents: Option<String>,
+    pub target: MutationTarget,
+}
+
+/// The state published for a declared mutation path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MutationTarget {
+    /// A regular file. `None` preserves an existing regular file's mode and uses
+    /// `0644` when the path is new or replaces a symlink.
+    Regular {
+        contents: Vec<u8>,
+        mode: Option<u32>,
+    },
+    /// A symbolic link whose target is represented as raw Unix path bytes.
+    Symlink { target: Vec<u8> },
+    /// A tombstone: the path must not exist after publication.
+    Absent,
+}
+
+impl MutationFile {
+    /// A UTF-8 regular-file replacement using the existing/default mode policy.
+    pub fn text(path: impl Into<String>, contents: impl Into<String>) -> Self {
+        Self::regular(path, contents.into().into_bytes(), None)
+    }
+
+    /// An exact regular-file replacement.
+    pub fn regular(path: impl Into<String>, contents: Vec<u8>, mode: Option<u32>) -> Self {
+        Self {
+            path: path.into(),
+            target: MutationTarget::Regular { contents, mode },
+        }
+    }
+
+    /// An exact symbolic-link replacement.
+    pub fn symlink(path: impl Into<String>, target: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            target: MutationTarget::Symlink { target },
+        }
+    }
+
+    /// A deletion tombstone.
+    pub fn absent(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            target: MutationTarget::Absent,
+        }
+    }
+
+    /// UTF-8 contents when this entry is a regular text file.
+    pub fn text_contents(&self) -> Option<&str> {
+        match &self.target {
+            MutationTarget::Regular { contents, .. } => std::str::from_utf8(contents).ok(),
+            MutationTarget::Symlink { .. } | MutationTarget::Absent => None,
+        }
+    }
+
+    /// Whether this entry is a deletion tombstone.
+    pub fn is_absent(&self) -> bool {
+        matches!(self.target, MutationTarget::Absent)
+    }
 }
 
 /// A repository mutation held under one process-independent write lease.
@@ -247,7 +312,7 @@ impl MutationCore {
     fn check_expected(&self, expected_files: &[ExpectedFile]) -> Result<(), MutationError> {
         for file in expected_files {
             let relative = parse_path(&file.path)?;
-            let path = resolve_target(&self.root, &relative, false)?;
+            let path = resolve_target(&self.root, &relative, false, false)?;
             let actual = match fs::read(&path) {
                 Ok(actual) => Some(actual),
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
@@ -288,19 +353,30 @@ impl MutationCore {
             .zip(&manifest.entries)
             .try_for_each(|(file, entry)| {
                 let relative = parse_path(&file.path)?;
-                match &file.contents {
-                    Some(contents) => {
-                        let target = resolve_target(&self.root, &relative, true)?;
+                match &file.target {
+                    MutationTarget::Regular { contents, mode } => {
+                        validate_file_mode(*mode, &file.path)?;
+                        let target = resolve_target(&self.root, &relative, true, true)?;
                         let temporary = self.root.join(&entry.temporary);
-                        let mode = if entry.backup.is_some() {
-                            entry.mode
-                        } else {
-                            0o644
-                        };
-                        write_target(&target, &temporary, contents.as_bytes(), mode)
+                        let mode = mode.unwrap_or_else(|| {
+                            if entry.backup.is_some()
+                                && entry.original_kind == OriginalKind::Regular
+                            {
+                                entry.mode
+                            } else {
+                                0o644
+                            }
+                        });
+                        write_target(&target, &temporary, contents, mode)
                     }
-                    None => {
-                        let target = resolve_target(&self.root, &relative, false)?;
+                    MutationTarget::Symlink { target: link } => {
+                        validate_symlink_target(link, &file.path)?;
+                        let target = resolve_target(&self.root, &relative, true, true)?;
+                        let temporary = self.root.join(&entry.temporary);
+                        write_symlink_target(&target, &temporary, link)
+                    }
+                    MutationTarget::Absent => {
+                        let target = resolve_target(&self.root, &relative, false, true)?;
                         remove_declared_target(&target, &file.path)
                     }
                 }
@@ -332,14 +408,14 @@ impl MutationCore {
                 files.iter().map(|file| file.path.as_str()).collect();
             for (index, file) in files.iter().enumerate() {
                 let relative = parse_path(&file.path)?;
-                if file.contents.is_some() {
+                if !matches!(&file.target, MutationTarget::Absent) {
                     for directory in missing_parent_directories(&self.root, &relative)? {
                         if known_created_dirs.insert(directory.clone()) {
                             created_dirs.push(directory);
                         }
                     }
                 }
-                let target = resolve_target(&self.root, &relative, false)?;
+                let target = resolve_target(&self.root, &relative, false, true)?;
                 let backup = format!("backup-{index:08}");
                 let temporary = temporary_path(&relative, index)?;
                 if declared_paths.contains(temporary.to_str().unwrap_or_default()) {
@@ -366,12 +442,13 @@ impl MutationCore {
                     }
                 }
                 let entry = match read_target_backup(&target, &file.path)? {
-                    Some((contents, mode)) => {
-                        write_private(&preparing.join(&backup), &contents)?;
+                    Some(backup_contents) => {
+                        write_private(&preparing.join(&backup), &backup_contents.contents)?;
                         JournalEntry {
                             path: file.path.clone(),
                             backup: Some(backup),
-                            mode,
+                            mode: backup_contents.mode,
+                            original_kind: backup_contents.kind,
                             temporary: temporary.display().to_string(),
                         }
                     }
@@ -379,6 +456,7 @@ impl MutationCore {
                         path: file.path.clone(),
                         backup: None,
                         mode: 0,
+                        original_kind: OriginalKind::Regular,
                         temporary: temporary.display().to_string(),
                     },
                 };
@@ -428,14 +506,22 @@ impl MutationCore {
         let journal = self.journal_path();
         for entry in manifest.entries.iter().rev() {
             let relative = parse_path(&entry.path)?;
-            let target = resolve_target(&self.root, &relative, entry.backup.is_some())?;
+            let target = resolve_target(&self.root, &relative, entry.backup.is_some(), true)?;
             let temporary = self.root.join(&entry.temporary);
             remove_temporary(&temporary)?;
             if let Some(backup) = &entry.backup {
                 let backup_path = journal.join(backup);
                 reject_symlink(&backup_path, "mutation backup")?;
                 let contents = read_private(&backup_path, MAX_BACKUP_BYTES)?;
-                write_target(&target, &temporary, &contents, entry.mode)?;
+                match entry.original_kind {
+                    OriginalKind::Regular => {
+                        write_target(&target, &temporary, &contents, entry.mode)?;
+                    }
+                    OriginalKind::Symlink => {
+                        validate_symlink_target(&contents, &entry.path)?;
+                        write_symlink_target(&target, &temporary, &contents)?;
+                    }
+                }
             } else {
                 remove_created_target(&target, &entry.path)?;
             }
@@ -619,7 +705,23 @@ struct JournalEntry {
     path: String,
     backup: Option<String>,
     mode: u32,
+    #[serde(default)]
+    original_kind: OriginalKind,
     temporary: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum OriginalKind {
+    #[default]
+    Regular,
+    Symlink,
+}
+
+struct TargetBackup {
+    contents: Vec<u8>,
+    mode: u32,
+    kind: OriginalKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -699,7 +801,15 @@ pub enum MutationError {
 }
 
 fn validate_file_set(files: &[MutationFile]) -> Result<(), MutationError> {
-    validate_paths(files.iter().map(|file| file.path.as_str()))
+    validate_paths(files.iter().map(|file| file.path.as_str()))?;
+    for file in files {
+        match &file.target {
+            MutationTarget::Regular { mode, .. } => validate_file_mode(*mode, &file.path)?,
+            MutationTarget::Symlink { target } => validate_symlink_target(target, &file.path)?,
+            MutationTarget::Absent => {}
+        }
+    }
+    Ok(())
 }
 
 fn validate_expected_set(files: &[ExpectedFile]) -> Result<(), MutationError> {
@@ -798,6 +908,7 @@ fn resolve_target(
     root: &Path,
     relative: &WorkspacePath,
     create_parents: bool,
+    allow_target_symlink: bool,
 ) -> Result<PathBuf, MutationError> {
     let display = relative.as_path().display().to_string();
     let mut current = root.to_path_buf();
@@ -806,7 +917,9 @@ fn resolve_target(
         current.push(component);
         let is_target = components.peek().is_none();
         match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() && (!is_target || !allow_target_symlink) =>
+            {
                 return Err(MutationError::UnsafeTarget {
                     path: display,
                     reason: "path crosses a symbolic link",
@@ -818,7 +931,11 @@ fn resolve_target(
                     reason: "a parent component is not a directory",
                 });
             }
-            Ok(metadata) if is_target && !metadata.is_file() => {
+            Ok(metadata)
+                if is_target
+                    && !metadata.is_file()
+                    && !(allow_target_symlink && metadata.file_type().is_symlink()) =>
+            {
                 return Err(MutationError::UnsafeTarget {
                     path: display,
                     reason: "target is not a regular file",
@@ -897,7 +1014,51 @@ fn temporary_path(relative: &WorkspacePath, index: usize) -> Result<PathBuf, Mut
     Ok(temporary)
 }
 
-fn read_target_backup(path: &Path, display: &str) -> Result<Option<(Vec<u8>, u32)>, MutationError> {
+fn read_target_backup(path: &Path, display: &str) -> Result<Option<TargetBackup>, MutationError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = fs::read_link(path).map_err(|source| MutationError::Io {
+                operation: "reading workspace symlink for backup",
+                path: path.to_path_buf(),
+                source,
+            })?;
+            #[cfg(unix)]
+            let contents = {
+                use std::os::unix::ffi::OsStringExt;
+                target.into_os_string().into_vec()
+            };
+            #[cfg(not(unix))]
+            let contents = target.to_string_lossy().into_owned().into_bytes();
+            if contents.len() as u64 > MAX_BACKUP_BYTES {
+                return Err(MutationError::PrivateFileTooLarge {
+                    path: path.to_path_buf(),
+                    length: contents.len() as u64,
+                    maximum: MAX_BACKUP_BYTES,
+                });
+            }
+            return Ok(Some(TargetBackup {
+                contents,
+                mode: 0,
+                kind: OriginalKind::Symlink,
+            }));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(MutationError::UnsafeTarget {
+                path: display.to_owned(),
+                reason: "target is not a regular file or symbolic link",
+            });
+        }
+        Ok(_) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(MutationError::Io {
+                operation: "reading workspace target metadata",
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    }
+
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -959,12 +1120,36 @@ fn read_target_backup(path: &Path, display: &str) -> Result<Option<(Vec<u8>, u32
             path: display.to_owned(),
         });
     }
-    Ok(Some((contents, file_mode(&before))))
+    Ok(Some(TargetBackup {
+        contents,
+        mode: file_mode(&before),
+        kind: OriginalKind::Regular,
+    }))
+}
+
+fn validate_file_mode(mode: Option<u32>, path: &str) -> Result<(), MutationError> {
+    if mode.is_some_and(|mode| mode & !0o777 != 0) {
+        return Err(MutationError::UnsafeTarget {
+            path: path.to_owned(),
+            reason: "regular-file mode must contain only Unix permission bits",
+        });
+    }
+    Ok(())
+}
+
+fn validate_symlink_target(target: &[u8], path: &str) -> Result<(), MutationError> {
+    if target.is_empty() || target.contains(&0) {
+        return Err(MutationError::UnsafeTarget {
+            path: path.to_owned(),
+            reason: "symbolic-link target must be non-empty and contain no NUL byte",
+        });
+    }
+    Ok(())
 }
 
 fn read_workspace_file(root: &Path, path: &str) -> Result<String, MutationError> {
     let relative = parse_path(path)?;
-    let target = resolve_target(root, &relative, false)?;
+    let target = resolve_target(root, &relative, false, false)?;
     fs::read_to_string(&target).map_err(|source| MutationError::Io {
         operation: "reading workspace file",
         path: target,
@@ -974,7 +1159,7 @@ fn read_workspace_file(root: &Path, path: &str) -> Result<String, MutationError>
 
 fn workspace_file_exists(root: &Path, path: &str) -> Result<bool, MutationError> {
     let relative = parse_path(path)?;
-    let target = resolve_target(root, &relative, false)?;
+    let target = resolve_target(root, &relative, false, false)?;
     match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.is_file() => Ok(true),
         Ok(_) => Err(MutationError::UnsafeTarget {
@@ -1154,7 +1339,6 @@ fn write_target(
     contents: &[u8],
     mode: u32,
 ) -> Result<(), MutationError> {
-    reject_symlink(path, "generated target")?;
     reject_symlink(temporary, "generated temporary")?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -1192,6 +1376,37 @@ fn write_target(
         });
     }
     sync_directory(path.parent().unwrap_or(path))
+}
+
+#[cfg(unix)]
+fn write_symlink_target(path: &Path, temporary: &Path, target: &[u8]) -> Result<(), MutationError> {
+    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+
+    reject_symlink(temporary, "generated temporary")?;
+    let target = std::ffi::OsString::from_vec(target.to_vec());
+    symlink(target, temporary).map_err(|source| MutationError::Io {
+        operation: "creating symbolic-link temporary",
+        path: temporary.to_path_buf(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(temporary, path) {
+        let _ = fs::remove_file(temporary);
+        return Err(MutationError::Io {
+            operation: "publishing symbolic-link target",
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    sync_directory(path.parent().unwrap_or(path))
+}
+
+#[cfg(not(unix))]
+fn write_symlink_target(
+    _path: &Path,
+    _temporary: &Path,
+    _target: &[u8],
+) -> Result<(), MutationError> {
+    Err(MutationError::UnsupportedPlatform)
 }
 
 fn write_state(journal: &Path, state: &[u8]) -> Result<(), MutationError> {
@@ -1292,6 +1507,13 @@ fn validate_manifest(manifest: &JournalManifest) -> Result<(), MutationError> {
             if backup != &expected || !backups.insert(backup.as_str()) {
                 return Err(MutationError::CorruptJournalState);
             }
+            match entry.original_kind {
+                OriginalKind::Regular => validate_file_mode(Some(entry.mode), &entry.path)?,
+                OriginalKind::Symlink if entry.mode == 0 => {}
+                OriginalKind::Symlink => return Err(MutationError::CorruptJournalState),
+            }
+        } else if entry.mode != 0 || entry.original_kind != OriginalKind::Regular {
+            return Err(MutationError::CorruptJournalState);
         }
         parsed_paths.push((entry.path.clone(), relative));
     }
@@ -1329,10 +1551,10 @@ fn finish_cleanup(control: &Path, journal: &Path) -> Result<(), MutationError> {
 
 fn remove_declared_target(target: &Path, display: &str) -> Result<(), MutationError> {
     match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if !metadata.file_type().is_symlink() && !metadata.is_file() => {
             Err(MutationError::UnsafeTarget {
                 path: display.to_owned(),
-                reason: "deletion target is not a regular file",
+                reason: "deletion target is not a regular file or symbolic link",
             })
         }
         Ok(_) => {
@@ -1354,10 +1576,10 @@ fn remove_declared_target(target: &Path, display: &str) -> Result<(), MutationEr
 
 fn remove_created_target(target: &Path, display: &str) -> Result<(), MutationError> {
     match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if !metadata.file_type().is_symlink() && !metadata.is_file() => {
             Err(MutationError::UnsafeTarget {
                 path: display.to_owned(),
-                reason: "rollback target is not a regular file",
+                reason: "rollback target is not a regular file or symbolic link",
             })
         }
         Ok(_) => {
@@ -1379,7 +1601,7 @@ fn remove_created_target(target: &Path, display: &str) -> Result<(), MutationErr
 
 fn remove_temporary(path: &Path) -> Result<(), MutationError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if !metadata.file_type().is_symlink() && !metadata.is_file() => {
             Err(MutationError::UnsafeInternalPath {
                 path: path.to_path_buf(),
             })
@@ -1568,17 +1790,11 @@ mod tests {
     }
 
     fn generated(path: &str, contents: &str) -> MutationFile {
-        MutationFile {
-            path: path.to_owned(),
-            contents: Some(contents.to_owned()),
-        }
+        MutationFile::text(path, contents)
     }
 
     fn deleted(path: &str) -> MutationFile {
-        MutationFile {
-            path: path.to_owned(),
-            contents: None,
-        }
+        MutationFile::absent(path)
     }
 
     fn expected(path: &str, contents: &str) -> ExpectedFile {
@@ -2122,7 +2338,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn symlinks_and_reserved_control_paths_are_rejected() {
+    async fn leaf_symlinks_are_replaced_without_following_them() {
         use std::os::unix::fs::symlink;
 
         let repository = TestRepository::new();
@@ -2130,9 +2346,36 @@ mod tests {
         symlink(repository.path("outside.txt"), repository.path("link.txt"))
             .expect("test symlink is created");
         let mut mutation = FsMutation::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply(&[generated("link.txt", "changed")])
+            .await
+            .expect("an atomic replacement does not follow the link");
+        assert_eq!(fs::read(repository.path("link.txt")).unwrap(), b"changed");
+        assert_eq!(
+            fs::read(repository.path("outside.txt")).unwrap(),
+            b"outside"
+        );
+        mutation.rollback().expect("the original link is restored");
+        assert_eq!(
+            fs::read_link(repository.path("link.txt")).unwrap(),
+            repository.path("outside.txt")
+        );
+    }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_symlinks_and_reserved_control_paths_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let repository = TestRepository::new();
+        fs::create_dir(repository.path("outside")).expect("outside directory is created");
+        symlink(repository.path("outside"), repository.path("linked-parent"))
+            .expect("test symlink is created");
+        let mut mutation = FsMutation::begin(&repository.root, &[]).expect("lease is acquired");
         assert!(matches!(
-            mutation.apply(&[generated("link.txt", "changed")]).await,
+            mutation
+                .apply(&[generated("linked-parent/file", "changed")])
+                .await,
             Err(MutationError::UnsafeTarget { .. })
         ));
         assert!(matches!(
@@ -2148,9 +2391,64 @@ mod tests {
             Err(MutationError::UnsafeTarget { .. })
         ));
         mutation.commit().expect("lease is released");
+        assert!(!repository.path("outside/file").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exact_binary_modes_and_symlinks_commit_as_one_batch() {
+        let repository = TestRepository::new();
+        let mut mutation = FsMutation::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply(&[
+                MutationFile::regular("bin/tool", b"\0binary\xff".to_vec(), Some(0o755)),
+                MutationFile::symlink("tool-link", b"bin/tool".to_vec()),
+            ])
+            .await
+            .expect("the exact entries are published");
+        mutation.commit().expect("the batch commits");
+
         assert_eq!(
-            fs::read(repository.path("outside.txt")).unwrap(),
-            b"outside"
+            fs::read(repository.path("bin/tool")).unwrap(),
+            b"\0binary\xff"
+        );
+        assert_eq!(
+            file_mode(&fs::metadata(repository.path("bin/tool")).unwrap()),
+            0o755
+        );
+        assert_eq!(
+            fs::read_link(repository.path("tool-link")).unwrap(),
+            Path::new("bin/tool")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rollback_restores_regular_files_and_symlinks_exactly() {
+        use std::os::unix::fs::symlink;
+
+        let repository = TestRepository::new();
+        repository.write("regular", b"before\0");
+        set_file_mode(&repository.path("regular"), 0o600).unwrap();
+        symlink("regular", repository.path("link")).expect("the original link is created");
+        let mut mutation = FsMutation::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply(&[
+                MutationFile::symlink("regular", b"other".to_vec()),
+                MutationFile::regular("link", b"replacement".to_vec(), Some(0o755)),
+            ])
+            .await
+            .expect("the entry kinds are exchanged");
+        mutation.rollback().expect("the batch rolls back");
+
+        assert_eq!(fs::read(repository.path("regular")).unwrap(), b"before\0");
+        assert_eq!(
+            file_mode(&fs::metadata(repository.path("regular")).unwrap()),
+            0o600
+        );
+        assert_eq!(
+            fs::read_link(repository.path("link")).unwrap(),
+            Path::new("regular")
         );
     }
 

@@ -367,9 +367,9 @@ async fn protect_cargo_lock(
     } else {
         None
     };
-    files.push(MutationFile {
-        path: "Cargo.lock".to_string(),
-        contents,
+    files.push(match contents {
+        Some(contents) => MutationFile::text("Cargo.lock", contents),
+        None => MutationFile::absent("Cargo.lock"),
     });
     Ok(())
 }
@@ -388,10 +388,7 @@ fn mutation_changes(
         if !desired_paths.contains(&previous.path)
             && !changes.iter().any(|change| change.path == previous.path)
         {
-            changes.push(MutationFile {
-                path: previous.path,
-                contents: None,
-            });
+            changes.push(MutationFile::absent(previous.path));
         }
     }
     Ok(changes)
@@ -465,10 +462,7 @@ pub(crate) async fn implement_model(
 }
 
 fn mutation_file(file: GeneratedFile) -> MutationFile {
-    MutationFile {
-        path: file.path,
-        contents: Some(file.contents),
-    }
+    MutationFile::text(file.path, file.contents)
 }
 
 pub(crate) async fn persist_model(
@@ -899,7 +893,7 @@ mod tests {
             .applied
             .iter()
             .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
-            .and_then(|file| file.contents.as_deref())
+            .and_then(|file| file.text_contents())
             .expect("the proposed self-model is applied");
         assert!(applied_model.contains("DryProbe"));
         assert!(applied_model.contains("WrittenProbe"));
@@ -907,7 +901,7 @@ mod tests {
             recording
                 .applied
                 .iter()
-                .any(|file| { file.path == "Cargo.lock" && file.contents.is_none() })
+                .any(|file| file.path == "Cargo.lock" && file.is_absent())
         );
         assert_eq!(recording.commits, 1);
         assert_eq!(recording.rollbacks, 0);
@@ -998,7 +992,7 @@ mod tests {
             .applied
             .iter()
             .find(|file| file.path == theseus_model::SELF_MODEL_PATH)
-            .and_then(|file| file.contents.as_deref())
+            .and_then(|file| file.text_contents())
             .expect("the post-rollback self-model is applied");
         assert!(applied_model.contains("AfterRollback"));
         assert!(!applied_model.contains("DryAfterSnapshot"));

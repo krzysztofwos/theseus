@@ -14,6 +14,7 @@ mod label;
 mod model;
 mod patch;
 mod path;
+mod project;
 mod query;
 mod scaffold;
 mod source;
@@ -34,6 +35,10 @@ pub use model::{
     TypeShape, Variant,
 };
 pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};
+pub use project::{
+    CheckpointProjectDescriptor, JsonModelRecord, ModelRecord, ProjectId, ProjectIdError,
+    ProjectLayoutError, RustBuilderModelRecord, RustWorkspaceLayout,
+};
 pub use query::{Handle, QueryError, QueryOutcome, query};
 pub use scaffold::scaffold_files;
 pub use source::render_model_source;

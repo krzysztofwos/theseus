@@ -130,14 +130,14 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(reply.into_inner().value)
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         let reply = self
             .stub
             .clone()
             .check(proto::Empty {})
             .await
             .map_err(|status| failed("check", status))?;
-        Ok(reply.into_inner().value)
+        parsed("check", &reply.into_inner().json)
     }
 
     async fn calc(&self, request: theseus::CalcRequest) -> anyhow::Result<String> {
@@ -164,14 +164,14 @@ impl theseus::TheseusService for GrpcTheseusClient {
         parsed("scaffold", &reply.into_inner().json)
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         let reply = self
             .stub
             .clone()
             .test(proto::Empty {})
             .await
             .map_err(|status| failed("test", status))?;
-        Ok(reply.into_inner().value)
+        parsed("test", &reply.into_inner().json)
     }
 
     async fn snapshot(
@@ -261,14 +261,14 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(reply.into_inner().value)
     }
 
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         let reply = self
             .stub
             .clone()
             .lint(proto::Empty {})
             .await
             .map_err(|status| failed("lint", status))?;
-        Ok(reply.into_inner().value)
+        parsed("lint", &reply.into_inner().json)
     }
 }
 

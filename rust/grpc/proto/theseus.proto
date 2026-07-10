@@ -78,8 +78,9 @@ message HandlerSource {
   string value = 1;
 }
 
+// The JSON rendering of the `CheckReport` response.
 message CheckReport {
-  string value = 1;
+  string json = 1;
 }
 
 message CalcRequest {

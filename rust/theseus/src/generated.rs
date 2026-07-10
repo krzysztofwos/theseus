@@ -65,17 +65,17 @@ impl<T: Checkpoint + ?Sized> Checkpoint for &T {
 #[async_trait::async_trait]
 pub trait Toolchain: Send + Sync {
     /// Compile-check the workspace and report the outcome.
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("toolchain.check").into())
     }
 
     /// Run the workspace tests and report the outcome.
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("toolchain.test").into())
     }
 
     /// Run clippy across the workspace with warnings denied and report the outcome.
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("toolchain.lint").into())
     }
 }
@@ -84,15 +84,15 @@ pub trait Toolchain: Send + Sync {
 /// generic over the port holds a borrow as readily as an owned adapter.
 #[async_trait::async_trait]
 impl<T: Toolchain + ?Sized> Toolchain for &T {
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         (**self).check().await
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         (**self).test().await
     }
 
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         (**self).lint().await
     }
 }
@@ -322,7 +322,7 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Compile-check the workspace and report the outcome.
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("check").into())
     }
 
@@ -337,7 +337,7 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Run the workspace tests and report the outcome.
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("test").into())
     }
 
@@ -377,7 +377,7 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Run clippy across the workspace with warnings denied.
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("lint").into())
     }
 }
@@ -467,7 +467,7 @@ for Standalone<
         self.ctx().show(request).await
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         self.ctx().check().await
     }
 
@@ -479,7 +479,7 @@ for Standalone<
         self.ctx().scaffold().await
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         self.ctx().test().await
     }
 
@@ -511,7 +511,7 @@ for Standalone<
         self.ctx().list(request).await
     }
 
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         self.ctx().lint().await
     }
 }
@@ -771,9 +771,9 @@ pub async fn dispatch_tool(
             Ok(service.implement(parse_implement_request_input(input)?).await?)
         }
         "show" => Ok(service.show(parse_show_request_input(input)?).await?),
-        "check" => Ok(service.check().await?),
+        "check" => Ok(serde_json::to_string(&service.check().await?)?),
         "scaffold" => Ok(serde_json::to_string(&service.scaffold().await?)?),
-        "test" => Ok(service.test().await?),
+        "test" => Ok(serde_json::to_string(&service.test().await?)?),
         "snapshot" => Ok(service.snapshot(parse_snapshot_request_input(input)?).await?),
         "rollback" => Ok(service.rollback(parse_snapshot_ref_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
@@ -781,7 +781,7 @@ pub async fn dispatch_tool(
         "read" => Ok(service.read(parse_read_request_input(input)?).await?),
         "search" => Ok(service.search(parse_search_request_input(input)?).await?),
         "list" => Ok(service.list(parse_list_request_input(input)?).await?),
-        "lint" => Ok(service.lint().await?),
+        "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
         other => {
             anyhow::bail!(
                 "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, diff, restart, read, search, list, lint"

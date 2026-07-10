@@ -130,7 +130,17 @@ async fn run(service: &impl TheseusService, invocation: Invocation) -> anyhow::R
                 std::process::exit(1);
             }
         }
+        Invocation::Check => print_check_report(service.check().await?),
+        Invocation::Test => print_check_report(service.test().await?),
+        Invocation::Lint => print_check_report(service.lint().await?),
         other => generated::dispatch(service, other).await?,
     }
     Ok(())
+}
+
+fn print_check_report(report: theseus::CheckReport) {
+    println!("{}", report.detail);
+    if !report.ok {
+        std::process::exit(1);
+    }
 }

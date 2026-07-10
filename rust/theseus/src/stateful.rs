@@ -145,7 +145,7 @@ where
         self.ctx(&model).show(request).await
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<crate::CheckReport> {
         let model = self.model.lock().await;
         self.ctx(&model).check().await
     }
@@ -160,12 +160,12 @@ where
         self.ctx(&model).scaffold().await
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<crate::CheckReport> {
         let model = self.model.lock().await;
         self.ctx(&model).test().await
     }
 
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
         let model = self.model.lock().await;
         self.ctx(&model).lint().await
     }

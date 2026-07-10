@@ -6,18 +6,22 @@
 //! impl. The inbound binaries wire concrete adapters into a root and drive the
 //! contract over a transport.
 
+extern crate self as theseus;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use theseus_modeling::GeneratedFile;
 use thiserror::Error;
 
+mod check_report;
 mod generated;
 mod service;
 mod session;
 mod stateful;
 mod workspace_path;
 
+pub use check_report::CheckReport;
 pub use generated::*;
 pub use session::Session;
 pub use stateful::StatefulSession;
@@ -354,77 +358,107 @@ pub struct CargoToolchain;
 
 #[async_trait::async_trait]
 impl Toolchain for CargoToolchain {
-    async fn lint(&self) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["clippy", "--workspace", "--quiet", "--", "-D", "warnings"])
-            .current_dir(workspace_root())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running `cargo clippy --workspace -- -D warnings`")?;
-        // clippy emits diagnostics to stderr
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        Ok(if output.status.success() {
-            if diagnostics.is_empty() {
-                "clippy: no warnings or errors".to_string()
-            } else {
-                format!("clippy: clean (with notes):\n{}", crate::head(diagnostics))
-            }
-        } else {
-            format!(
-                "clippy: warnings or errors found:\n{}",
-                crate::head(diagnostics)
-            )
-        })
+    async fn lint(&self) -> anyhow::Result<CheckReport> {
+        run_cargo(
+            &["clippy", "--workspace", "--quiet", "--", "-D", "warnings"],
+            "cargo clippy --workspace -- -D warnings",
+            "clippy: no warnings or errors",
+            "clippy: clean (with notes)",
+            "clippy: warnings or errors found",
+        )
+        .await
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["test", "--workspace", "--quiet"])
-            .current_dir(workspace_root())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running `cargo test --workspace`")?;
-        // With `--quiet` the diagnostic stream carries warnings and errors only.
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        Ok(if output.status.success() {
-            if diagnostics.is_empty() {
-                "the tests pass".to_string()
-            } else {
-                format!("the tests pass, with warnings:\n{}", head(diagnostics))
-            }
-        } else {
-            format!("tests failed:\n{}", head(diagnostics))
-        })
+    async fn test(&self) -> anyhow::Result<CheckReport> {
+        run_cargo(
+            &["test", "--workspace", "--quiet"],
+            "cargo test --workspace",
+            "the tests pass",
+            "the tests pass, with warnings",
+            "tests failed",
+        )
+        .await
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["check", "--workspace", "--quiet"])
-            .current_dir(workspace_root())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("running `cargo check --workspace`")?;
-        // With `--quiet` the diagnostic stream carries warnings and errors only.
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        Ok(if output.status.success() {
-            if diagnostics.is_empty() {
-                "the workspace compiles".to_string()
-            } else {
-                format!(
-                    "the workspace compiles, with warnings:\n{}",
-                    head(diagnostics)
-                )
-            }
-        } else {
-            format!("check failed:\n{}", head(diagnostics))
-        })
+    async fn check(&self) -> anyhow::Result<CheckReport> {
+        run_cargo(
+            &["check", "--workspace", "--quiet"],
+            "cargo check --workspace",
+            "the workspace compiles",
+            "the workspace compiles, with warnings",
+            "check failed",
+        )
+        .await
     }
+}
+
+async fn run_cargo(
+    args: &[&str],
+    operation: &'static str,
+    success: &'static str,
+    success_with_notes: &'static str,
+    failure: &'static str,
+) -> anyhow::Result<CheckReport> {
+    let output = tokio::process::Command::new("cargo")
+        .args(args)
+        .current_dir(workspace_root())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("running `{operation}`"))?;
+    Ok(report_from_output(
+        &output,
+        success,
+        success_with_notes,
+        failure,
+    ))
+}
+
+fn report_from_output(
+    output: &std::process::Output,
+    success: &str,
+    success_with_notes: &str,
+    failure: &str,
+) -> CheckReport {
+    report_from_streams(
+        output.status.success(),
+        &output.stdout,
+        &output.stderr,
+        success,
+        success_with_notes,
+        failure,
+    )
+}
+
+fn report_from_streams(
+    ok: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+    success: &str,
+    success_with_notes: &str,
+    failure: &str,
+) -> CheckReport {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = stderr.trim();
+    if ok {
+        return CheckReport::success(if stderr.is_empty() {
+            success.to_string()
+        } else {
+            format!("{success_with_notes}:\n{}", head(stderr))
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(stdout);
+    let diagnostics = [stderr, stdout.trim()]
+        .into_iter()
+        .filter(|stream| !stream.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    CheckReport::failure(if diagnostics.is_empty() {
+        failure.to_string()
+    } else {
+        format!("{failure}:\n{}", head(&diagnostics))
+    })
 }
 
 /// The head of a diagnostic stream, capped so the report stays readable as a
@@ -466,6 +500,51 @@ impl
             calculator: theseus_calculator::Calculator,
             toolchain: CargoToolchain,
         }
+    }
+}
+
+#[cfg(test)]
+mod check_report_tests {
+    use super::report_from_streams;
+
+    #[test]
+    fn a_completed_command_reports_its_status_structurally() {
+        let success = report_from_streams(
+            true,
+            b"ignored normal output",
+            b"",
+            "success",
+            "success with notes",
+            "failure",
+        );
+        assert!(success.ok);
+        assert_eq!(success.detail, "success");
+
+        let failure = report_from_streams(
+            false,
+            b"test assertion failed on stdout",
+            b"compiler diagnostic on stderr",
+            "success",
+            "success with notes",
+            "failure",
+        );
+        assert!(!failure.ok);
+        assert!(failure.detail.contains("compiler diagnostic on stderr"));
+        assert!(failure.detail.contains("test assertion failed on stdout"));
+    }
+
+    #[test]
+    fn successful_diagnostics_are_preserved_as_notes() {
+        let report = report_from_streams(
+            true,
+            b"",
+            b"a warning",
+            "success",
+            "success with notes",
+            "failure",
+        );
+        assert!(report.ok);
+        assert_eq!(report.detail, "success with notes:\na warning");
     }
 }
 

@@ -6,6 +6,15 @@ use std::sync::Arc;
 use theseus::{ImplementRequest, QueryRequest, Standalone, TheseusService};
 use theseus_http_client::HttpTheseusClient;
 
+struct FailedCheck;
+
+#[async_trait::async_trait]
+impl TheseusService for FailedCheck {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
+        Ok(theseus::CheckReport::failure("compile failure over HTTP"))
+    }
+}
+
 /// Serve a router on an ephemeral port and return a client against it.
 async fn serve<S: TheseusService + 'static>(service: S) -> HttpTheseusClient {
     let router = theseus_http::router(Arc::new(service));
@@ -73,4 +82,15 @@ async fn the_unimplemented_class_survives_the_crossing() {
         error.downcast_ref::<theseus::Unimplemented>().is_some(),
         "the 501 should come back as the typed default: {error}"
     );
+}
+
+#[tokio::test]
+async fn a_failed_check_report_crosses_as_a_result() {
+    let report = serve(FailedCheck)
+        .await
+        .check()
+        .await
+        .expect("a completed failing check is still a typed result");
+    assert!(!report.ok);
+    assert_eq!(report.detail, "compile failure over HTTP");
 }

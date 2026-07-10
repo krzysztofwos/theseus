@@ -214,7 +214,7 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
-        "check" => reply_text(service.check().await),
+        "check" => reply_json(service.check().await),
         "calc" => {
             match parse_calc_request_http(input) {
                 Ok(request) => reply_text(service.calc(request).await),
@@ -222,7 +222,7 @@ pub async fn handle(
             }
         }
         "scaffold" => reply_json(service.scaffold().await),
-        "test" => reply_text(service.test().await),
+        "test" => reply_json(service.test().await),
         "snapshot" => {
             match parse_snapshot_request_http(input) {
                 Ok(request) => reply_text(service.snapshot(request).await),
@@ -260,7 +260,7 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
-        "lint" => reply_text(service.lint().await),
+        "lint" => reply_json(service.lint().await),
         other => {
             HttpReply {
                 status: 404,

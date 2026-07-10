@@ -442,12 +442,16 @@ pub async fn dispatch(
             println!("{}", service.implement(request). await ?)
         }
         Invocation::Show(request) => println!("{}", service.show(request). await ?),
-        Invocation::Check => println!("{}", service.check(). await ?),
+        Invocation::Check => {
+            println!("{}", serde_json::to_string_pretty(& service.check(). await ?) ?)
+        }
         Invocation::Calc(request) => println!("{}", service.calc(request). await ?),
         Invocation::Scaffold => {
             println!("{}", serde_json::to_string_pretty(& service.scaffold(). await ?) ?)
         }
-        Invocation::Test => println!("{}", service.test(). await ?),
+        Invocation::Test => {
+            println!("{}", serde_json::to_string_pretty(& service.test(). await ?) ?)
+        }
         Invocation::Snapshot(request) => {
             println!("{}", service.snapshot(request). await ?)
         }
@@ -461,7 +465,9 @@ pub async fn dispatch(
         Invocation::Read(request) => println!("{}", service.read(request). await ?),
         Invocation::Search(request) => println!("{}", service.search(request). await ?),
         Invocation::List(request) => println!("{}", service.list(request). await ?),
-        Invocation::Lint => println!("{}", service.lint(). await ?),
+        Invocation::Lint => {
+            println!("{}", serde_json::to_string_pretty(& service.lint(). await ?) ?)
+        }
     }
     Ok(())
 }

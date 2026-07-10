@@ -323,8 +323,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
-        async fn check(&self) -> anyhow::Result<String> {
-            Ok("the workspace compiles (stub)".to_string())
+        async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
+            Ok(theseus::CheckReport::success(
+                "the workspace compiles (stub)",
+            ))
         }
     }
 

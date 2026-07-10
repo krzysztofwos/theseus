@@ -7,6 +7,15 @@ use theseus_grpc::generated::{GrpcTheseus, proto::theseus_server::TheseusServer}
 use theseus_grpc_client::GrpcTheseusClient;
 use theseus_modeling::Edit;
 
+struct FailedCheck;
+
+#[async_trait::async_trait]
+impl TheseusService for FailedCheck {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
+        Ok(theseus::CheckReport::failure("compile failure over gRPC"))
+    }
+}
+
 /// Serve the glue on an ephemeral port and return a client against it.
 async fn serve<S: TheseusService + 'static>(service: S) -> GrpcTheseusClient {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -96,4 +105,15 @@ async fn the_unimplemented_class_survives_the_crossing() {
         error.downcast_ref::<theseus::Unimplemented>().is_some(),
         "the UNIMPLEMENTED status should come back as the typed default: {error}"
     );
+}
+
+#[tokio::test]
+async fn a_failed_check_report_crosses_as_a_result() {
+    let report = serve(FailedCheck)
+        .await
+        .check()
+        .await
+        .expect("a completed failing check is still a typed result");
+    assert!(!report.ok);
+    assert_eq!(report.detail, "compile failure over gRPC");
 }

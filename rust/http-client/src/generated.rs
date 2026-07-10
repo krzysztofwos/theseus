@@ -125,10 +125,10 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(body)
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
         let (status, body) = self.post("check", serde_json::json!({})).await?;
         checked("check", status, &body)?;
-        Ok(body)
+        parsed("check", &body)
     }
 
     async fn calc(&self, request: theseus::CalcRequest) -> anyhow::Result<String> {
@@ -150,10 +150,10 @@ impl theseus::TheseusService for HttpTheseusClient {
         parsed("scaffold", &body)
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
         let (status, body) = self.post("test", serde_json::json!({})).await?;
         checked("test", status, &body)?;
-        Ok(body)
+        parsed("test", &body)
     }
 
     async fn snapshot(
@@ -216,10 +216,10 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(body)
     }
 
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         let (status, body) = self.post("lint", serde_json::json!({})).await?;
         checked("lint", status, &body)?;
-        Ok(body)
+        parsed("lint", &body)
     }
 }
 

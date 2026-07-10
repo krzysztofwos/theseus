@@ -27,7 +27,7 @@ use crate::{
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
-    async fn lint(&self) -> anyhow::Result<String> {
+    async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
         self.toolchain.lint().await
     }
 
@@ -81,7 +81,8 @@ impl TheseusService for Ctx<'_> {
     async fn restart(&self) -> anyhow::Result<()> {
         // The rebuild and the resume belong to the inbound above. The service's
         // share of a restart is proving the tree compiles before the handoff.
-        self.toolchain.check().await?;
+        let report = self.toolchain.check().await?;
+        anyhow::ensure!(report.ok, "restart refused: {}", report.detail);
         Ok(())
     }
 
@@ -97,7 +98,7 @@ impl TheseusService for Ctx<'_> {
         self.checkpoint.snapshot(&request.label).await
     }
 
-    async fn test(&self) -> anyhow::Result<String> {
+    async fn test(&self) -> anyhow::Result<crate::CheckReport> {
         self.toolchain.test().await
     }
 
@@ -200,7 +201,7 @@ impl TheseusService for Ctx<'_> {
         }
     }
 
-    async fn check(&self) -> anyhow::Result<String> {
+    async fn check(&self) -> anyhow::Result<crate::CheckReport> {
         self.toolchain.check().await
     }
 
@@ -381,7 +382,7 @@ mod tests {
     use theseus_modeling::GeneratedFile;
 
     use crate::{
-        generated::{Refused, Toolchain, Workspace, tool_catalog},
+        generated::{Refused, TheseusService as _, Toolchain, Workspace, tool_catalog},
         session::Session,
     };
 
@@ -418,9 +419,37 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Toolchain for StubToolchain {
-        async fn check(&self) -> anyhow::Result<String> {
-            Ok("the workspace compiles (stub)".to_string())
+        async fn check(&self) -> anyhow::Result<crate::CheckReport> {
+            Ok(crate::CheckReport::success("the workspace compiles (stub)"))
         }
+    }
+
+    struct FailingToolchain;
+
+    #[async_trait::async_trait]
+    impl Toolchain for FailingToolchain {
+        async fn check(&self) -> anyhow::Result<crate::CheckReport> {
+            Ok(crate::CheckReport::failure(
+                "the workspace does not compile",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_refuses_a_failed_compile_report() {
+        let model = theseus_model();
+        let ctx = crate::Ctx {
+            model: &model,
+            workspace: &NoopWorkspace,
+            checkpoint: &StubCheckpoint,
+            calculator: &theseus_calculator::Calculator,
+            toolchain: &FailingToolchain,
+        };
+        let error = ctx
+            .restart()
+            .await
+            .expect_err("restart must not accept a failed compile check");
+        assert!(error.to_string().contains("does not compile"), "{error}");
     }
 
     #[tokio::test]
@@ -593,7 +622,10 @@ mod tests {
         .call("check", &serde_json::json!({}))
         .await
         .expect("the check tool runs");
-        assert_eq!(result, "the workspace compiles (stub)");
+        let report: crate::CheckReport =
+            serde_json::from_str(&result).expect("the tool returns a structured check report");
+        assert!(report.ok);
+        assert_eq!(report.detail, "the workspace compiles (stub)");
     }
 
     #[tokio::test]

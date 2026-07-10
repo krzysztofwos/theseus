@@ -217,7 +217,7 @@ pub fn theseus_model() -> Model {
                 ),
             ],
         )
-        .foreign_type("CheckReport", "String")
+        .foreign_type("CheckReport", "theseus::CheckReport")
         .struct_type(
             "Operands",
             &[("a", "f64", "Left operand."), ("b", "f64", "Right operand.")],

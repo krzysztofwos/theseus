@@ -168,7 +168,12 @@ for GrpcTheseus<S> {
     ) -> Result<tonic::Response<proto::CheckReport>, tonic::Status> {
         let outcome = self.0.check().await;
         match outcome {
-            Ok(value) => Ok(tonic::Response::new(proto::CheckReport { value })),
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::CheckReport { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
             Err(error) => Err(status(&error)),
         }
     }
@@ -214,7 +219,12 @@ for GrpcTheseus<S> {
     ) -> Result<tonic::Response<proto::CheckReport>, tonic::Status> {
         let outcome = self.0.test().await;
         match outcome {
-            Ok(value) => Ok(tonic::Response::new(proto::CheckReport { value })),
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::CheckReport { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
             Err(error) => Err(status(&error)),
         }
     }
@@ -339,7 +349,12 @@ for GrpcTheseus<S> {
     ) -> Result<tonic::Response<proto::CheckReport>, tonic::Status> {
         let outcome = self.0.lint().await;
         match outcome {
-            Ok(value) => Ok(tonic::Response::new(proto::CheckReport { value })),
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::CheckReport { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
             Err(error) => Err(status(&error)),
         }
     }

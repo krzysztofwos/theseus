@@ -16,6 +16,7 @@ mod generated;
 mod service;
 mod session;
 mod stateful;
+mod workspace_path;
 
 pub use generated::*;
 pub use session::Session;
@@ -49,14 +50,67 @@ impl FsWorkspace {
 #[async_trait::async_trait]
 impl Workspace for FsWorkspace {
     async fn write_file(&self, file: &GeneratedFile) -> anyhow::Result<()> {
-        let path = self.root.join(&file.path);
-        // Scaffolding a new crate writes into a directory that does not exist yet.
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        let relative = workspace_path::WorkspacePath::try_from(file.path.as_str())?;
+        let path = writable_path(&self.root, &relative).await?;
         tokio::fs::write(&path, &file.contents).await?;
         Ok(())
     }
+}
+
+/// Resolve a generated-file path one component at a time, refusing symlinks
+/// before creating any missing directories.
+async fn writable_path(
+    root: &Path,
+    relative: &workspace_path::WorkspacePath,
+) -> Result<PathBuf, workspace_path::WorkspacePathError> {
+    use workspace_path::WorkspacePathError;
+
+    let display = relative.as_path().display().to_string();
+    let mut current = root.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        current.push(component);
+        let is_target = components.peek().is_none();
+        match tokio::fs::symlink_metadata(&current).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(WorkspacePathError::Symlink {
+                    path: display,
+                    link: current,
+                });
+            }
+            Ok(metadata) if !is_target && !metadata.is_dir() => {
+                return Err(WorkspacePathError::ParentNotDirectory {
+                    path: display,
+                    component: current,
+                });
+            }
+            Ok(metadata) if is_target && metadata.is_dir() => {
+                return Err(WorkspacePathError::ParentNotDirectory {
+                    path: display,
+                    component: current,
+                });
+            }
+            Ok(_) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound && !is_target => {
+                tokio::fs::create_dir(&current)
+                    .await
+                    .map_err(|source| WorkspacePathError::Io {
+                        path: display.clone(),
+                        component: current.clone(),
+                        source,
+                    })?;
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(WorkspacePathError::Io {
+                    path: display,
+                    component: current,
+                    source,
+                });
+            }
+        }
+    }
+    Ok(current)
 }
 
 /// A [`Checkpoint`] over the repository's git history: a snapshot is a stash
@@ -412,6 +466,93 @@ impl
             calculator: theseus_calculator::Calculator,
             toolchain: CargoToolchain,
         }
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use theseus_modeling::GeneratedFile;
+
+    use super::{FsWorkspace, Workspace};
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let nonce = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "theseus-workspace-path-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("test directory is created");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn filesystem_writes_stay_below_the_workspace_root() {
+        let root = TestDirectory::new();
+        let workspace = FsWorkspace {
+            root: root.0.clone(),
+        };
+        workspace
+            .write_file(&GeneratedFile {
+                path: "rust/safe/src/generated.rs".to_string(),
+                contents: "safe".to_string(),
+            })
+            .await
+            .expect("a normal generated path is written");
+        assert_eq!(
+            fs::read_to_string(root.0.join("rust/safe/src/generated.rs")).unwrap(),
+            "safe"
+        );
+
+        for path in ["../outside.rs", "/tmp/outside.rs", "rust/../outside.rs"] {
+            let error = workspace
+                .write_file(&GeneratedFile {
+                    path: path.to_string(),
+                    contents: "escape".to_string(),
+                })
+                .await
+                .expect_err("an escaping path is refused");
+            assert!(error.to_string().contains("workspace path"), "{error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn filesystem_writes_refuse_symlinked_ancestors() {
+        let root = TestDirectory::new();
+        let outside = TestDirectory::new();
+        std::os::unix::fs::symlink(&outside.0, root.0.join("linked"))
+            .expect("the test symlink is created");
+        let workspace = FsWorkspace {
+            root: root.0.clone(),
+        };
+
+        let error = workspace
+            .write_file(&GeneratedFile {
+                path: "linked/escaped.rs".to_string(),
+                contents: "escape".to_string(),
+            })
+            .await
+            .expect_err("a symlinked ancestor is refused");
+        assert!(error.to_string().contains("symbolic link"), "{error}");
+        assert!(!outside.0.join("escaped.rs").exists());
     }
 }
 

@@ -57,6 +57,9 @@ pub struct GeneratedFile {
 /// A model projection that cannot be rendered safely.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RenderError {
+    /// A crate directory must be one normal path component below `rust/`.
+    #[error("crate `{crate_name}` directory `{dir}` is not a safe workspace directory")]
+    InvalidCrateDirectory { crate_name: String, dir: String },
     /// A model node that contributes generated Rust is not a valid identifier.
     #[error("{kind} `{name}` is not a valid Rust identifier: {message}")]
     InvalidIdentifier {
@@ -135,6 +138,21 @@ pub enum RenderError {
 /// before the infallible helper functions assemble it. This is the common
 /// preflight for every public Rust projection.
 pub(crate) fn validate_render_inputs(model: &Model) -> Result<(), RenderError> {
+    for crate_node in &model.crates {
+        let mut components = std::path::Path::new(&crate_node.dir).components();
+        let is_one_normal_component =
+            matches!(components.next(), Some(std::path::Component::Normal(_)))
+                && components.next().is_none()
+                && !crate_node.dir.contains('/')
+                && !crate_node.dir.contains('\\');
+        if !is_one_normal_component {
+            return Err(RenderError::InvalidCrateDirectory {
+                crate_name: crate_node.name.clone(),
+                dir: crate_node.dir.clone(),
+            });
+        }
+    }
+
     for def in &model.types {
         validate_identifier("type", &def.name)?;
         if matches!(

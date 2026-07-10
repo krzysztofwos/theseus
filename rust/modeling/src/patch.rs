@@ -2152,6 +2152,35 @@ mod tests {
     }
 
     #[test]
+    fn crate_directories_cannot_escape_the_workspace() {
+        for dir in ["../outside", "nested/directory", "/tmp/outside", "."] {
+            let (outcome, next) = apply_edit(
+                &sample_model(),
+                &add(
+                    "model:sample",
+                    "crate",
+                    "escape",
+                    &[("dir", dir), ("layer", "1")],
+                ),
+            );
+            assert!(!outcome.ok, "unsafe crate directory was accepted: {dir}");
+            assert_eq!(code(&outcome), "PATCH020");
+            assert!(next.is_none());
+
+            let (outcome, next) = apply_edit(
+                &sample_model(),
+                &Edit::Set {
+                    target: "crate:sample:sample".to_string(),
+                    attrs: [("dir".to_string(), dir.to_string())].into(),
+                },
+            );
+            assert!(!outcome.ok, "unsafe crate directory was accepted: {dir}");
+            assert_eq!(code(&outcome), "PATCH020");
+            assert!(next.is_none());
+        }
+    }
+
+    #[test]
     fn add_inbound_rejects_an_unknown_transport() {
         let model = sample_model();
         let (outcome, _) = edit(

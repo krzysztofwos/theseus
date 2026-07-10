@@ -13,7 +13,11 @@
 //! thing the edits changed, so re-entry is the loop's own affordance, the way an
 //! external host restarts the MCP server.
 
-use std::path::Path;
+use std::{
+    io::{Read, Write},
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -224,20 +228,136 @@ other calls, then call it alone"
     Ok(Outcome::Exhausted(messages))
 }
 
-/// Write the transcript as JSON, creating its directory.
+static NEXT_TRANSCRIPT_WRITE: AtomicU64 = AtomicU64::new(0);
+const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Atomically write the transcript as private JSON, creating its directory.
 pub fn save_transcript(path: &Path, messages: &[Message]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("transcript path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent)?;
+    set_private_control_directory(parent)?;
     let json = serde_json::to_string_pretty(messages)?;
-    std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+    let nonce = NEXT_TRANSCRIPT_WRITE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".session-{}-{nonce}.tmp", std::process::id()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
+            .with_context(|| format!("creating {}", temporary.display()))?;
+        set_private_file(&file)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("publishing {}", path.display()))?;
+        sync_directory(parent)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 /// Read a persisted transcript back.
 pub fn load_transcript(path: &Path) -> anyhow::Result<Vec<Message>> {
-    let json =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("transcript path has no parent: {}", path.display()))?;
+    set_private_control_directory(parent)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let metadata = file.metadata()?;
+    anyhow::ensure!(
+        metadata.is_file() && transcript_has_one_link(&metadata),
+        "transcript {} is not a private regular file",
+        path.display()
+    );
+    anyhow::ensure!(
+        metadata.len() <= MAX_TRANSCRIPT_BYTES,
+        "transcript {} is larger than {} bytes",
+        path.display(),
+        MAX_TRANSCRIPT_BYTES
+    );
+    set_private_file(&file)?;
+    let mut json = String::with_capacity(metadata.len() as usize);
+    Read::by_ref(&mut file)
+        .take(MAX_TRANSCRIPT_BYTES + 1)
+        .read_to_string(&mut json)
+        .with_context(|| format!("reading {}", path.display()))?;
+    anyhow::ensure!(
+        json.len() as u64 <= MAX_TRANSCRIPT_BYTES,
+        "transcript {} grew beyond {} bytes while it was read",
+        path.display(),
+        MAX_TRANSCRIPT_BYTES
+    );
     serde_json::from_str(&json).with_context(|| format!("parsing {}", path.display()))
+}
+
+#[cfg(unix)]
+fn set_private_control_directory(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if path.file_name().is_some_and(|name| name == ".theseus") {
+        let metadata = std::fs::symlink_metadata(path)?;
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "transcript directory {} is not a real directory",
+            path.display()
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_control_directory(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file(file: &std::fs::File) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_file(_file: &std::fs::File) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn transcript_has_one_link(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    metadata.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn transcript_has_one_link(_metadata: &std::fs::Metadata) -> bool {
+    true
+}
+
+fn sync_directory(path: &Path) -> anyhow::Result<()> {
+    std::fs::File::open(path)?.sync_all()?;
+    Ok(())
 }
 
 /// The pending restart call a transcript ends with, when one does: the id of
@@ -400,6 +520,43 @@ mod tests {
             panic!("the resumed loop should answer");
         };
         assert_eq!(answer, "back aboard the new hull");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_transcripts_are_private() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let nonce = NEXT_TRANSCRIPT_WRITE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "theseus-private-transcript-{}-{nonce}",
+            std::process::id()
+        ));
+        let path = root.join(".theseus/session.json");
+        save_transcript(&path, &opening("private prompt")).expect("the transcript saves");
+
+        assert_eq!(
+            std::fs::metadata(root.join(".theseus"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let hardlink = root.join(".theseus/session-hardlink.json");
+        std::fs::hard_link(&path, &hardlink).unwrap();
+        let error = load_transcript(&path).expect_err("hardlinked transcripts are refused");
+        assert!(error.to_string().contains("private regular file"));
+        std::fs::remove_file(hardlink).unwrap();
+
+        let link = root.join(".theseus/session-link.json");
+        symlink(&path, &link).unwrap();
+        assert!(load_transcript(&link).is_err());
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[tokio::test]

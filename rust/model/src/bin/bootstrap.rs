@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use theseus_model::{crate_is_scaffolded, generated_files, theseus_model};
+use theseus_workspace::{FsMutation, MutationFile};
 
 /// The repository root, derived from this crate's compile-time location.
 fn workspace_root() -> PathBuf {
@@ -24,18 +25,26 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let root = workspace_root();
     let model = theseus_model();
-    for file in generated_files(&model)? {
-        if !crate_is_scaffolded(&root, &file) {
-            continue;
-        }
-        let path = root.join(&file.path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, &file.contents)?;
+    let mutation = FsMutation::begin(&root, &[])?;
+    let files: Vec<_> = generated_files(&model)?
+        .into_iter()
+        .filter(|file| crate_is_scaffolded(&root, file))
+        .collect();
+    let changes: Vec<_> = files
+        .iter()
+        .map(|file| MutationFile {
+            path: file.path.clone(),
+            contents: Some(file.contents.clone()),
+        })
+        .collect();
+    let mut mutation = mutation;
+    mutation.apply(&changes).await?;
+    mutation.commit()?;
+    for file in files {
         println!("wrote {}", file.path);
     }
     Ok(())

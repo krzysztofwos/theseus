@@ -4,29 +4,35 @@
 //! this model.
 
 use journal_model::{generated_files, journal_model, workspace_root};
+use theseus_workspace::{FsMutation, MutationFile};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let root = workspace_root();
     let model = journal_model();
+    let mut mutation = FsMutation::begin(&root, &[])?;
+    let mut files = Vec::new();
     for file in theseus_modeling::scaffold_files(&model) {
         let path = root.join(&file.path);
         if path.exists() {
             continue;
         }
-        write(&path, &file.contents)?;
-        println!("scaffolded {}", file.path);
+        files.push(("scaffolded", file));
     }
     for file in generated_files(&model)? {
-        write(&root.join(&file.path), &file.contents)?;
-        println!("wrote {}", file.path);
+        files.push(("wrote", file));
     }
-    Ok(())
-}
-
-fn write(path: &std::path::Path, contents: &str) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let changes: Vec<_> = files
+        .iter()
+        .map(|(_, file)| MutationFile {
+            path: file.path.clone(),
+            contents: Some(file.contents.clone()),
+        })
+        .collect();
+    mutation.apply(&changes).await?;
+    mutation.commit()?;
+    for (action, file) in files {
+        println!("{action} {}", file.path);
     }
-    std::fs::write(path, contents)?;
     Ok(())
 }

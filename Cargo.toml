@@ -10,6 +10,7 @@ theseus-modeling = { path = "rust/modeling" }
 anyhow = "1.0.103"
 heck = "0.5"
 thiserror = "2.0.18"
+libc = "0.2"
 
 # CLI
 # `string` lets clap accept owned `String` values, needed to build the command

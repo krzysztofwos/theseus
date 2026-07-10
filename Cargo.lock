@@ -1968,6 +1968,7 @@ dependencies = [
  "theseus-calculator",
  "theseus-model",
  "theseus-modeling",
+ "theseus-workspace",
  "thiserror",
  "tokio",
 ]
@@ -2152,6 +2153,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "theseus-modeling",
+ "theseus-workspace",
+ "tokio",
 ]
 
 [[package]]
@@ -2176,6 +2179,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+]
+
+[[package]]
+name = "theseus-workspace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

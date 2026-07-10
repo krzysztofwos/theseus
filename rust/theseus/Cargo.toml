@@ -15,3 +15,4 @@ tokio = { workspace = true, features = ["fs", "process", "rt", "sync"] }
 theseus-calculator = { path = "../calculator" }
 theseus-model = { path = "../model" }
 theseus-modeling = { path = "../modeling" }
+theseus-workspace = { path = "../workspace" }

@@ -6,5 +6,7 @@ description = "Theseus's model of itself"
 
 [dependencies]
 anyhow = { workspace = true }
+tokio = { workspace = true }
 
 theseus-modeling = { path = "../modeling" }
+theseus-workspace = { path = "../workspace" }

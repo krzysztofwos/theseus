@@ -186,6 +186,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "theseus-modeling",
+ "theseus-workspace",
+ "tokio",
 ]
 
 [[package]]
@@ -193,6 +195,12 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "libc"
+version = "0.2.186"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "logos"
@@ -442,6 +450,18 @@ dependencies = [
  "syn",
  "theseus-kernel",
  "thiserror",
+]
+
+[[package]]
+name = "theseus-workspace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

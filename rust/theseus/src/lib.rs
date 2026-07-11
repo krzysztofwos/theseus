@@ -18,6 +18,7 @@ mod checkpoint;
 mod checkpoint_model;
 mod generated;
 mod implement_result;
+mod initialize;
 mod project;
 mod rust_item_result;
 mod service;
@@ -29,6 +30,7 @@ pub use check_report::CheckReport;
 pub use checkpoint_model::SnapshotModelError;
 pub use generated::*;
 pub use implement_result::ImplementResult;
+pub use initialize::{ProjectInitError, initialize_project};
 pub use project::{
     PROJECT_MANIFEST_PATH, ProjectBindingError, ProjectContext, ProjectContextError,
     ProjectManifest, ProjectOpenError, ProjectPathError, ProjectRootError, theseus_project,

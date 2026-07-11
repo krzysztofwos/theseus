@@ -10,14 +10,18 @@
 //!
 //! The composition is the CLI's to choose: `--remote <URL>` drives a remote
 //! Theseus over HTTP through the generated client, every subcommand unchanged,
-//! and `--calculator <ENDPOINT>` reaches the calculator over gRPC through its
+//! `--project <ROOT>` selects a local modeled project, and
+//! `--calculator <ENDPOINT>` reaches the calculator over gRPC through its
 //! generated client where the in-process adapter would stand.
 
 mod generated;
 
-use clap::Arg;
+use clap::{Arg, Command};
 use generated::Invocation;
-use theseus::{CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, TheseusService, theseus_project};
+use theseus::{
+    CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, ProjectContext, TheseusService,
+    theseus_project,
+};
 use theseus_calculator::CalculatorService;
 use theseus_calculator_grpc_client::GrpcCalculatorClient;
 use theseus_http_client::HttpTheseusClient;
@@ -26,22 +30,7 @@ use theseus_http_client::HttpTheseusClient;
 async fn main() -> anyhow::Result<()> {
     // `arg_required_else_help(true)` in the generated surface means a bare
     // invocation prints help and exits, so there is always a subcommand to parse.
-    let matches = generated::command()
-        .arg(
-            Arg::new("remote")
-                .long("remote")
-                .global(true)
-                .value_name("URL")
-                .help("Drive a remote Theseus over HTTP at this base URL."),
-        )
-        .arg(
-            Arg::new("calculator")
-                .long("calculator")
-                .global(true)
-                .value_name("ENDPOINT")
-                .help("Reach the calculator over gRPC at this endpoint."),
-        )
-        .get_matches();
+    let matches = command().get_matches();
     let invocation = Invocation::from_matches(&matches)?;
 
     // A remote composition: the generated HTTP client stands where the local
@@ -56,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
         return run(&HttpTheseusClient::new(url.clone()), invocation).await;
     }
 
-    let project = theseus_project()?;
+    let project = match matches.get_one::<String>("project") {
+        Some(root) => ProjectContext::open(root)?,
+        None => theseus_project()?,
+    };
     let model = project.initial_model();
     let workspace = FsWorkspace::for_project(&project);
     let toolchain = CargoToolchain::for_project(&project);
@@ -85,6 +77,32 @@ async fn main() -> anyhow::Result<()> {
         toolchain: &toolchain,
     };
     run(&ctx, invocation).await
+}
+
+fn command() -> Command {
+    generated::command()
+        .arg(
+            Arg::new("remote")
+                .long("remote")
+                .global(true)
+                .value_name("URL")
+                .help("Drive a remote Theseus over HTTP at this base URL."),
+        )
+        .arg(
+            Arg::new("project")
+                .long("project")
+                .global(true)
+                .value_name("ROOT")
+                .conflicts_with("remote")
+                .help("Drive a modeled project rooted at this path."),
+        )
+        .arg(
+            Arg::new("calculator")
+                .long("calculator")
+                .global(true)
+                .value_name("ENDPOINT")
+                .help("Reach the calculator over gRPC at this endpoint."),
+        )
 }
 
 // ============================================================================
@@ -151,8 +169,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn project_selects_a_local_composition() {
+        let matches = command()
+            .try_get_matches_from(["theseus", "--project", "adopters/journal", "verify"])
+            .expect("the project flag parses");
+
+        assert_eq!(
+            matches.get_one::<String>("project").map(String::as_str),
+            Some("adopters/journal")
+        );
+    }
+
+    #[test]
+    fn project_and_remote_are_incompatible() {
+        let error = command()
+            .try_get_matches_from([
+                "theseus",
+                "--project",
+                "adopters/journal",
+                "--remote",
+                "http://localhost:4870",
+                "verify",
+            ])
+            .expect_err("one composition must be selected");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn project_requires_one_unique_root() {
+        let missing = command()
+            .try_get_matches_from(["theseus", "--project"])
+            .expect_err("the project root is required");
+        assert!(matches!(
+            missing.kind(),
+            clap::error::ErrorKind::InvalidValue | clap::error::ErrorKind::MissingSubcommand
+        ));
+
+        let duplicate = command()
+            .try_get_matches_from([
+                "theseus",
+                "--project",
+                "adopters/journal",
+                "--project",
+                ".",
+                "verify",
+            ])
+            .expect_err("the project root may be passed once");
+        assert_eq!(duplicate.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn prune_carries_its_retention_limit_from_the_cli() {
-        let matches = generated::command()
+        let matches = command()
             .try_get_matches_from(["theseus", "prune", "--keep", "7"])
             .expect("the prune command parses");
         let invocation = Invocation::from_matches(&matches).expect("the invocation converts");

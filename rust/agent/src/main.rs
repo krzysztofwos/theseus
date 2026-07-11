@@ -27,30 +27,33 @@ use agent::{
 };
 use generated::Llm;
 use theseus::{
-    CargoToolchain, FsWorkspace, GitCheckpoint, Session, theseus_project, workspace_root,
+    CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, Session, theseus_project,
 };
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let (mode, allow_writes) = parse_args()?;
-    let project = theseus_project()?;
+    let options = parse_args()?;
+    let project = match &options.project {
+        Some(root) => ProjectContext::open(root)?,
+        None => theseus_project()?,
+    };
     let workspace = FsWorkspace::for_project(&project);
     let checkpoint = GitCheckpoint::for_project(project.clone());
     let calculator = theseus_calculator::Calculator;
     let toolchain = CargoToolchain::for_project(&project);
     let mut session = Session::new(
-        project,
+        project.clone(),
         &workspace,
         &checkpoint,
         &calculator,
         &toolchain,
-        allow_writes,
+        options.allow_writes,
     );
 
-    let messages = match &mode {
+    let messages = match &options.mode {
         Mode::Start(message) => opening(message),
         Mode::Resume => resume(
-            load_transcript(&session_path())?,
+            load_transcript(&session_path(&project))?,
             "rebuilt; this is the new binary, and its compiled model and tool \
 catalog match the workspace",
             "the turn budget was spent and has been renewed; continue where you \
@@ -61,18 +64,18 @@ stopped, and finish with your answer",
     // A real model when the API key is set; the offline stub otherwise, so the
     // binary runs with no network and the no-key path is obvious.
     let answer = match AnthropicLlm::from_env() {
-        Some(llm) => drive(&llm, &mut session, messages, allow_writes).await?,
+        Some(llm) => drive(&llm, &mut session, messages, &project, &options).await?,
         None => {
             eprintln!("ANTHROPIC_API_KEY is unset; answering offline without tools");
             let llm = OfflineLlm::new([Reply::answer(
                 "set ANTHROPIC_API_KEY to drive Theseus's tools with a real model",
             )]);
-            drive(&llm, &mut session, messages, allow_writes).await?
+            drive(&llm, &mut session, messages, &project, &options).await?
         }
     };
     // The conversation is complete, so a persisted transcript has served its
     // purpose and a later `--resume` should not find it.
-    std::fs::remove_file(session_path()).ok();
+    std::fs::remove_file(session_path(&project)).ok();
     println!("{answer}");
     Ok(())
 }
@@ -85,23 +88,25 @@ async fn drive(
     llm: &impl Llm,
     session: &mut Session<'_>,
     mut messages: Vec<Message>,
-    allow_writes: bool,
+    project: &ProjectContext,
+    options: &Options,
 ) -> anyhow::Result<String> {
     loop {
         match run_agent(llm, session, messages).await? {
             Outcome::Answered(text) => return Ok(text),
             Outcome::Exhausted(transcript) => {
-                save_transcript(&session_path(), &transcript)?;
+                save_transcript(&session_path(project), &transcript)?;
                 anyhow::bail!(
                     "the agent did not finish within its turn budget; continue it \
-with `agent --resume` (the transcript is saved at {})",
-                    session_path().display()
+with `agent{} --resume` (the transcript is saved at {})",
+                    project_argument(options),
+                    session_path(project).display()
                 );
             }
-            Outcome::Restart(transcript) => match rebuild().await {
+            Outcome::Restart(transcript) => match rebuild(project).await {
                 Ok(executable) => {
-                    save_transcript(&session_path(), &transcript)?;
-                    return Err(resume_exec(&executable, allow_writes));
+                    save_transcript(&session_path(project), &transcript)?;
+                    return Err(resume_exec(&executable, project, options));
                 }
                 Err(diagnostics) => {
                     messages =
@@ -114,8 +119,13 @@ with `agent --resume` (the transcript is saved at {})",
 
 /// Build the agent and its dependency graph, returning the compiler's output on
 /// failure. The child dies with a dropped future.
-async fn rebuild() -> Result<PathBuf, String> {
-    let lease = theseus::FsMutation::begin_async(workspace_root(), Vec::new())
+async fn rebuild(project: &ProjectContext) -> Result<PathBuf, String> {
+    let harness = theseus_project().map_err(|error| error.to_string())?;
+    harness
+        .ensure_same_project(project)
+        .map_err(|error| format!("restart only rebuilds the Theseus harness project: {error}"))?;
+    let root = project.root();
+    let lease = theseus::FsMutation::begin_async(root.to_path_buf(), Vec::new())
         .await
         .map_err(|error| format!("locking the workspace for rebuild: {error}"))?;
     let output = tokio::process::Command::new("cargo")
@@ -126,7 +136,7 @@ async fn rebuild() -> Result<PathBuf, String> {
             "--locked",
             "--message-format=json-render-diagnostics",
         ])
-        .current_dir(workspace_root())
+        .current_dir(root)
         .kill_on_drop(true)
         .output()
         .await
@@ -169,40 +179,79 @@ fn cargo_diagnostics(stdout: &[u8], stderr: &[u8]) -> String {
 
 /// Replace this process with a fresh run of the agent, resuming the persisted
 /// session in the newly built binary. Returns only on failure to launch.
-fn resume_exec(executable: &Path, allow_writes: bool) -> anyhow::Error {
+fn resume_exec(executable: &Path, project: &ProjectContext, options: &Options) -> anyhow::Error {
     use std::os::unix::process::CommandExt;
     let mut command = Command::new(executable);
-    if allow_writes {
+    if options.allow_writes {
         command.arg("--allow-writes");
     }
-    command.arg("--resume").current_dir(workspace_root());
+    if let Some(project) = &options.project {
+        command.arg("--project").arg(project);
+    }
+    command.arg("--resume").current_dir(project.root());
     anyhow::Error::new(command.exec()).context("re-entering the rebuilt agent")
 }
 
 /// The persisted transcript's path, in the workspace's scratch directory.
-fn session_path() -> PathBuf {
-    workspace_root().join(".theseus/session.json")
+fn session_path(project: &ProjectContext) -> PathBuf {
+    project.root().join(".theseus/session.json")
 }
 
 /// How the agent starts: a fresh conversation over a message, or a resumed one
 /// over the persisted transcript.
+#[derive(Debug, Eq, PartialEq)]
 enum Mode {
     Start(String),
     Resume,
 }
 
-/// Parse `agent [--allow-writes] <message>` or `agent [--allow-writes] --resume`.
-fn parse_args() -> anyhow::Result<(Mode, bool)> {
+struct Options {
+    mode: Mode,
+    allow_writes: bool,
+    project: Option<PathBuf>,
+}
+
+fn project_argument(options: &Options) -> String {
+    options
+        .project
+        .as_ref()
+        .map(|path| format!(" --project {path:?}"))
+        .unwrap_or_default()
+}
+
+/// Parse `agent [--project ROOT] [--allow-writes] <message>` or a resume.
+fn parse_args() -> anyhow::Result<Options> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from(args: impl IntoIterator<Item = String>) -> anyhow::Result<Options> {
     let mut allow_writes = false;
     let mut resume = false;
     let mut message = None;
-    for arg in std::env::args().skip(1) {
+    let mut project = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--allow-writes" => allow_writes = true,
-            "--resume" => resume = true,
-            flag if flag.starts_with("--") => {
-                anyhow::bail!("unknown flag `{flag}`; the flags are --allow-writes and --resume")
+            "--allow-writes" if allow_writes => {
+                anyhow::bail!("--allow-writes was supplied more than once")
             }
+            "--allow-writes" => allow_writes = true,
+            "--resume" if resume => anyhow::bail!("--resume was supplied more than once"),
+            "--resume" => resume = true,
+            "--project" => {
+                anyhow::ensure!(project.is_none(), "--project was supplied more than once");
+                let root = args
+                    .next()
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| anyhow::anyhow!("--project requires a root path"))?;
+                project = Some(PathBuf::from(root));
+            }
+            flag if flag.starts_with("--") => {
+                anyhow::bail!(
+                    "unknown flag `{flag}`; the flags are --project, --allow-writes, and --resume"
+                )
+            }
+            _ if message.is_some() => anyhow::bail!("the agent accepts exactly one goal string"),
             _ => message = Some(arg),
         }
     }
@@ -214,9 +263,47 @@ fn parse_args() -> anyhow::Result<(Mode, bool)> {
         }
         (false, None) => {
             anyhow::bail!(
-                "usage: agent [--allow-writes] <message> | agent [--allow-writes] --resume"
+                "usage: agent [--project ROOT] [--allow-writes] <message> | agent [--project ROOT] [--allow-writes] --resume"
             )
         }
     };
-    Ok((mode, allow_writes))
+    Ok(Options {
+        mode,
+        allow_writes,
+        project,
+    })
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> anyhow::Result<Options> {
+        parse_args_from(args.iter().map(|arg| (*arg).to_string()))
+    }
+
+    #[test]
+    fn a_project_is_preserved_for_start_and_resume() {
+        let start = parse(&["--project", "/tmp/foreign", "--allow-writes", "build it"]).unwrap();
+        assert_eq!(start.mode, Mode::Start("build it".to_string()));
+        assert!(start.allow_writes);
+        assert_eq!(start.project, Some(PathBuf::from("/tmp/foreign")));
+
+        let resume = parse(&["--resume", "--project", "/tmp/foreign"]).unwrap();
+        assert_eq!(resume.mode, Mode::Resume);
+        assert_eq!(resume.project, Some(PathBuf::from("/tmp/foreign")));
+    }
+
+    #[test]
+    fn project_and_mode_arguments_are_strict() {
+        for args in [
+            vec!["--project"],
+            vec!["--project", "--resume"],
+            vec!["--project", "one", "--project", "two", "goal"],
+            vec!["one", "two"],
+            vec!["--resume", "goal"],
+        ] {
+            assert!(parse(&args).is_err(), "accepted {args:?}");
+        }
+    }
 }

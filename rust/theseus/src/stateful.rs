@@ -65,17 +65,22 @@ impl<W, C, A, T> StatefulSession<W, C, A, T> {
 }
 
 impl StatefulSession<FsWorkspace, GitCheckpoint, theseus_calculator::Calculator, CargoToolchain> {
-    /// Theseus's repository-rooted server composition.
-    pub fn at_repo_root(allow_writes: bool) -> Result<Self, ProjectContextError> {
-        let project = crate::theseus_project()?;
-        Ok(Self::new(
+    /// A complete server composition rooted in one already-opened project.
+    pub fn for_project(project: ProjectContext, allow_writes: bool) -> Self {
+        Self::new(
             project.clone(),
             FsWorkspace::for_project(&project),
             GitCheckpoint::for_project(project.clone()),
             theseus_calculator::Calculator,
             CargoToolchain::for_project(&project),
             allow_writes,
-        ))
+        )
+    }
+
+    /// Theseus's repository-rooted server composition.
+    pub fn at_repo_root(allow_writes: bool) -> Result<Self, ProjectContextError> {
+        let project = crate::theseus_project()?;
+        Ok(Self::for_project(project, allow_writes))
     }
 }
 

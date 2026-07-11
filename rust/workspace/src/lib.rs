@@ -36,6 +36,9 @@ const MAX_STATE_BYTES: u64 = 64;
 const MAX_BACKUP_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TOTAL_BACKUP_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_MUTATION_PATHS: usize = 100_000;
+const MAX_RECOVERY_INSPECTION_ENTRIES: usize = 4_096;
+const MAX_CREATION_CONTROL_DIRECTORIES: usize = 8;
+const MAX_CONTROL_NAME_BYTES: usize = 255;
 
 /// The persisted state expected for one model-owned workspace path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +50,62 @@ pub struct ExpectedFile {
 
 /// The complete optimistic revision checked after acquiring the repository lease.
 pub type ExpectedFileSet = Vec<ExpectedFile>;
+
+/// A read-only authorization to recover one interrupted empty-workspace creation.
+///
+/// The authorization is tied to a canonical repository root and an exact target
+/// set. It can be obtained only when no journal exists, an exact all-new journal
+/// can be authenticated, or a bounded pre-publication/rollback cleanup remnant
+/// exists in an otherwise empty workspace. Recovery revalidates the same
+/// conditions under the repository lease.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreationRecovery {
+    root: PathBuf,
+    target_paths: Vec<String>,
+    allowed_control_directories: Vec<String>,
+    interrupted: bool,
+}
+
+impl CreationRecovery {
+    /// Whether inspection found an interrupted creation that must be recovered.
+    pub fn interrupted(&self) -> bool {
+        self.interrupted
+    }
+}
+
+/// Inspect whether a repository can begin or recover an exact empty-workspace
+/// creation without modifying its control state.
+pub fn inspect_creation_recovery(
+    root: impl AsRef<Path>,
+    target_paths: &[String],
+) -> Result<CreationRecovery, MutationError> {
+    inspect_creation_recovery_with_control_directories(root, target_paths, &[])
+}
+
+/// Inspect creation recovery while explicitly authorizing real control-side
+/// directories that the caller owns and will clean after recovery.
+pub fn inspect_creation_recovery_with_control_directories(
+    root: impl AsRef<Path>,
+    target_paths: &[String],
+    allowed_control_directories: &[String],
+) -> Result<CreationRecovery, MutationError> {
+    ensure_supported_platform()?;
+    validate_paths(target_paths.iter().map(String::as_str))?;
+    let mut allowed_control_directories =
+        validate_creation_control_directories(allowed_control_directories)?;
+    let root = canonical_repository_root(root)?;
+    let mut target_paths = target_paths.to_vec();
+    target_paths.sort_unstable();
+    allowed_control_directories.sort_unstable();
+    let interrupted = inspect_creation_state(&root, &target_paths, &allowed_control_directories)?
+        != CreationRecoveryAction::None;
+    Ok(CreationRecovery {
+        root,
+        target_paths,
+        allowed_control_directories,
+        interrupted,
+    })
+}
 
 /// Validate a complete declared path set using the same normalization,
 /// reservation, collision, and overlap rules as a mutation.
@@ -179,18 +238,45 @@ impl FsMutation {
         root: PathBuf,
         expected_files: ExpectedFileSet,
     ) -> Result<PendingMutation, MutationError> {
+        Self::begin_async_inner(root, expected_files, None).await
+    }
+
+    /// Acquire a mutation lease and recover only the inspected empty-workspace
+    /// creation. A journal that no longer matches the authorization is refused
+    /// without being recovered.
+    pub async fn begin_async_recovering_creation(
+        root: PathBuf,
+        expected_files: ExpectedFileSet,
+        recovery: CreationRecovery,
+    ) -> Result<PendingMutation, MutationError> {
+        Self::begin_async_inner(root, expected_files, Some(recovery)).await
+    }
+
+    async fn begin_async_inner(
+        root: PathBuf,
+        expected_files: ExpectedFileSet,
+        recovery: Option<CreationRecovery>,
+    ) -> Result<PendingMutation, MutationError> {
         ensure_supported_platform()?;
         validate_expected_set(&expected_files)?;
-        let candidate = tokio::task::spawn_blocking(move || MutationCandidate::prepare(root))
-            .await
-            .map_err(|source| MutationError::BlockingTask { source })??;
+        let inspected_root = recovery.as_ref().map(|recovery| recovery.root.clone());
+        let candidate = tokio::task::spawn_blocking(move || match inspected_root {
+            Some(inspected_root) => MutationCandidate::prepare_creation(root, &inspected_root),
+            None => MutationCandidate::prepare(root),
+        })
+        .await
+        .map_err(|source| MutationError::BlockingTask { source })??;
         loop {
             if candidate.try_lock()? {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let core = ThreadWorker::spawn(move || candidate.finish(&expected_files)).await??;
+        let core = ThreadWorker::spawn(move || match recovery {
+            Some(recovery) => candidate.finish_creation(&expected_files, &recovery),
+            None => candidate.finish(&expected_files),
+        })
+        .await??;
         Ok(Box::new(Self { core: Some(core) }))
     }
 
@@ -201,26 +287,25 @@ impl FsMutation {
 
 impl MutationCandidate {
     fn prepare(root: impl AsRef<Path>) -> Result<Self, MutationError> {
-        let supplied_root = root.as_ref();
-        let root = supplied_root
-            .canonicalize()
-            .map_err(|source| MutationError::Io {
-                operation: "canonicalizing repository root",
-                path: supplied_root.to_path_buf(),
-                source,
-            })?;
-        if !root
-            .metadata()
-            .map_err(|source| MutationError::Io {
-                operation: "reading repository root metadata",
-                path: root.clone(),
-                source,
-            })?
-            .is_dir()
-        {
-            return Err(MutationError::RootNotDirectory { root });
-        }
+        let root = canonical_repository_root(root)?;
+        Self::prepare_canonical(root)
+    }
 
+    fn prepare_creation(
+        root: impl AsRef<Path>,
+        inspected_root: &Path,
+    ) -> Result<Self, MutationError> {
+        let root = canonical_repository_root(root)?;
+        if root != inspected_root {
+            return Err(MutationError::CreationRecoveryRootMismatch {
+                inspected: inspected_root.to_path_buf(),
+                actual: root,
+            });
+        }
+        Self::prepare_canonical(root)
+    }
+
+    fn prepare_canonical(root: PathBuf) -> Result<Self, MutationError> {
         let control = prepare_control_directory(&root)?;
         let lock_path = control.join(LOCK_FILE);
         reject_symlink(&lock_path, "repository lock")?;
@@ -265,6 +350,313 @@ impl MutationCandidate {
         mutation.check_expected(expected_files)?;
         Ok(mutation)
     }
+
+    fn finish_creation(
+        self,
+        expected_files: &[ExpectedFile],
+        recovery: &CreationRecovery,
+    ) -> Result<MutationCore, MutationError> {
+        let mut mutation = MutationCore {
+            root: self.root,
+            control: self.control,
+            _lock: self.lock,
+            journal_active: false,
+            applied: false,
+        };
+        mutation.recover_creation(recovery)?;
+        mutation.check_expected(expected_files)?;
+        Ok(mutation)
+    }
+}
+
+fn canonical_repository_root(root: impl AsRef<Path>) -> Result<PathBuf, MutationError> {
+    let supplied_root = root.as_ref();
+    let root = supplied_root
+        .canonicalize()
+        .map_err(|source| MutationError::Io {
+            operation: "canonicalizing repository root",
+            path: supplied_root.to_path_buf(),
+            source,
+        })?;
+    if !root
+        .metadata()
+        .map_err(|source| MutationError::Io {
+            operation: "reading repository root metadata",
+            path: root.clone(),
+            source,
+        })?
+        .is_dir()
+    {
+        return Err(MutationError::RootNotDirectory { root });
+    }
+    Ok(root)
+}
+
+fn validate_creation_control_directories(names: &[String]) -> Result<Vec<String>, MutationError> {
+    if names.len() > MAX_CREATION_CONTROL_DIRECTORIES {
+        return Err(MutationError::TooManyCreationControlDirectories {
+            length: names.len(),
+            maximum: MAX_CREATION_CONTROL_DIRECTORIES,
+        });
+    }
+    let mut seen = HashSet::with_capacity(names.len());
+    let mut validated = Vec::with_capacity(names.len());
+    for name in names {
+        let mut components = Path::new(name).components();
+        let normalized = matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+        let reserved = [LOCK_FILE, PREPARING_DIR, JOURNAL_DIR, CLEANUP_DIR]
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved));
+        if !normalized || reserved || name.len() > MAX_CONTROL_NAME_BYTES {
+            return Err(MutationError::UnsafeCreationControlDirectory { name: name.clone() });
+        }
+        let folded = name.to_ascii_lowercase();
+        if !seen.insert(folded) {
+            return Err(MutationError::UnsafeCreationControlDirectory { name: name.clone() });
+        }
+        validated.push(name.clone());
+    }
+    Ok(validated)
+}
+
+fn inspect_creation_state(
+    root: &Path,
+    target_paths: &[String],
+    allowed_control_directories: &[String],
+) -> Result<CreationRecoveryAction, MutationError> {
+    let control = root.join(CONTROL_DIR);
+    match fs::symlink_metadata(&control) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CreationRecoveryAction::None);
+        }
+        Err(source) => {
+            return Err(MutationError::Io {
+                operation: "reading creation-recovery control metadata",
+                path: control,
+                source,
+            });
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(MutationError::UnsafeInternalPath { path: control });
+        }
+        Ok(_) => {}
+    }
+    let mut candidate = None;
+    for name in [PREPARING_DIR, JOURNAL_DIR, CLEANUP_DIR] {
+        let path = control.join(name);
+        match fs::symlink_metadata(&path) {
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(MutationError::Io {
+                    operation: "reading creation-recovery journal metadata",
+                    path,
+                    source,
+                });
+            }
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(MutationError::UnsafeInternalPath { path });
+            }
+            Ok(_) if candidate.is_some() => {
+                return Err(MutationError::UnrecoverableCreationJournal {
+                    path,
+                    reason: "more than one journal lifecycle directory exists",
+                });
+            }
+            Ok(_) => candidate = Some((name, path)),
+        }
+    }
+    let Some((lifecycle, journal)) = candidate else {
+        return Ok(CreationRecoveryAction::None);
+    };
+
+    let mut has_manifest = false;
+    let mut has_state = false;
+    let mut has_extra = false;
+    let mut entry_count = 0usize;
+    let mut extra_bytes = 0u64;
+    for entry in fs::read_dir(&journal).map_err(|source| MutationError::Io {
+        operation: "reading creation-recovery journal",
+        path: journal.clone(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| MutationError::Io {
+            operation: "reading creation-recovery journal entry",
+            path: journal.clone(),
+            source,
+        })?;
+        entry_count = entry_count.saturating_add(1);
+        if entry_count > MAX_RECOVERY_INSPECTION_ENTRIES {
+            return Err(MutationError::InspectionLimit {
+                path: journal,
+                maximum: MAX_RECOVERY_INSPECTION_ENTRIES,
+            });
+        }
+        let path = entry.path();
+        let maximum = match entry.file_name().to_str() {
+            Some(MANIFEST_FILE) => {
+                has_manifest = true;
+                MAX_MANIFEST_BYTES
+            }
+            Some(STATE_FILE) => {
+                has_state = true;
+                MAX_STATE_BYTES
+            }
+            Some(STATE_NEXT_FILE) => MAX_STATE_BYTES,
+            _ => {
+                has_extra = true;
+                MAX_BACKUP_BYTES
+            }
+        };
+        let contents = read_private(&path, maximum)?;
+        if maximum == MAX_BACKUP_BYTES {
+            extra_bytes = checked_backup_total(extra_bytes, contents.len() as u64)?;
+        }
+    }
+    if lifecycle == PREPARING_DIR {
+        if !creation_workspace_is_empty(root, PREPARING_DIR, allowed_control_directories)? {
+            return Err(MutationError::UnrecoverableCreationJournal {
+                path: journal,
+                reason: "a preparing journal exists in a non-empty workspace",
+            });
+        }
+        return Ok(CreationRecoveryAction::RemovePreparing);
+    }
+    if lifecycle == CLEANUP_DIR {
+        if !creation_workspace_is_empty(root, CLEANUP_DIR, allowed_control_directories)? {
+            return Err(MutationError::UnrecoverableCreationJournal {
+                path: journal,
+                reason: "a cleanup journal exists in a non-empty workspace",
+            });
+        }
+        if has_state {
+            match read_state(&journal)? {
+                JournalState::Committed => {
+                    return Err(MutationError::UnrecoverableCreationJournal {
+                        path: journal,
+                        reason: "a committed creation cleanup cannot be retried",
+                    });
+                }
+                JournalState::Prepared => {
+                    return Err(MutationError::UnrecoverableCreationJournal {
+                        path: journal,
+                        reason: "a cleanup journal still has prepared state",
+                    });
+                }
+                JournalState::RolledBack => {}
+            }
+        }
+        if !has_manifest || !has_state {
+            return Ok(CreationRecoveryAction::RemoveCleanup);
+        }
+    }
+    if !has_manifest || !has_state {
+        return Err(MutationError::UnrecoverableCreationJournal {
+            path: journal,
+            reason: "the journal is incomplete",
+        });
+    }
+    if has_extra {
+        return Err(MutationError::UnrecoverableCreationJournal {
+            path: journal,
+            reason: "the complete journal contains an unexpected entry",
+        });
+    }
+    let state = read_state(&journal)?;
+    let manifest = read_manifest(&journal)?;
+    if manifest.entries.iter().any(|entry| entry.backup.is_some()) {
+        return Err(MutationError::UnrecoverableCreationJournal {
+            path: journal,
+            reason: "at least one mutation target originally existed",
+        });
+    }
+    let mut actual_paths: Vec<&str> = manifest
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    actual_paths.sort_unstable();
+    if !actual_paths
+        .iter()
+        .copied()
+        .eq(target_paths.iter().map(String::as_str))
+    {
+        return Err(MutationError::UnrecoverableCreationJournal {
+            path: journal,
+            reason: "the mutation target set does not match",
+        });
+    }
+    match (lifecycle, state) {
+        (PREPARING_DIR, JournalState::Prepared) => Ok(CreationRecoveryAction::RemovePreparing),
+        (JOURNAL_DIR, JournalState::Prepared) => Ok(CreationRecoveryAction::RollbackPrepared),
+        (JOURNAL_DIR, JournalState::RolledBack) => Ok(CreationRecoveryAction::FinishRolledBack),
+        (CLEANUP_DIR, JournalState::RolledBack) => Ok(CreationRecoveryAction::RemoveCleanup),
+        _ => Err(MutationError::UnrecoverableCreationJournal {
+            path: journal,
+            reason: "the journal lifecycle directory and state do not form a recoverable creation",
+        }),
+    }
+}
+
+fn creation_workspace_is_empty(
+    root: &Path,
+    lifecycle: &str,
+    allowed_control_directories: &[String],
+) -> Result<bool, MutationError> {
+    for entry in fs::read_dir(root).map_err(|source| MutationError::Io {
+        operation: "reading workspace for incomplete creation recovery",
+        path: root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| MutationError::Io {
+            operation: "reading workspace entry for incomplete creation recovery",
+            path: root.to_path_buf(),
+            source,
+        })?;
+        match entry.file_name().to_str() {
+            Some(".git") => {}
+            Some(CONTROL_DIR) => {
+                let control = entry.path();
+                for control_entry in fs::read_dir(&control).map_err(|source| MutationError::Io {
+                    operation: "reading control directory for incomplete creation recovery",
+                    path: control.clone(),
+                    source,
+                })? {
+                    let control_entry = control_entry.map_err(|source| MutationError::Io {
+                        operation: "reading control entry for incomplete creation recovery",
+                        path: control.clone(),
+                        source,
+                    })?;
+                    match control_entry.file_name().to_str() {
+                        Some(LOCK_FILE) => {
+                            read_private(&control_entry.path(), MAX_STATE_BYTES)?;
+                        }
+                        Some(name) if name == lifecycle => {}
+                        Some(name)
+                            if allowed_control_directories
+                                .binary_search_by(|allowed| allowed.as_str().cmp(name))
+                                .is_ok() =>
+                        {
+                            let path = control_entry.path();
+                            let metadata = fs::symlink_metadata(&path).map_err(|source| {
+                                MutationError::Io {
+                                    operation: "reading authorized creation control metadata",
+                                    path: path.clone(),
+                                    source,
+                                }
+                            })?;
+                            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                                return Err(MutationError::UnsafeInternalPath { path });
+                            }
+                        }
+                        _ => return Ok(false),
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 impl MutationCore {
@@ -306,6 +698,36 @@ impl MutationCore {
             }
             JournalState::Committed | JournalState::RolledBack => {
                 finish_cleanup(&self.control, &journal)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn recover_creation(&mut self, recovery: &CreationRecovery) -> Result<(), MutationError> {
+        if self.root != recovery.root {
+            return Err(MutationError::CreationRecoveryRootMismatch {
+                inspected: recovery.root.clone(),
+                actual: self.root.clone(),
+            });
+        }
+        match inspect_creation_state(
+            &self.root,
+            &recovery.target_paths,
+            &recovery.allowed_control_directories,
+        )? {
+            CreationRecoveryAction::None => {}
+            CreationRecoveryAction::RemovePreparing => {
+                remove_recovered_creation_directory(&self.control, PREPARING_DIR)?;
+            }
+            CreationRecoveryAction::RollbackPrepared => {
+                self.journal_active = true;
+                self.restore_journal()?;
+            }
+            CreationRecoveryAction::FinishRolledBack => {
+                finish_cleanup(&self.control, &self.journal_path())?;
+            }
+            CreationRecoveryAction::RemoveCleanup => {
+                remove_recovered_creation_directory(&self.control, CLEANUP_DIR)?;
             }
         }
         Ok(())
@@ -738,6 +1160,15 @@ enum JournalState {
     RolledBack,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreationRecoveryAction {
+    None,
+    RemovePreparing,
+    RollbackPrepared,
+    FinishRolledBack,
+    RemoveCleanup,
+}
+
 /// A filesystem mutation that could not be completed safely.
 #[derive(Debug, Error)]
 pub enum MutationError {
@@ -756,6 +1187,23 @@ pub enum MutationError {
     },
     #[error("generated path {path:?} is stale on disk")]
     StaleWorkspace { path: String },
+    #[error(
+        "creation recovery was inspected for {inspected}, not {actual}",
+        inspected = .inspected.display(),
+        actual = .actual.display()
+    )]
+    CreationRecoveryRootMismatch { inspected: PathBuf, actual: PathBuf },
+    #[error(
+        "mutation journal at {} cannot be recovered as an empty-workspace creation: {reason}",
+        path.display()
+    )]
+    UnrecoverableCreationJournal { path: PathBuf, reason: &'static str },
+    #[error("inspection at {} exceeded the limit of {maximum} entries", path.display())]
+    InspectionLimit { path: PathBuf, maximum: usize },
+    #[error("creation recovery authorizes {length} control directories; the maximum is {maximum}")]
+    TooManyCreationControlDirectories { length: usize, maximum: usize },
+    #[error("creation recovery control directory name {name:?} is unsafe")]
+    UnsafeCreationControlDirectory { name: String },
     #[error("internal mutation path {path} is not a private regular path", path = .path.display())]
     UnsafeInternalPath { path: PathBuf },
     #[error("mutation journal input {path} is {length} bytes; the maximum is {maximum}", path = .path.display())]
@@ -1566,6 +2014,27 @@ fn finish_cleanup(control: &Path, journal: &Path) -> Result<(), MutationError> {
     sync_directory(control)
 }
 
+fn remove_recovered_creation_directory(control: &Path, name: &str) -> Result<(), MutationError> {
+    let path = control.join(name);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return Err(MutationError::UnsafeInternalPath { path }),
+        Err(source) => {
+            return Err(MutationError::Io {
+                operation: "rechecking creation-recovery journal metadata",
+                path,
+                source,
+            });
+        }
+    }
+    fs::remove_dir_all(&path).map_err(|source| MutationError::Io {
+        operation: "removing recovered creation journal",
+        path: path.clone(),
+        source,
+    })?;
+    sync_directory(control)
+}
+
 fn remove_declared_target(target: &Path, display: &str) -> Result<(), MutationError> {
     match fs::symlink_metadata(target) {
         Ok(metadata) if !metadata.file_type().is_symlink() && !metadata.is_file() => {
@@ -2138,6 +2607,289 @@ mod tests {
         assert_eq!(fs::read(repository.path("model.rs")).unwrap(), b"persisted");
         assert!(!repository.path(".theseus/mutation").exists());
         recovered.commit().expect("recovered lease is released");
+    }
+
+    #[tokio::test]
+    async fn exact_all_new_creation_journals_can_be_inspected_and_recovered() {
+        let repository = TestRepository::new();
+        let files = [
+            generated("new.rs", "interrupted"),
+            generated("nested/other.rs", "interrupted"),
+        ];
+        let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
+        let mut mutation = MutationCore::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply_files(&files)
+            .expect("the creation is applied");
+        write_private(&mutation.journal_path().join(STATE_NEXT_FILE), ROLLED_BACK)
+            .expect("a stale next-state file is left by the interrupted writer");
+        mutation.journal_active = false;
+        drop(mutation);
+
+        let recovery = inspect_creation_recovery(&repository.root, &paths)
+            .expect("the exact all-new journal is recoverable");
+        assert!(recovery.interrupted());
+        let recovered = FsMutation::begin_async_recovering_creation(
+            repository.root.clone(),
+            Vec::new(),
+            recovery,
+        )
+        .await
+        .expect("recovery is reauthenticated under the lease");
+
+        assert!(!repository.path("new.rs").exists());
+        assert!(!repository.path("nested").exists());
+        assert!(!repository.path(".theseus/mutation").exists());
+        recovered.commit().expect("the recovery lease is released");
+    }
+
+    #[tokio::test]
+    async fn authenticated_creation_lifecycle_cleanup_does_not_strand_retry() {
+        for (label, lifecycle, state) in [
+            ("preparing", PREPARING_DIR, PREPARED),
+            ("rolled-back", JOURNAL_DIR, ROLLED_BACK),
+            ("cleanup", CLEANUP_DIR, ROLLED_BACK),
+        ] {
+            let repository = TestRepository::new();
+            let files = [generated("new.rs", label)];
+            let paths = vec!["new.rs".to_owned()];
+            let mutation = MutationCore::begin(&repository.root, &[])
+                .expect("the lifecycle fixture acquires the lease");
+            mutation
+                .prepare_journal(&files)
+                .expect("the complete journal is prepared");
+            if state == ROLLED_BACK {
+                write_state(&mutation.journal_path(), state)
+                    .expect("the rollback state is durable");
+            }
+            if lifecycle != JOURNAL_DIR {
+                fs::rename(
+                    mutation.journal_path(),
+                    repository.path(&format!(".theseus/{lifecycle}")),
+                )
+                .expect("the journal reaches its interrupted lifecycle directory");
+            }
+            drop(mutation);
+
+            let recovery = inspect_creation_recovery(&repository.root, &paths)
+                .expect("the exact cleanup-only state is authenticated");
+            assert!(recovery.interrupted());
+            let pending = FsMutation::begin_async_recovering_creation(
+                repository.root.clone(),
+                Vec::new(),
+                recovery,
+            )
+            .await
+            .expect("the authenticated lifecycle state is cleaned");
+            assert!(!repository.path(".theseus/mutation").exists());
+            assert!(!repository.path(".theseus/mutation.preparing").exists());
+            assert!(!repository.path(".theseus/mutation.cleanup").exists());
+            pending.commit().expect("the recovery lease is released");
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_incomplete_preparing_states_are_removed_only_from_empty_workspaces() {
+        for (label, file) in [
+            ("directory-only", None),
+            ("manifest-only", Some((MANIFEST_FILE, b"{".as_slice()))),
+            ("partial-state", Some((STATE_FILE, b"pre".as_slice()))),
+        ] {
+            let repository = TestRepository::new();
+            fs::create_dir(repository.path(".theseus")).unwrap();
+            fs::create_dir(repository.path(".theseus/mutation.preparing")).unwrap();
+            if let Some((name, contents)) = file {
+                write_private(
+                    &repository.path(&format!(".theseus/mutation.preparing/{name}")),
+                    contents,
+                )
+                .unwrap();
+            }
+
+            let recovery = inspect_creation_recovery(&repository.root, &[format!("{label}.rs")])
+                .expect("the bounded incomplete preparing state is safe in an empty workspace");
+            let pending = FsMutation::begin_async_recovering_creation(
+                repository.root.clone(),
+                Vec::new(),
+                recovery,
+            )
+            .await
+            .expect("the incomplete preparing state is removed under the lease");
+            assert!(!repository.path(".theseus/mutation.preparing").exists());
+            pending.commit().unwrap();
+        }
+
+        let repository = TestRepository::new();
+        repository.write("keep.txt", b"keep");
+        fs::create_dir_all(repository.path(".theseus/mutation.preparing")).unwrap();
+        let result = inspect_creation_recovery(&repository.root, &["new.rs".to_owned()]);
+        assert!(matches!(
+            result,
+            Err(MutationError::UnrecoverableCreationJournal { .. })
+        ));
+        assert!(repository.path(".theseus/mutation.preparing").is_dir());
+        assert_eq!(fs::read(repository.path("keep.txt")).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn partial_rolled_back_cleanup_is_removed_but_committed_cleanup_is_refused() {
+        let rolled_back = TestRepository::new();
+        fs::create_dir(rolled_back.path(".theseus")).unwrap();
+        fs::create_dir(rolled_back.path(".theseus/mutation.cleanup")).unwrap();
+        write_private(
+            &rolled_back.path(".theseus/mutation.cleanup/state"),
+            ROLLED_BACK,
+        )
+        .unwrap();
+        let recovery = inspect_creation_recovery(&rolled_back.root, &["new.rs".to_owned()])
+            .expect("a partial rolled-back cleanup in an empty workspace is recoverable");
+        let pending = FsMutation::begin_async_recovering_creation(
+            rolled_back.root.clone(),
+            Vec::new(),
+            recovery,
+        )
+        .await
+        .expect("the partial cleanup is removed under the lease");
+        assert!(!rolled_back.path(".theseus/mutation.cleanup").exists());
+        pending.commit().unwrap();
+
+        let committed = TestRepository::new();
+        fs::create_dir(committed.path(".theseus")).unwrap();
+        fs::create_dir(committed.path(".theseus/mutation.cleanup")).unwrap();
+        write_private(
+            &committed.path(".theseus/mutation.cleanup/state"),
+            COMMITTED,
+        )
+        .unwrap();
+        let result = inspect_creation_recovery(&committed.root, &["new.rs".to_owned()]);
+        assert!(matches!(
+            result,
+            Err(MutationError::UnrecoverableCreationJournal { .. })
+        ));
+        assert!(committed.path(".theseus/mutation.cleanup/state").is_file());
+    }
+
+    #[tokio::test]
+    async fn partial_cleanup_allows_an_explicit_stale_control_directory() {
+        let repository = TestRepository::new();
+        let mut mutation = MutationCore::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply_files(&[generated("new.rs", "interrupted")])
+            .expect("the prepared creation is published");
+        fs::create_dir(repository.path(".theseus/initialize-target")).unwrap();
+        fs::write(
+            repository.path(".theseus/initialize-target/artifact"),
+            b"stale build",
+        )
+        .unwrap();
+        fs::remove_file(repository.path("new.rs")).unwrap();
+        write_state(&mutation.journal_path(), ROLLED_BACK).unwrap();
+        fs::rename(
+            mutation.journal_path(),
+            repository.path(".theseus/mutation.cleanup"),
+        )
+        .unwrap();
+        fs::remove_file(repository.path(".theseus/mutation.cleanup/manifest.json")).unwrap();
+        mutation.journal_active = false;
+        drop(mutation);
+
+        let recovery = inspect_creation_recovery_with_control_directories(
+            &repository.root,
+            &["new.rs".to_owned()],
+            &["initialize-target".to_owned()],
+        )
+        .expect("the stale caller-owned control directory is explicitly authorized");
+        let pending = FsMutation::begin_async_recovering_creation(
+            repository.root.clone(),
+            Vec::new(),
+            recovery,
+        )
+        .await
+        .expect("the partial cleanup is retired under the lease");
+        assert!(!repository.path(".theseus/mutation.cleanup").exists());
+        assert!(
+            repository
+                .path(".theseus/initialize-target/artifact")
+                .is_file()
+        );
+        pending.commit().unwrap();
+    }
+
+    #[tokio::test]
+    async fn constrained_creation_recovery_refuses_a_journal_swapped_after_inspection() {
+        let repository = TestRepository::new();
+        let intended = vec!["intended.rs".to_owned()];
+        let recovery = inspect_creation_recovery(&repository.root, &intended)
+            .expect("an empty repository can be inspected");
+        assert!(!recovery.interrupted());
+
+        let mut foreign = MutationCore::begin(&repository.root, &[]).expect("lease is acquired");
+        foreign
+            .apply_files(&[generated("foreign.rs", "foreign")])
+            .expect("the foreign mutation is applied");
+        foreign.journal_active = false;
+        drop(foreign);
+        let manifest_before = fs::read(repository.path(".theseus/mutation/manifest.json")).unwrap();
+
+        let result = FsMutation::begin_async_recovering_creation(
+            repository.root.clone(),
+            Vec::new(),
+            recovery,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MutationError::UnrecoverableCreationJournal { .. })
+        ));
+        assert_eq!(
+            fs::read(repository.path(".theseus/mutation/manifest.json")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(fs::read(repository.path("foreign.rs")).unwrap(), b"foreign");
+    }
+
+    #[tokio::test]
+    async fn a_creation_recovery_token_cannot_touch_another_root() {
+        let inspected = TestRepository::new();
+        let other = TestRepository::new();
+        let recovery = inspect_creation_recovery(&inspected.root, &["new.rs".to_owned()])
+            .expect("the first root is inspected");
+
+        let result =
+            FsMutation::begin_async_recovering_creation(other.root.clone(), Vec::new(), recovery)
+                .await;
+        assert!(matches!(
+            result,
+            Err(MutationError::CreationRecoveryRootMismatch { .. })
+        ));
+        assert!(!other.path(".theseus").exists());
+    }
+
+    #[test]
+    fn creation_recovery_refuses_a_matching_target_with_an_original_backup() {
+        let repository = TestRepository::new();
+        repository.write("target.rs", b"original");
+        let mut mutation = MutationCore::begin(&repository.root, &[]).expect("lease is acquired");
+        mutation
+            .apply_files(&[generated("target.rs", "interrupted")])
+            .expect("the replacement is applied");
+        mutation.journal_active = false;
+        drop(mutation);
+        let manifest_before = fs::read(repository.path(".theseus/mutation/manifest.json")).unwrap();
+
+        let result = inspect_creation_recovery(&repository.root, &["target.rs".to_owned()]);
+        assert!(matches!(
+            result,
+            Err(MutationError::UnrecoverableCreationJournal { .. })
+        ));
+        assert_eq!(
+            fs::read(repository.path(".theseus/mutation/manifest.json")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            fs::read(repository.path("target.rs")).unwrap(),
+            b"interrupted"
+        );
     }
 
     #[tokio::test]

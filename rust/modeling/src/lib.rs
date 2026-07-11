@@ -4,6 +4,7 @@
 //! stable [`model_hash`]ing, [`verify`]ication, code generation, and the agent
 //! query/patch surface. An adopter crate supplies a concrete model.
 
+mod authored;
 mod codegen;
 mod coverage;
 mod dsl;
@@ -23,6 +24,10 @@ mod verify;
 #[cfg(test)]
 mod test_support;
 
+pub use authored::{
+    RustItemEdit, RustItemEditError, RustItemEditOutcome, RustItemMode, edit_rust_item,
+    rust_source_revision,
+};
 pub use codegen::{
     GeneratedFile, RenderError, render_cli_module, render_module_for_crate, render_proto,
 };

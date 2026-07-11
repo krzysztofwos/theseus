@@ -435,6 +435,40 @@ impl RustWorkspaceLayout {
             .collect()
     }
 
+    /// Every modeled Rust source whose contents are an authored project leaf.
+    ///
+    /// Version one derives this allowlist from exact model ownership, then
+    /// removes generated projections and the canonical model record. It is
+    /// independent of which files currently exist on disk.
+    pub fn authored_rust_paths(&self, model: &Model) -> Result<Vec<String>, ProjectLayoutError> {
+        let mut excluded: BTreeSet<String> = generated_paths_v1(model)?.into_iter().collect();
+        excluded.insert(self.model_record.path().to_string());
+        Ok(self
+            .owned_paths(model)?
+            .into_iter()
+            .filter(|path| path.ends_with(".rs") && !excluded.contains(path))
+            .collect())
+    }
+
+    /// Authorize one exact project-relative Rust source for an authored edit.
+    pub fn authorize_authored_rust_path(
+        &self,
+        model: &Model,
+        path: &str,
+    ) -> Result<(), ProjectLayoutError> {
+        validate_layout_path(path)?;
+        if !self
+            .authored_rust_paths(model)?
+            .iter()
+            .any(|candidate| candidate == path)
+        {
+            return Err(ProjectLayoutError::AuthoredRustPathNotAuthorized {
+                path: path.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Every exact project-relative path owned by the model-driven workflow.
     pub fn owned_paths(&self, model: &Model) -> Result<Vec<String>, ProjectLayoutError> {
         self.checkpoint_descriptor().owned_paths(model)
@@ -574,6 +608,8 @@ pub enum ProjectLayoutError {
     },
     #[error("workspace path uses reserved project metadata: {path:?}")]
     ReservedPath { path: String },
+    #[error("Rust source path is not authorized for authored edits: {path:?}")]
+    AuthoredRustPathNotAuthorized { path: String },
     #[error("model record path must have the .{expected} extension: {path:?}")]
     InvalidModelRecordExtension {
         path: String,
@@ -1110,6 +1146,60 @@ mod tests {
         assert!(matches!(
             layout.authored_impl_path(&model, &missing),
             Err(ProjectLayoutError::CrateNotModeled { .. })
+        ));
+    }
+
+    #[test]
+    fn authored_rust_paths_are_exact_model_owned_leaves() {
+        let model = project_model();
+        let layout = rust_layout();
+        assert_eq!(
+            layout.authored_rust_paths(&model).unwrap(),
+            [
+                "rust/agent/src/adapters.rs",
+                "rust/agent/src/main.rs",
+                "rust/cli/src/main.rs",
+                "rust/fixture/src/lib.rs",
+                "rust/fixture/src/service.rs",
+                "rust/grpc/src/main.rs",
+            ]
+        );
+
+        for path in [
+            "rust/fixture/src/service.rs",
+            "rust/fixture/src/lib.rs",
+            "rust/cli/src/main.rs",
+            "rust/agent/src/adapters.rs",
+        ] {
+            layout
+                .authorize_authored_rust_path(&model, path)
+                .unwrap_or_else(|error| panic!("authored path {path:?} was rejected: {error}"));
+        }
+    }
+
+    #[test]
+    fn authored_rust_authorization_rejects_unauthorized_surfaces() {
+        let model = project_model();
+        let layout = rust_layout();
+        for path in [
+            "rust/fixture/src/generated.rs",
+            "rust/model/src/self_model.rs",
+            ".theseus/session.rs",
+            "rust/foreign/src/lib.rs",
+            "rust/fixture/tests/integration.rs",
+        ] {
+            assert!(
+                layout.authorize_authored_rust_path(&model, path).is_err(),
+                "unauthorized Rust path was accepted: {path:?}"
+            );
+        }
+        assert!(matches!(
+            layout.authorize_authored_rust_path(&model, "rust/foreign/src/lib.rs"),
+            Err(ProjectLayoutError::AuthoredRustPathNotAuthorized { .. })
+        ));
+        assert!(matches!(
+            layout.authorize_authored_rust_path(&model, ".theseus/session.rs"),
+            Err(ProjectLayoutError::ReservedPath { .. })
         ));
     }
 

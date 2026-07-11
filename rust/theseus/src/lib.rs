@@ -30,8 +30,8 @@ pub use checkpoint_model::SnapshotModelError;
 pub use generated::*;
 pub use implement_result::ImplementResult;
 pub use project::{
-    ProjectBindingError, ProjectContext, ProjectContextError, ProjectPathError, ProjectRootError,
-    theseus_project,
+    PROJECT_MANIFEST_PATH, ProjectBindingError, ProjectContext, ProjectContextError,
+    ProjectManifest, ProjectOpenError, ProjectPathError, ProjectRootError, theseus_project,
 };
 pub use rust_item_result::RustItemResult;
 pub use session::{Session, SessionState};

@@ -9,7 +9,6 @@ use theseus::{
     CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, QueryRequest, ReadRequest,
     RustItemResult, Session, SourceDocument, StatefulSession, TheseusService as _,
 };
-use theseus_modeling::{Model, ModelRecord, ProjectId, RustWorkspaceLayout};
 
 static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
 
@@ -54,13 +53,7 @@ async fn a_session_develops_and_restores_a_foreign_project() {
     let source_before = fs::read(&source_record).unwrap();
     let repository = ForeignRepository::journal_copy();
 
-    let initial_source = fs::read_to_string(repository.root.join("model.json")).unwrap();
-    let initial_model: Model = serde_json::from_str(&initial_source).unwrap();
-    let layout = RustWorkspaceLayout::new(
-        ProjectId::new("journal").unwrap(),
-        ModelRecord::json("model.json").unwrap(),
-    );
-    let project = ProjectContext::new(&repository.root, initial_model, layout).unwrap();
+    let project = ProjectContext::open(&repository.root).unwrap();
 
     let restored_paths = [
         "Cargo.lock",
@@ -250,11 +243,7 @@ async fn a_session_develops_and_restores_a_foreign_project() {
     );
     assert_eq!(fs::read(&source_record).unwrap(), source_before);
 
-    let cold_model =
-        serde_json::from_str(&fs::read_to_string(repository.root.join("model.json")).unwrap())
-            .unwrap();
-    let cold_project =
-        ProjectContext::new(&repository.root, cold_model, project.layout().clone()).unwrap();
+    let cold_project = ProjectContext::open(&repository.root).unwrap();
     let stateful = StatefulSession::new(
         cold_project.clone(),
         FsWorkspace::for_project(&cold_project),

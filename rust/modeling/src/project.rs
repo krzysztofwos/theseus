@@ -320,6 +320,56 @@ pub struct RustWorkspaceLayout {
     model_record: ModelRecord,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RustWorkspaceLayoutWire {
+    version: u32,
+    project_id: ProjectId,
+    model_record: ModelRecord,
+}
+
+impl From<&RustWorkspaceLayout> for RustWorkspaceLayoutWire {
+    fn from(layout: &RustWorkspaceLayout) -> Self {
+        Self {
+            version: RustWorkspaceLayout::VERSION,
+            project_id: layout.project_id.clone(),
+            model_record: layout.model_record.clone(),
+        }
+    }
+}
+
+impl TryFrom<RustWorkspaceLayoutWire> for RustWorkspaceLayout {
+    type Error = ProjectLayoutError;
+
+    fn try_from(layout: RustWorkspaceLayoutWire) -> Result<Self, Self::Error> {
+        if layout.version != RUST_WORKSPACE_LAYOUT_VERSION {
+            return Err(ProjectLayoutError::UnsupportedLayoutVersion {
+                version: layout.version,
+            });
+        }
+        Ok(Self::new(layout.project_id, layout.model_record))
+    }
+}
+
+impl Serialize for RustWorkspaceLayout {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        RustWorkspaceLayoutWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RustWorkspaceLayout {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_from(RustWorkspaceLayoutWire::deserialize(deserializer)?)
+            .map_err(D::Error::custom)
+    }
+}
+
 impl RustWorkspaceLayout {
     pub const VERSION: u32 = RUST_WORKSPACE_LAYOUT_VERSION;
 
@@ -1084,6 +1134,28 @@ mod tests {
             .unwrap(),
             descriptor
         );
+    }
+
+    #[test]
+    fn rust_workspace_layout_has_a_strict_versioned_schema() {
+        let layout = RustWorkspaceLayout::new(
+            ProjectId::new("fixture").unwrap(),
+            ModelRecord::json("model.json").unwrap(),
+        );
+        let encoded = serde_json::to_string(&layout).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"version":1,"project_id":"fixture","model_record":{"format":"json","path":"model.json"}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<RustWorkspaceLayout>(&encoded).unwrap(),
+            layout
+        );
+
+        let future = encoded.replacen("\"version\":1", "\"version\":2", 1);
+        assert!(serde_json::from_str::<RustWorkspaceLayout>(&future).is_err());
+        let unknown = encoded.replacen("\"version\":1", "\"version\":1,\"future\":true", 1);
+        assert!(serde_json::from_str::<RustWorkspaceLayout>(&unknown).is_err());
     }
 
     #[test]

@@ -1,15 +1,39 @@
 # The goal corpus
 
-Live evals for the agent harness: each goal is run with a real model behind the `Llm` port, its trace kept, and its result recorded here. The mechanical loop invariants (restart interception, gate refusals, resume shapes) live in `cargo test`; these goals branch on model judgment, so they only mean anything live.
+Live evals for the agent harness: each goal is run with a real model behind the `Llm` port, its trace kept, and its result recorded here. The mechanical loop invariants (restart interception, gate refusals, resume shapes, transaction recovery, and foreign-project workflows) live in `cargo test`; these goals branch on model judgment, so they only mean anything live.
 
 Run a goal with `AGENT_TRACE=1 cargo run -p theseus-agent -- --allow-writes "<goal>"` and record: date, turns, outcome, findings.
 
-| # | Goal | Proves | Last run | Outcome |
-| - | ---- | ------ | -------- | ------- |
-| 1 | Add an operation with a handler; leave the workspace conformant | The model loop | 2026-07-06 (diff) | green — designed and shipped `diff`, ~27 turns |
-| 2 | Grow a port method + adapter, restart, call it live | Full self-modification | 2026-07-03 (test), 2026-07-04 (checkpoint) | green — both kept in-tree |
-| 3 | Snapshot, break something, roll back | Recovery | not yet run | — |
-| 4 | Scaffold an in-tree service, author it, verify | Multi-service | 2026-07-09 (text-utils) | green — exposed scaffold/generate itself first |
-| 5 | Explain a subsystem end to end, citing files | Investigation over `read`/`search`/`list` | 2026-07-10 | green — a fully cited end-to-end account of `restart` (model → codegen → generated catalog/dispatch → handler → loop → resumed binary), every claim tied to a file it read; systematic `list`/`read`/`search`/`show` exploration; trace in the session scratchpad |
-| 6 | Author a capability from local evidence gathered by `search`+`read`, not only `show` | Reading before writing | 2026-07-10 | green — `lint` built end to end; ~20 searches and several reads before authoring (CLAUDE.md, rust-toolchain.toml, the neighboring adapters), evidence cited in the report; live `lint` returned clean from the rebuilt binary; one authored seam (`StatefulSession`, added the same day) needed a hand delegation, caught by its completeness test |
-| 7 | (later) Stand up a foreign adopter from a goal string | Other software | blocked on rooted sessions (§3) | — |
+For a durable foreign project, add `--project ROOT`. Initialization is currently an operator CLI bootstrap, so create the seed before starting goal 7:
+
+```sh
+mkdir /tmp/theseus-eval && git -C /tmp/theseus-eval init
+cargo run -p theseus-cli -- \
+  --project /tmp/theseus-eval init --id eval-app \
+  --modeling-path "$PWD/rust/modeling"
+AGENT_TRACE=1 cargo run -p theseus-agent -- \
+  --project /tmp/theseus-eval --allow-writes \
+  "add a health operation, test it, and leave the project conformant"
+```
+
+| #   | Goal                                                                                 | Proves                                    | Last run                                   | Outcome                                                                                                                                                                                                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------ | ----------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Add an operation with a handler; leave the workspace conformant                      | The model loop                            | 2026-07-06 (diff)                          | green — designed and shipped `diff`, ~27 turns                                                                                                                                                                                                                                                                                                     |
+| 2   | Grow a port method + adapter, restart, call it live                                  | Full self-modification                    | 2026-07-03 (test), 2026-07-04 (checkpoint) | green — both kept in-tree                                                                                                                                                                                                                                                                                                                          |
+| 3   | Snapshot, break something, roll back                                                 | Recovery                                  | not yet run                                | —                                                                                                                                                                                                                                                                                                                                                  |
+| 4   | Scaffold an in-tree service, author it, verify                                       | Multi-service                             | 2026-07-09 (text-utils)                    | green — exposed scaffold/generate itself first                                                                                                                                                                                                                                                                                                     |
+| 5   | Explain a subsystem end to end, citing files                                         | Investigation over `read`/`search`/`list` | 2026-07-10                                 | green — a fully cited end-to-end account of `restart` (model → codegen → generated catalog/dispatch → handler → loop → resumed binary), every claim tied to a file it read; systematic `list`/`read`/`search`/`show` exploration; trace in the session scratchpad                                                                                  |
+| 6   | Author a capability from local evidence gathered by `search`+`read`, not only `show` | Reading before writing                    | 2026-07-10                                 | green — `lint` built end to end; ~20 searches and several reads before authoring (CLAUDE.md, rust-toolchain.toml, the neighboring adapters), evidence cited in the report; live `lint` returned clean from the rebuilt binary; one authored seam (`StatefulSession`, added the same day) needed a hand delegation, caught by its completeness test |
+| 7   | Grow a capability in a freshly initialized foreign project                           | Other software through the same catalog   | not yet run live                           | pending — rooted sessions, durable open, governed authored edits, and deterministic initialization coverage are ready                                                                                                                                                                                                                              |
+| 8   | Rebuild and call a new capability from the foreign agent process                     | Foreign process replacement               | blocked by design                          | `restart` rebuilds only Theseus and the catalog has no arbitrary command runner; use an external acceptance command until that handoff is designed                                                                                                                                                                                                 |
+| 9   | Initialize a foreign project from a goal string                                      | Agent-visible bootstrap                   | blocked by design                          | `init` is an operator CLI command, not a session tool; do not claim this until the catalog can perform it safely                                                                                                                                                                                                                                   |
+
+## Deterministic prerequisites
+
+These tests make the environment for goal 7 credible, but do not turn that goal green:
+
+- `cargo test -p theseus --test foreign_project` cold-opens the journal manifest, proves root-bound Cargo, patches and implements an operation, rejects a compile-failing governed Rust item edit, accepts a valid one, checks, tests, verifies, restores exact owned state, and cold-opens again.
+- `cargo test -p theseus --test initialized_project` transactionally seeds an empty top-level Git repository, snapshots it, grows and runs its CLI through public tools, restores it, and cold-opens the seed.
+- Launcher/parser tests prove CLI, agent, MCP, HTTP, and gRPC accept one explicit `--project ROOT`; stateful transport tests prove repeated HTTP/gRPC calls share one locked session.
+
+A deterministic session can prove policy and mechanics. Only a traced real-model run can show that the descriptions, diagnostics, and tool granularity are sufficient for autonomous use.

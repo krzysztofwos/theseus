@@ -202,3 +202,31 @@ The agent's own interior — the model port its loop drives, the turn budget tha
 ### The ship gains a hold ledger
 
 The last missing affordance for autonomy was recoverability: an agent that edits itself needs a way back. Asked to build one, the agent grew the workspace port two methods — `snapshot`, a git stash-commit of the working tree, and `restore`, gated like every write — with `snapshot` and `rollback` operations over them, declared flows, tool descriptions, and the adapters for both the filesystem workspace and the write gate, authored through its own `implement`. Everything compiled, verified, and survived a restart; the one seam it could not cross was the borrowed-port forwarding impl, two authored lines. The loop's interior became editable the same week: ports attach to inbounds through `patch`, `query` mints their handles, and `implement --port llm` reaches the loop's own adapters — so the next capability the agent grows may be a piece of its own harness.
+
+### The ledger becomes a transaction
+
+The first checkpoint proved the operation shape, not a complete recovery policy. Mutation now runs under a process-independent repository lease and a durable write-ahead log. Each operation declares its exact paths, verifies the persisted model revision, stages present files and tombstones, captures `Cargo.lock`, and commits only after its gate passes. A failed check, canceled future, dropped mutation, or recovered prepared journal restores the declared state. Checkpoints in turn store bounded raw Git trees, preserve supported modes and symlinks, include tracked and model-owned absent paths, and remain pinned by project-scoped refs until explicitly released or pruned.
+
+This hardening also prevents agent-supplied Git labels and references from becoming command options, and moved renderer failures out of panics into structured diagnostics. The policy remains deliberately narrower than a hostile local-user sandbox: Unix pathname traversal is not yet descriptor-relative, and Cargo descendants are trusted to stop changing source when canceled.
+
+### The agent reads before it writes
+
+`read`, `search`, and `list` exposed the selected workspace through bounded, root-confined tools. Two live goals then used them: one produced a cited explanation of the restart path, and one gathered local style and adapter evidence before building `lint`. The result justified promoting `read` from a string into a structured `SourceDocument`: path, complete-file revision, capped contents, and a truncation flag. The revision is the concurrency token for authored edits, and it changes even when the only changed bytes fall beyond the returned cap.
+
+### Sessions leave the home workspace
+
+A session now holds one immutable `ProjectContext` rather than relying on the compiled Theseus root: canonical root, stable ID, initial model, and versioned Rust layout. Filesystem, Cargo, and checkpoint adapters prove they are bound to that context. HTTP, gRPC, and MCP preserve one locked stateful session across calls; the internal loop carries one mutable session through its turns. A successful edit is therefore visible to the next request or turn instead of each invocation silently starting over.
+
+The journal adopter turned that abstraction into a cold-open contract. Its strict `theseus.json` points at a canonical JSON model record; `ProjectContext::open` validates both without executing adopter code. Every launcher accepts `--project ROOT`, and the foreign integration drives the same query, patch, implement, check, test, verify, snapshot, and rollback operations against an isolated journal repository. This is deterministic evidence that the harness is project-rooted. It is not yet evidence that a live model can complete the foreign goal unaided.
+
+### Authored Rust gets a governed edit
+
+Model patches and method splices still could not add a test module or replace a composition-root function. `edit_rust_item` fills that gap without becoming a text editor. Given an existing layout-owned authored `.rs` path, the revision from `read`, and one parsed top-level named item, it inserts or replaces exactly that identity. It rejects stale observations, duplicate or missing identities, unsupported kinds, generated and control paths, and new files, then runs the normal WAL and all-target compile gate.
+
+The foreign test exercises both decisions: a test module containing an unresolved symbol rolls back with structured compile diagnostics; a valid module commits, runs under `test`, and disappears under checkpoint rollback. Imports, macros, `impl` members, manifests, arbitrary ranges, and new paths remain outside this operation by design.
+
+### A cold project gets a seed
+
+The operator can now run `theseus --project ROOT init --id ID` in an empty top-level Git repository. One transaction writes a strict project manifest, canonical JSON model, minimal service and CLI, generated projections, authored in-memory adapter, workspace manifest, and lockfile; an isolated all-target check must pass, and the result must cold-open before commit. The modeling crate path is explicit trusted input. Checkpoints accept an unborn `HEAD`, so the initialized-project integration takes a root snapshot without an out-of-band seed commit, adds and implements an operation, edits the CLI's top-level `main`, tests and verifies, runs the command, restores the snapshot, and cold-opens the original model.
+
+That proof is deterministic. `init` is still an operator CLI command rather than a tool in the agent catalog, and the initialized foreign-project goal has not yet been run live. Those are the next claims to test, not facts to infer from the integration suite.

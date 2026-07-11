@@ -1,195 +1,125 @@
 # What to tackle next
 
-Strategic analysis for Theseus as a self-modifying agent harness: a complete set of tools an agent uses to extend itself and develop other software. Written after a project review (architecture, verify status, tool surface, harness log, and second adopter).
+Strategic status for Theseus as a self-modifying agent harness: the smallest complete set of tools an agent can use to inspect, change, prove, recover, and extend its own harness or another modeled Rust project.
 
-## July 2026 update
+## July 2026 checkpoint
 
-The first three architectural slices below are complete. The agent can inspect arbitrary workspace source through root-guarded `read`, `search`, and `list`; the live goal corpus records investigation and self-edit runs; Git option injection is closed; renderer failures are structured diagnostics; and HTTP, gRPC, MCP, and the internal loop carry serialized session state.
+The safety foundation and the first foreign-project workflow are implemented.
 
-Mutation safety also moved from a backlog item into the runtime contract:
+- **Structured inspection:** `read` returns `{path, revision, contents, truncated}`, where the revision covers the complete file even when the returned contents are capped. `search` and `list` are bounded, root-confined discovery operations.
+- **Governed authored edits:** `edit_rust_item` inserts or replaces one named top-level Rust item in an existing authored file owned by the active layout. It uses the revision returned by `read`, parses all three source states, and commits only after `cargo check --workspace --all-targets` passes under the repository lease. The response distinguishes a committed edit from a compile-gated rollback.
+- **Transactional model edits:** `patch --write`, `generate`, `scaffold`, and `implement` declare their path sets, verify the persisted model revision, publish through the durable WAL, capture `Cargo.lock`, and either commit the whole batch or restore it.
+- **Structured failure surfaces:** renderer validation returns typed diagnostics instead of unwinding, toolchain operations return structured reports, and user-controlled checkpoint values cannot be interpreted as Git options.
+- **Durable project open:** a strict `theseus.json` identifies a stable project ID, a versioned Rust layout, and a canonical JSON model record. `ProjectContext::open` reconstructs the project without executing project code. CLI, agent, MCP, HTTP, and gRPC launchers accept `--project ROOT`; stateful servers keep one locked project session across requests.
+- **Transactional project initialization:** `theseus --project ROOT init --id ID` seeds an empty top-level Git repository with a minimal modeled service and CLI, generated projections, authored adapter leaves, a workspace manifest, a canonical model record, and a project manifest. The seed is compile-gated inside the same transaction and cold-opened before commit. Interrupted creation is retried only when the WAL proves the exact seed targets were all newly created; the proof is rechecked under the repository lease.
+- **Recovery:** raw-tree snapshots preserve regular-file bytes and modes plus symlink targets, include tracked and model-owned present/absent paths, and restore through the WAL. The current layout owns root `Cargo.toml` and `theseus.json`; legacy descriptors preserve their frozen ownership. Immutable snapshot commits can start from an unborn `HEAD` and remain pinned by project-scoped refs until explicit release or pruning.
+- **Foreign proof:** the journal test cold-opens a durable project, proves root binding, adds and implements a modeled operation, rejects a bad authored test module through the compile gate, accepts a good one, checks, tests, verifies, rolls back byte-exactly, and cold-opens again. The initialized-project test performs the corresponding workflow from an empty Git repository.
 
-- `patch --write`, `generate`, `scaffold`, and `implement` declare one path set, acquire an OS repository lease, verify the persisted projection, publish through a durable WAL, and compile-check before commit.
-- Failed checks, canceled applies, dropped transactions, and killed prepared writers restore the declared files; successful commits retain generated-file deletions and `Cargo.lock` updates as part of the same batch.
-- The recovery bootstrap and the journal adopter's projector use the same lower-level transaction crate instead of sequential writes.
-- Long-lived sessions distinguish speculative and persisted models. A checkpoint stores the persisted model, and rollback adopts it only after the WAL restore commits.
-- Snapshots hash raw bytes without Git filters, preserve supported Unix regular-file modes and symlinks, and inventory tracked paths plus exact model-owned present or absent state. Restore unions the snapshot and current inventories so removed tracked or model-owned files become tombstones without broad cleaning.
-- Every snapshot is a distinct immutable commit pinned under `refs/theseus/projects/<project-id>/snapshots/<full-object-id>` with a transactional companion ref that orders retained snapshots deterministically, survives Git GC, and remains until an explicit `release` or `prune`; creation never evicts another session's recovery point. A second lease in the canonical Git object database serializes linked worktrees that share those refs and objects.
-- `diff` uses the same raw-tree comparison, including permission-only changes. It returns a bounded, escaped Git-style diff and requires write permission because its temporary comparison tree writes Git objects.
-- Sessions carry one immutable `ProjectContext`: a canonical operator-selected root, model of record, stable project ID, and versioned layout. Workspace, Cargo, and checkpoint ports expose and validate that binding before use; resumed state cannot change it.
-- Checkpoint V2 freezes the project descriptor in its manifest and scopes refs and retention by project. Legacy V1 Theseus snapshots remain readable, while nested non-top-level Git roots fail before writes.
-- The journal model is a durable JSON projection. A regression test drives verify → snapshot → patch → coverage → implement → check → test → verify → rollback through `Session`, then proves exact file restoration, untracked-file preservation, and foreign-root isolation.
+These claims are deterministic integration coverage. They are not evidence that a live model can complete the same foreign-project goal unaided; live outcomes remain separate in `evals/README.md`.
 
-### Current order
+## Current order
 
-1. **Add a governed authored-source edit.** Prefer a typed item/test splice with the same transaction and compile gate before exposing unrestricted file writes.
-2. **Make server bootstrap explicit.** The agent's `restart` rebuilds and resumes its transcript, but starting an already-built HTTP, gRPC, or MCP binary still initializes from the context supplied by its launcher. Process-managed restarts need an explicit load/rebuild/resume contract.
-3. **Add first-class project initialization.** Rooted sessions can develop an existing modeled workspace; they still cannot create the initial layout/model record from an empty directory as a tool operation.
+### 1. Run the cold foreign-project eval live
 
-### Explicit boundaries
+The highest-value next result is no longer another primitive. It is a real-model run over a newly initialized project:
 
-- Workspace WAL support is Unix-only. It protects against malformed paths and corrupt internal files, not a hostile same-account process racing pathname components; closing that requires fd-relative traversal and publication.
-- `ProjectContext::new` validates but does not discover its initial model and layout. A launcher opening an existing project must load the declared durable model record before constructing the context; first-class open/bootstrap tooling remains future work.
-- Drop-time rollback is synchronous but cannot report a rollback error to the canceled caller. The next lease retries recovery and fails closed if recovery remains impossible.
-- Snapshot manifests use a strict versioned schema. Version two freezes the project descriptor and ownership derivation; a narrow compatibility path retains version-one Theseus restores. Unknown fields, versions, or project mismatches fail closed. Current limits are 4 MiB per manifest, 64 MiB per blob, 256 MiB in aggregate, 4,096 paths, and 1,024 retained snapshots per project.
-- Raw contents and Unix symlink targets may be non-text, but Git workspace paths must be UTF-8. Submodules, unmerged index entries, and tree modes other than regular files or symlinks are unsupported.
-- Exact regular-file restoration covers Unix permission bits, not ownership, ACLs, extended attributes, or timestamps. Unrelated untracked files are intentionally outside the checkpoint inventory.
-- Model ownership is scoped to the snapshot and current persisted models, not a permanent provenance ledger. Once neither model declares an untracked path, later checkpoints intentionally treat it as unrelated.
-- `diff` is not a read-only filesystem operation: it creates a temporary index and private alternate Git object store under the repository lease, so the modeled write gate applies even though it does not change source paths. Invalid UTF-8 and non-layout control bytes are escaped in the returned string; stale quarantine stores are removed by the next snapshot or diff.
-- Snapshot objects are quarantined until their commit is complete, and interrupted cross-device promotion copies are recovered from a private primary-side directory. A crash, cancellation, or late failure in the narrow promotion-before-ref window can still leave valid unreachable loose objects for ordinary Git garbage collection.
-- Rollback adopts the snapshot model in the live session after commit. Source changes become executable only after the inbound rebuilds; only the agent loop currently owns a rebuild-and-resume handoff.
-- Cargo commands hold the repository lease and ordinary checks use `--locked`, but the harness trusts build scripts and descendants not to keep mutating source after their direct Cargo child is canceled.
+1. An operator creates an empty Git repository and invokes `theseus ... init`.
+2. The agent starts with `--project ROOT --allow-writes` and only the catalog plus a goal.
+3. It reads local source, patches the model, implements the operation, edits a top-level authored item if needed, tests, verifies, and snapshots or rolls back.
 
-The remainder of this document is the original roadmap and rationale. It is retained as design history; the rooted-session portion is now implemented, while cold project initialization and general authored-source editing remain open.
+Record the trace, turn count, failed tool calls, manual interventions, and final conformance. After the agent finishes, run the produced command as a separate deterministic acceptance step. The current foreign agent cannot rebuild and invoke its newly generated operation from inside the old process, and initialization is operator bootstrap rather than an agent tool; the eval must not claim either capability until those boundaries change.
 
-## Context
+### 2. Expand authored reach only where the eval fails
 
-Theseus already closes the **self-extension** loop for model-shaped work:
+`edit_rust_item` is intentionally narrower than a text editor. It handles named top-level functions, modules, structs, enums, traits, type aliases, constants, and statics in existing layout-owned `.rs` files. It does not currently handle:
 
-```text
-snapshot → patch → show → implement → check → test → verify → restart → use
-         ↘ rollback if needed
+- `use`, `extern crate`, or macro items
+- methods inside an existing `impl`
+- arbitrary byte ranges or non-Rust files
+- creation of a new source file
+- `Cargo.toml`, `theseus.json`, or other control records
+
+Keep expansion typed and ownership-aware. Likely next slices are a governed `impl`-member edit and declared creation of a new authored Rust file. Each should retain stale-read detection, exact path authorization, a bounded parser input, WAL publication, lockfile capture, and an all-target compile gate. Add a general write only if a concrete eval cannot be expressed safely through a typed operation.
+
+### 3. Define process replacement for every long-lived inbound
+
+HTTP, gRPC, and MCP now preserve a locked session across calls, but a process still starts from the context its launcher opens. Only the internal Theseus agent owns a rebuild, transcript persistence, `exec`, and resume handoff, and that restart path intentionally refuses a foreign project. A process manager needs an explicit contract for:
+
+- draining or rejecting new calls while a rebuild is pending
+- persisting the project/session identity and write policy
+- rebuilding the correct binary from the selected root
+- replacing the process only after a successful build
+- resuming or invalidating in-flight transport state
+
+Do not infer hot reload from stateful request handling; these are separate properties.
+
+### 4. Automate the live corpus
+
+The goal table is useful but still manually run. Add one command that executes selected goals with trace capture, records model/provider and harness revision, checks final deterministic invariants, and compares results without treating model variance as a unit-test failure. Keep mechanical concurrency, rollback, parser, and transport laws in `cargo test`.
+
+### 5. Narrow the remaining filesystem race boundary
+
+The WAL validates paths, file types, hardlink counts, bounds, and internal state, but pathname traversal and publication still assume no hostile same-account process swaps a parent directory between checks. Closing that boundary requires descriptor-relative traversal and publication (`openat2` or a carefully constrained `openat` design), not more string canonicalization.
+
+## Explicit boundaries
+
+- Workspace mutation and exact metadata restoration are Unix-only. Regular-file permission bits are preserved; ownership, ACLs, extended attributes, and timestamps are not.
+- Same-account pathname replacement remains outside the threat model. The selected project root is revalidated, but individual opens are not yet descriptor-relative end to end.
+- Project discovery accepts only the strict manifest plus a canonical JSON model projection. A Rust-builder model remains a trusted, compiled Theseus bootstrap path and is deliberately not executed by `ProjectContext::open`.
+- The project root is selected by the operator and is not a tool argument. A session cannot switch root, project ID, layout, or model-record location.
+- Initialization requires an existing empty canonical Git top level. It accepts an operator-selected local `theseus-modeling` crate path and Cargo dependency graph as trusted code. Cargo build scripts and compiler descendants are not sandboxed.
+- Initialization is a bespoke CLI command, not a modeled session operation. A running agent can develop an initialized project but cannot currently create a project root itself.
+- The authored editor can change only an existing, model-owned, authored Rust file. Generated projections, tests outside that ownership set, foreign paths, control records, and new paths are refused. Supported top-level item kinds are bounded explicitly; this is not a general-purpose source rewrite.
+- A complete-file source revision prevents stale cooperative writes, not a hostile process from changing the file during path resolution. The transaction rechecks declared state before publication and fails closed on mismatch.
+- Drop-time WAL rollback is synchronous but cannot report its failure to a canceled caller. The next lease retries recovery and refuses further writes if recovery cannot complete.
+- Snapshot manifests and contents are bounded: 4 MiB per manifest, 64 MiB per blob, 256 MiB aggregate, 4,096 paths, and 1,024 retained snapshots per project. Unsupported versions, project mismatches, submodules, unmerged entries, and tree modes other than regular files or symlinks fail closed.
+- Current layout descriptors own the root workspace and project manifests. Version-one descriptors remain readable under their original ownership derivation; compatibility does not silently reinterpret an old snapshot as the current layout.
+- Snapshot ownership is the union derived from the frozen snapshot model and current persisted model, not a permanent provenance ledger. Unrelated untracked files remain outside rollback by design.
+- `diff` is write-gated because it creates a temporary index and private alternate object store. It does not change source paths, but it does write Git objects.
+- Snapshot and diff objects are quarantined before ref publication. A crash in the narrow promotion-before-ref window can leave valid unreachable loose objects for ordinary Git garbage collection.
+- Source changes become executable only after rebuilding the relevant process. Stateful HTTP/gRPC/MCP sessions preserve model state; they do not hot-load newly compiled code.
+- The internal `restart` flow rebuilds only the Theseus harness project. Foreign projects currently require an external build/run handoff.
+- Live LLM success is not implied by deterministic session tests. Goal 7 remains unrun live until its trace is recorded.
+
+## Working workflow
+
+From the Theseus repository:
+
+```sh
+mkdir /tmp/theseus-app
+git -C /tmp/theseus-app init
+cargo run -p theseus-cli -- \
+  --project /tmp/theseus-app init --id theseus-app \
+  --modeling-path "$PWD/rust/modeling"
+cargo run -p theseus-cli -- --project /tmp/theseus-app verify
+cargo run -p theseus-agent -- \
+  --project /tmp/theseus-app --allow-writes \
+  "add a health operation, test it, and leave the project conformant"
 ```
 
-Coverage is full, `verify` is green, and the agent has grown real capabilities (test, checkpoint, diff, text-utils) through that loop — `restart` itself is now a modeled operation, and an exhausted run resumes with `agent --resume`. Multiple inbounds (CLI, agent, MCP, HTTP, gRPC) share one contract and one session. The second adopter (`adopters/journal/`) proves the engine works outside Theseus.
+For an existing durable adopter:
 
-The open problem is not another transport or more category theory. It is this:
+```sh
+cargo run -p theseus-cli -- --project adopters/journal verify
+cargo run -p theseus-agent -- \
+  --project adopters/journal --allow-writes \
+  "add a count operation and leave the project conformant"
+```
 
-> The agent has excellent tools for **architecture as a model**, and almost no tools for **everything that is not a modeled method** — or for **software that is not Theseus itself**.
+Run those commands on a disposable branch or repository. The write gate authorizes mutation; it does not replace a recovery point, so snapshot before an exploratory change.
 
-That gap is what to close next.
+## North star
 
-## The bottleneck
+The next milestone should fail loudly:
 
-| Capability                                                  | Self-extend Theseus                | Develop other software                 |
-| ----------------------------------------------------------- | ---------------------------------- | -------------------------------------- |
-| Model ops (`query` / `patch` / `verify`)                    | Strong                             | Weak (fixed to Theseus’s model + root) |
-| Handler/adapter splice (`show` / `implement`)               | Strong                             | Only inside that model’s crates        |
-| Build/test gates                                            | Strong                             | Same, if root is that workspace        |
-| Checkpoint/restart                                          | Strong                             | Same                                   |
-| Read arbitrary source / search tree                         | Missing                            | Missing                                |
-| Write freeform files (tests, `main`, docs, non-method code) | Partial (only generated + splices) | Missing                                |
-| “New product” as a first-class object                       | In-tree services only              | Journal is hand-run, outside the agent |
+> A live agent, rooted in a freshly initialized project and given only a goal, ships a small capability using the catalog, leaves the project conformant, and can restore its starting snapshot without manual source edits; an explicit acceptance step then runs the produced CLI.
 
-The harness is great at **replacing planks of its own architecture**. It is not yet a complete programming agent, and it is not yet a product factory. Those are two different expansions; do them in order.
-
-## Recommended order
-
-### 1. First: make the agent able to _see and touch_ authored code
-
-**Highest leverage.** Every successful live run in the harness log still depended on patterns the model could only partly reach: neighboring adapters via `show`, house style, compile errors from `implement` / `check`. Real development needs:
-
-- **`read`** — workspace-relative path → contents (and maybe line range)
-- **`search`** — content/path search (ripgrep-shaped is fine)
-- **`list`** — directory listing
-
-These fit the existing doctrine: **reads stay ambient / unported** (no mutation), exposed as operations with `tool` attributes so they join the catalog. No new port required unless a pure filesystem port is wanted later for symmetry.
-
-Two constraints the first cut must respect. An operation joins **every** transport — the HTTP and gRPC inbounds render handlers for all operations, `tool` attribute or not — so `read` is also a wire endpoint and needs a root guard (canonicalize under the workspace root, refuse escapes) from day one; whether transport scoping should become a modeled fact is a question to note, not to solve here. And freeform writes (`write_source` / `edit`) are **deferred to §4**, pulled by a failed eval: raw file writes are the one capability no check governs, and the typed middle path — extending the splice family, e.g. an `implement --test` inserting a `#[cfg(test)]` item through syn spans — should be tried first when a goal demands it.
-
-Without reads, the agent cannot reliably:
-
-- invent non-trivial adapter bodies from local examples
-- add integration tests for a new capability
-- fix wedge points outside generated/spliced regions
-- work on software whose interesting parts are not `fn` methods on a service trait
-
-**Do this before** big “build other apps” work. Foreign workspaces without read/search just move blindness to a new directory.
-
-**Success criterion:** a live goal authored from local evidence — a non-trivial adapter or handler written by `search` + `read` over neighboring code, not only `show`. (“Add a unit test” belongs to the deferred write slice; tests are not splice-reachable today.)
-
-### 2. Second: measure the harness (a tiny eval suite)
-
-The method was already proven once: cold agent + MCP comparison improved the surface. Make that permanent.
-
-A small **goal corpus** under something like `evals/`:
-
-| Goal                                              | Proves         |
-| ------------------------------------------------- | -------------- |
-| Add type / operation + implement + verify         | Model loop     |
-| Grow a port method + adapter + restart + call it  | Full self-mod  |
-| Snapshot → break → rollback                       | Recovery       |
-| Scaffold in-tree service + implement + verify     | Multi-service  |
-| (later) Init foreign adopter + first green verify | Other software |
-
-The mechanical loop invariants (restart interception, gate refusals, resume shapes) already live in `cargo test` and stay there. The goal corpus is **live-only** — every goal branches on model judgment, which a scripted stub cannot follow — run on a cadence with `AGENT_TRACE` traces kept, tracking turn count and success/fail per goal.
-
-Without evals, every new tool is a story; with evals, you know whether the tool surface got better the way the slug-type comparison did.
-
-**Success criterion:** One command that runs the corpus live and reports regressions against the recorded results.
-
-### 3. Third: “other software” as a first-class adopter workflow
-
-Journal proved the engine. It did **not** prove the _agent_ can develop foreign software. The missing product is:
-
-> An agent session rooted at **any** workspace that has a model of record + engine dep, using the same tools.
-
-Concrete slices:
-
-1. **Root parameter** — Session / CLI / agent take `--root <path>` (or env); `workspace_root`, checkpoint, toolchain, generate paths all relative to it. This is bigger than a flag: ambient reads assume _the_ root (compile-time `workspace_root()` is used by handlers directly), so the root threads through handlers, not just adapters.
-2. **Model of record as input** — not only `theseus_model()`; load / hold the working model for that adopter. The hidden step: path conventions (`generated_files`, `authored_impls`, adapter files) are adopter **code** today (`theseus-model`, `journal-model`) — a foreign-rooted session needs them either modeled as vocabulary or injected as a trait. Naming this is what makes §3 an arc, not a flag.
-3. **Init / project as tools** — what journal’s `project` binary does (scaffold missing crates + write generated files), reachable from the agent.
-4. **One live goal:** “From empty dir (or template), produce a journal-class service; `verify` green; CLI works.”
-
-That is the distinctive Theseus path to “develop other software”: **other software is another model**, not “become a general coding agent that ignores the model.”
-
-In-tree demos (calculator, text-utils) stay valuable, but they never leave the Theseus fixed point. Foreign adopters do.
-
-**Success criterion:** Agent-driven third adopter (or re-drive journal from cold) with no hand-edited generated files.
-
-### 4. Fourth: close remaining autonomy holes (only as evals demand)
-
-These matter, but they should be **pulled by failed goals**, not built as a pile:
-
-| Gap                                                           | When it matters                                                                              |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **Bootstrap as a tool / recovery path**                       | Agent wedges renderer + consumer; today needs a human                                        |
-| **`patch --write` + compile gate**                            | Bad reprojections still possible before `check`                                              |
-| **Untracked files vs snapshot**                               | Rollback leaves garbage; agent creates files then rolls back                                 |
-| **Owned composition-root / freeform wiring**                  | Mostly fixed by generated `Standalone`; remaining holes show up when growing inbounds        |
-| **Freeform write (`write_source` / typed test-splice first)** | An eval fails for want of a file `implement` cannot own                                      |
-| **Structured check/test/implement outcomes**                  | `verify` is already structured JSON; the prose outcomes are `check`, `test`, and `implement` |
-| **Richer `implement` context**                                | Auto-include neighboring method snippets in `show`                                           |
-
-Avoid spending a quarter on HTTP auth, multi-tenant sessions, or the generic affordance projector. Those serve deployment, not “complete tools for self-extension and development.”
-
-## What not to prioritize next
-
-- **More transports** — CLI, agent, MCP, HTTP, and gRPC already exist. Enough probes.
-- **Deeper kernel / more functors** — Checks already do real work; diminishing returns for the harness goal.
-- **Bigger self-model surface for demos** (`calc`-style) — Fun, but does not unlock new agent autonomy.
-- **Becoming Claude Code** — A full IDE agent without a model story abandons the project’s thesis. General read/edit is a **leaf** capability; the product remains model → generate → verify.
-
-## North star for the next phase
-
-Phrase the next milestone so it can fail loudly:
-
-> **An agent, with `--allow-writes`, can grow a capability in Theseus _and_ stand up a small foreign service from a goal string, using only the tool catalog — with a regression eval that stays green.**
-
-Break that into three shippable increments:
-
-1. **See/touch** — read/search/list (+ gated freeform write if needed)
-2. **Know** — eval corpus for self-mod goals
-3. **Elseware** — rooted sessions + adopter init/project driven by the agent
-
-## Suggested first ticket (smallest cut of #1)
-
-Add three read-only operations on Theseus (with solid `tool` descriptions and examples, learned the hard way from the slug run):
-
-1. `read` — `{ path, start_line?, end_line? } → String`
-2. `search` — `{ pattern, path? } → String` (substring match, capped output; a std-only walk — no new binary dependency, `rg` can come later if an eval wants regex)
-3. `list` — `{ path } → String`
-
-Wire them as pure handlers (direct `tokio::fs`, a std-only walk), root-guarded, no new ports, no `uses`. Extend system framing: “prefer `show` for modeled handlers; use `read`/`search` for everything else.” Then one eval: author a non-trivial adapter by reading an existing one via `search`+`read`, not only `show`.
-
-That single slice makes every later goal cheaper — self-mod and foreign software alike — without diluting the architecture story.
-
-## Bottom line
-
-The self-modifying core is already credible. Next work should convert that into a **complete development surface** (read/edit/eval first), then **generalize the session off the Theseus monorepo** so “other software” is the same loop on another model — not a separate human ritual in `adopters/`.
+After that is green, let observed failures choose between broader typed authored edits, an agent-visible bootstrap capability, and process-managed foreign rebuilds. More transports and deeper modeling machinery do not currently unlock the core workflow.
 
 ## Related docs
 
-- `docs/building-the-harness.md` — experiment log of growing the agent surface
-- `docs/second-adopter.md` — engine reusability proven from outside
-- `docs/affordance-projector.md` — contract vs surface affordances (resolved by simplification)
+- `docs/building-the-harness.md` — experiment log for growing the agent surface
+- `docs/second-adopter.md` — foreign-root and cold-open integration proof
+- `docs/affordance-projector.md` — contract versus surface affordances
+- `evals/README.md` — live goal results, distinct from deterministic tests
 - `README.md` / `CLAUDE.md` — product thesis and working map

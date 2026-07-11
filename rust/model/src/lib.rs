@@ -154,11 +154,13 @@ mod tests {
             checkpoint_paths(&model).expect("the ownership catalogue renders"),
             [
                 "Cargo.lock",
+                "Cargo.toml",
                 "rust/model/src/self_model.rs",
                 "rust/probe/Cargo.toml",
                 "rust/probe/src/generated.rs",
                 "rust/probe/src/lib.rs",
                 "rust/probe/src/service.rs",
+                "theseus.json",
             ]
         );
     }

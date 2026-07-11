@@ -1,7 +1,7 @@
 {
   "version": 1,
   "layout": {
-    "version": 1,
+    "version": 2,
     "project_id": "journal",
     "model_record": {
       "format": "json",

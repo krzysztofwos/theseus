@@ -1,9 +1,9 @@
 //! Versioned, data-driven layout for a modeled Rust workspace.
 //!
 //! The model describes architecture. A project layout describes where that
-//! architecture is projected. The version-one policy fixes the existing Rust
-//! workspace conventions and varies only the project identity and canonical
-//! model record, so checkpoint ownership can be reconstructed from stable data.
+//! architecture is projected. Each policy version fixes the Rust workspace
+//! conventions and varies only the project identity and canonical model record,
+//! so checkpoint ownership can be reconstructed from stable data.
 
 use std::{collections::BTreeSet, fmt, path::Component, str::FromStr};
 
@@ -16,12 +16,15 @@ use crate::{
     scaffold_files,
 };
 
-const RUST_WORKSPACE_LAYOUT_VERSION: u32 = 1;
+const RUST_WORKSPACE_LAYOUT_VERSION_V1: u32 = 1;
+const RUST_WORKSPACE_LAYOUT_VERSION: u32 = 2;
 const MAX_PROJECT_ID_BYTES: usize = 64;
 const MAX_LAYOUT_PATH_BYTES: usize = 4_096;
 const MAX_MODEL_HEADER_BYTES: usize = 64 * 1_024;
 const MAX_MODEL_FUNCTION_BYTES: usize = 256;
 const CARGO_LOCK_PATH: &str = "Cargo.lock";
+const ROOT_MANIFEST_PATH: &str = "Cargo.toml";
+const PROJECT_MANIFEST_PATH: &str = "theseus.json";
 
 /// A stable project identifier safe as one private-ref namespace component.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -313,7 +316,7 @@ impl<'de> Deserialize<'de> for ModelRecord {
     }
 }
 
-/// Version-one Rust/Cargo workspace policy for one project.
+/// Current Rust/Cargo workspace policy for one project.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RustWorkspaceLayout {
     project_id: ProjectId,
@@ -342,7 +345,7 @@ impl TryFrom<RustWorkspaceLayoutWire> for RustWorkspaceLayout {
     type Error = ProjectLayoutError;
 
     fn try_from(layout: RustWorkspaceLayoutWire) -> Result<Self, Self::Error> {
-        if layout.version != RUST_WORKSPACE_LAYOUT_VERSION {
+        if !RustWorkspaceLayout::supports_version(layout.version) {
             return Err(ProjectLayoutError::UnsupportedLayoutVersion {
                 version: layout.version,
             });
@@ -372,6 +375,11 @@ impl<'de> Deserialize<'de> for RustWorkspaceLayout {
 
 impl RustWorkspaceLayout {
     pub const VERSION: u32 = RUST_WORKSPACE_LAYOUT_VERSION;
+
+    /// Whether a serialized layout version can be migrated to the current policy.
+    pub fn supports_version(version: u32) -> bool {
+        matches!(version, RUST_WORKSPACE_LAYOUT_VERSION_V1 | Self::VERSION)
+    }
 
     pub fn new(project_id: ProjectId, model_record: ModelRecord) -> Self {
         Self {
@@ -411,7 +419,7 @@ impl RustWorkspaceLayout {
             });
         }
         files.push(model_record);
-        reject_model_record_lifecycle_collision(model, self.model_record.path())?;
+        reject_model_record_lifecycle_collision_v2(model, self.model_record.path())?;
         validate_generated_paths(&files)?;
         Ok(files)
     }
@@ -487,7 +495,7 @@ impl RustWorkspaceLayout {
 
     /// Every modeled Rust source whose contents are an authored project leaf.
     ///
-    /// Version one derives this allowlist from exact model ownership, then
+    /// The current policy derives this allowlist from exact model ownership, then
     /// removes generated projections and the canonical model record. It is
     /// independent of which files currently exist on disk.
     pub fn authored_rust_paths(&self, model: &Model) -> Result<Vec<String>, ProjectLayoutError> {
@@ -546,10 +554,11 @@ impl CheckpointProjectDescriptor {
         &self.model_record
     }
 
-    /// Reconstruct version-one ownership without consulting ambient state.
+    /// Reconstruct the descriptor's frozen ownership without ambient state.
     pub fn owned_paths(&self, model: &Model) -> Result<Vec<String>, ProjectLayoutError> {
         match self.version {
-            RUST_WORKSPACE_LAYOUT_VERSION => owned_paths_v1(model, self.model_record.path()),
+            RUST_WORKSPACE_LAYOUT_VERSION_V1 => owned_paths_v1(model, self.model_record.path()),
+            RUST_WORKSPACE_LAYOUT_VERSION => owned_paths_v2(model, self.model_record.path()),
             version => Err(ProjectLayoutError::UnsupportedLayoutVersion { version }),
         }
     }
@@ -626,7 +635,7 @@ impl<'de> Deserialize<'de> for CheckpointProjectDescriptor {
         D: Deserializer<'de>,
     {
         let wire = CheckpointProjectDescriptorWire::deserialize(deserializer)?;
-        if wire.version != RUST_WORKSPACE_LAYOUT_VERSION {
+        if !RustWorkspaceLayout::supports_version(wire.version) {
             return Err(D::Error::custom(
                 ProjectLayoutError::UnsupportedLayoutVersion {
                     version: wire.version,
@@ -756,7 +765,7 @@ fn owned_paths_v1(
 ) -> Result<Vec<String>, ProjectLayoutError> {
     validate_render_inputs(model)?;
     validate_layout_path(model_record_path)?;
-    reject_model_record_lifecycle_collision(model, model_record_path)?;
+    reject_model_record_lifecycle_collision_v1(model, model_record_path)?;
 
     let mut paths = BTreeSet::new();
     for path in generated_paths_v1(model)? {
@@ -780,6 +789,19 @@ fn owned_paths_v1(
         insert_owned_path(&mut paths, format!("rust/{dir}/src/adapters.rs"))?;
     }
     insert_owned_path(&mut paths, CARGO_LOCK_PATH.to_string())?;
+    Ok(paths.into_iter().collect())
+}
+
+fn owned_paths_v2(
+    model: &Model,
+    model_record_path: &str,
+) -> Result<Vec<String>, ProjectLayoutError> {
+    reject_model_record_lifecycle_collision_v2(model, model_record_path)?;
+    let mut paths: BTreeSet<String> = owned_paths_v1(model, model_record_path)?
+        .into_iter()
+        .collect();
+    insert_owned_path(&mut paths, ROOT_MANIFEST_PATH.to_string())?;
+    insert_owned_path(&mut paths, PROJECT_MANIFEST_PATH.to_string())?;
     Ok(paths.into_iter().collect())
 }
 
@@ -848,7 +870,7 @@ fn generated_paths_v1(model: &Model) -> Result<Vec<String>, ProjectLayoutError> 
     Ok(paths)
 }
 
-fn reject_model_record_lifecycle_collision(
+fn reject_model_record_lifecycle_collision_v1(
     model: &Model,
     model_record_path: &str,
 ) -> Result<(), ProjectLayoutError> {
@@ -871,6 +893,22 @@ fn reject_model_record_lifecycle_collision(
     }
     paths.push(CARGO_LOCK_PATH.to_string());
     if paths.iter().any(|path| path == model_record_path) {
+        return Err(ProjectLayoutError::PathCollision {
+            path: model_record_path.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn reject_model_record_lifecycle_collision_v2(
+    model: &Model,
+    model_record_path: &str,
+) -> Result<(), ProjectLayoutError> {
+    reject_model_record_lifecycle_collision_v1(model, model_record_path)?;
+    if matches!(
+        model_record_path,
+        ROOT_MANIFEST_PATH | PROJECT_MANIFEST_PATH
+    ) {
         return Err(ProjectLayoutError::PathCollision {
             path: model_record_path.to_string(),
         });
@@ -1145,16 +1183,21 @@ mod tests {
         let encoded = serde_json::to_string(&layout).unwrap();
         assert_eq!(
             encoded,
-            r#"{"version":1,"project_id":"fixture","model_record":{"format":"json","path":"model.json"}}"#
+            r#"{"version":2,"project_id":"fixture","model_record":{"format":"json","path":"model.json"}}"#
         );
         assert_eq!(
             serde_json::from_str::<RustWorkspaceLayout>(&encoded).unwrap(),
             layout
         );
 
-        let future = encoded.replacen("\"version\":1", "\"version\":2", 1);
+        let legacy = encoded.replacen("\"version\":2", "\"version\":1", 1);
+        let migrated = serde_json::from_str::<RustWorkspaceLayout>(&legacy).unwrap();
+        assert_eq!(migrated, layout);
+        assert_eq!(serde_json::to_string(&migrated).unwrap(), encoded);
+
+        let future = encoded.replacen("\"version\":2", "\"version\":3", 1);
         assert!(serde_json::from_str::<RustWorkspaceLayout>(&future).is_err());
-        let unknown = encoded.replacen("\"version\":1", "\"version\":1,\"future\":true", 1);
+        let unknown = encoded.replacen("\"version\":2", "\"version\":2,\"future\":true", 1);
         assert!(serde_json::from_str::<RustWorkspaceLayout>(&unknown).is_err());
     }
 
@@ -1283,7 +1326,7 @@ mod tests {
         let encoded = serde_json::to_string(&descriptor).unwrap();
         assert_eq!(
             encoded,
-            r#"{"version":1,"project_id":"fixture","model_record":{"format":"rust-builder","path":"rust/model/src/self_model.rs","header":"// canonical fixture model\n","function":"fixture_model"}}"#
+            r#"{"version":2,"project_id":"fixture","model_record":{"format":"rust-builder","path":"rust/model/src/self_model.rs","header":"// canonical fixture model\n","function":"fixture_model"}}"#
         );
         let restored: CheckpointProjectDescriptor = serde_json::from_str(&encoded).unwrap();
         assert_eq!(restored, descriptor);
@@ -1295,6 +1338,7 @@ mod tests {
             restored.owned_paths(&model).unwrap(),
             [
                 "Cargo.lock",
+                "Cargo.toml",
                 "rust/agent/Cargo.toml",
                 "rust/agent/src/adapters.rs",
                 "rust/agent/src/generated.rs",
@@ -1313,13 +1357,29 @@ mod tests {
                 "rust/grpc/src/generated.rs",
                 "rust/grpc/src/main.rs",
                 "rust/model/src/self_model.rs",
+                "theseus.json",
             ]
         );
 
-        let future = encoded.replacen("\"version\":1", "\"version\":2", 1);
+        let future = encoded.replacen("\"version\":2", "\"version\":3", 1);
         assert!(serde_json::from_str::<CheckpointProjectDescriptor>(&future).is_err());
-        let unknown = encoded.replacen("\"version\":1", "\"version\":1,\"future\":true", 1);
+        let unknown = encoded.replacen("\"version\":2", "\"version\":2,\"future\":true", 1);
         assert!(serde_json::from_str::<CheckpointProjectDescriptor>(&unknown).is_err());
+    }
+
+    #[test]
+    fn version_one_checkpoint_descriptor_retains_legacy_ownership() {
+        let model = project_model();
+        let current = serde_json::to_string(&rust_layout().checkpoint_descriptor()).unwrap();
+        let legacy = current.replacen("\"version\":2", "\"version\":1", 1);
+        let descriptor: CheckpointProjectDescriptor = serde_json::from_str(&legacy).unwrap();
+
+        assert_eq!(descriptor.version(), 1);
+        assert_eq!(serde_json::to_string(&descriptor).unwrap(), legacy);
+        let owned = descriptor.owned_paths(&model).unwrap();
+        assert!(owned.contains(&"Cargo.lock".to_string()));
+        assert!(!owned.contains(&"Cargo.toml".to_string()));
+        assert!(!owned.contains(&"theseus.json".to_string()));
     }
 
     #[test]
@@ -1337,5 +1397,14 @@ mod tests {
                 Err(ProjectLayoutError::PathCollision { .. })
             ));
         }
+
+        let layout = RustWorkspaceLayout::new(
+            ProjectId::new("fixture").unwrap(),
+            ModelRecord::json(PROJECT_MANIFEST_PATH).unwrap(),
+        );
+        assert!(matches!(
+            layout.owned_paths(&model),
+            Err(ProjectLayoutError::PathCollision { .. })
+        ));
     }
 }

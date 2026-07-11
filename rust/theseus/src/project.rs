@@ -161,7 +161,7 @@ impl ProjectContext {
                 version: versions.version,
             });
         }
-        if versions.layout.version != RustWorkspaceLayout::VERSION {
+        if !RustWorkspaceLayout::supports_version(versions.layout.version) {
             return Err(ProjectOpenError::UnsupportedLayoutVersion {
                 version: versions.layout.version,
             });
@@ -709,7 +709,7 @@ mod tests {
         let encoded = serde_json::to_string(&manifest).unwrap();
         assert_eq!(
             encoded,
-            r#"{"version":1,"layout":{"version":1,"project_id":"fixture","model_record":{"format":"json","path":"model.json"}}}"#
+            r#"{"version":1,"layout":{"version":2,"project_id":"fixture","model_record":{"format":"json","path":"model.json"}}}"#
         );
         assert_eq!(
             serde_json::from_str::<ProjectManifest>(&encoded).unwrap(),
@@ -739,6 +739,32 @@ mod tests {
     }
 
     #[test]
+    fn a_version_one_layout_manifest_opens_as_the_current_layout() {
+        let root = temporary_root("open-version-one");
+        let (model, layout) = json_project();
+        write_json_project(&root, &model, &layout);
+        let manifest_path = root.join(PROJECT_MANIFEST_PATH);
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        fs::write(
+            &manifest_path,
+            manifest.replacen(
+                "\"layout\": {\n    \"version\": 2",
+                "\"layout\": {\n    \"version\": 1",
+                1,
+            ),
+        )
+        .unwrap();
+
+        let project = ProjectContext::open(&root).unwrap();
+        assert_eq!(project.descriptor().version(), RustWorkspaceLayout::VERSION);
+        let owned = project.owned_paths(project.initial_model()).unwrap();
+        assert!(owned.contains(&"Cargo.toml".to_string()));
+        assert!(owned.contains(&PROJECT_MANIFEST_PATH.to_string()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn project_open_rejects_unknown_manifest_and_layout_versions() {
         let (model, layout) = json_project();
 
@@ -763,15 +789,15 @@ mod tests {
         fs::write(
             &manifest_path,
             manifest.replacen(
-                "\"layout\": {\n    \"version\": 1",
                 "\"layout\": {\n    \"version\": 2",
+                "\"layout\": {\n    \"version\": 3",
                 1,
             ),
         )
         .unwrap();
         assert!(matches!(
             ProjectContext::open(&layout_root),
-            Err(ProjectOpenError::UnsupportedLayoutVersion { version: 2 })
+            Err(ProjectOpenError::UnsupportedLayoutVersion { version: 3 })
         ));
 
         fs::remove_dir_all(manifest_root).unwrap();

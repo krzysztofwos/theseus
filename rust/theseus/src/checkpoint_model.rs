@@ -574,9 +574,18 @@ mod tests {
     fn version_one_ownership_matches_the_manifest_creation_policy() {
         let model = theseus_model::theseus_model();
         let snapshot = SnapshotModelV1::from(&model);
+        let mut descriptor = serde_json::to_value(
+            theseus_model::project_layout()
+                .unwrap()
+                .checkpoint_descriptor(),
+        )
+        .unwrap();
+        descriptor["version"] = serde_json::json!(1);
+        let descriptor: modeling::CheckpointProjectDescriptor =
+            serde_json::from_value(descriptor).unwrap();
         assert_eq!(
             snapshot.owned_paths().unwrap(),
-            theseus_model::checkpoint_paths(&model).unwrap()
+            descriptor.owned_paths(&model).unwrap()
         );
     }
 }

@@ -16,7 +16,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use theseus_modeling::{CheckpointProjectDescriptor, ProjectId};
+use theseus_modeling::{CheckpointProjectDescriptor, ProjectId, RustWorkspaceLayout};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -100,6 +100,7 @@ enum SnapshotNamespace {
 
 struct CapturedTree {
     object_id: GitObjectId,
+    parent: Option<GitObjectId>,
     tracked_paths: Vec<String>,
     file_modes: BTreeMap<String, u32>,
 }
@@ -435,6 +436,25 @@ impl GitCheckpoint {
         Ok(())
     }
 
+    fn validate_stored_project(
+        &self,
+        project: &CheckpointProjectDescriptor,
+    ) -> Result<(), GitCheckpointError> {
+        let expected = self.project.descriptor();
+        let migrated_legacy = project.version() != expected.version()
+            && expected.version() == RustWorkspaceLayout::VERSION
+            && RustWorkspaceLayout::supports_version(project.version())
+            && project.project_id() == expected.project_id()
+            && project.model_record() == expected.model_record();
+        if project != &expected && !migrated_legacy {
+            return Err(GitCheckpointError::ProjectMismatch {
+                expected: expected.project_id().clone(),
+                actual: project.project_id().clone(),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_snapshot_request(
         &self,
         request: &CheckpointSnapshotRequest,
@@ -575,11 +595,26 @@ impl GitCheckpoint {
         Ok(crate::FsMutation::begin_async(object_directory, Vec::new()).await?)
     }
 
-    async fn head(&self) -> Result<GitObjectId, GitCheckpointError> {
+    async fn head(&self) -> Result<Option<GitObjectId>, GitCheckpointError> {
         let output = self
-            .git_output("git rev-parse HEAD", &["rev-parse", "HEAD"], None)
+            .git_output_status_limited_in(
+                "git rev-parse HEAD",
+                &["rev-parse", "--verify", "--quiet", "HEAD"],
+                None,
+                None,
+                MAX_GIT_METADATA_BYTES,
+            )
             .await?;
-        Self::snapshot_id("git rev-parse HEAD", &output)
+        if output.status.success() {
+            return Self::snapshot_id("git rev-parse HEAD", &output).map(Some);
+        }
+        if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+            return Ok(None);
+        }
+        Err(GitCheckpointError::command_failed(
+            "git rev-parse HEAD",
+            &output,
+        ))
     }
 
     async fn pinned_commit(&self, reference: &str) -> Result<PinnedCommit, GitCheckpointError> {
@@ -626,8 +661,11 @@ impl GitCheckpoint {
     ) -> Result<CapturedTree, GitCheckpointError> {
         validate_workspace_paths(owned_paths)?;
         ensure_path_limit(owned_paths.len())?;
-        let head = self.head().await?;
-        let head_paths = self.tree_paths(&head).await?;
+        let parent = self.head().await?;
+        let head_paths = match &parent {
+            Some(head) => self.tree_paths(head).await?,
+            None => Vec::new(),
+        };
         let tracked = self.tracked_paths().await?;
 
         let mut tracked_paths: BTreeSet<String> = head_paths.into_iter().collect();
@@ -702,6 +740,7 @@ impl GitCheckpoint {
             .await?;
         Ok(CapturedTree {
             object_id: Self::snapshot_id("git write-tree", &output)?,
+            parent,
             tracked_paths: tracked_paths.into_iter().collect(),
             file_modes,
         })
@@ -710,20 +749,40 @@ impl GitCheckpoint {
     async fn create_snapshot_commit(
         &self,
         tree: &GitObjectId,
+        parent: Option<&GitObjectId>,
         manifest: &(impl Serialize + ?Sized),
         objects: Option<&GitObjectEnvironment>,
     ) -> Result<GitObjectId, GitCheckpointError> {
         let encoded = encode_manifest(manifest)?;
-        let head = self.head().await?;
-        let output = self
-            .git_input_in(
-                "git commit-tree",
-                &["commit-tree", tree.as_str(), "-p", head.as_str(), "-F", "-"],
-                None,
-                objects,
-                &encoded,
-            )
-            .await?;
+        let output = match parent {
+            Some(parent) => {
+                self.git_input_in(
+                    "git commit-tree",
+                    &[
+                        "commit-tree",
+                        tree.as_str(),
+                        "-p",
+                        parent.as_str(),
+                        "-F",
+                        "-",
+                    ],
+                    None,
+                    objects,
+                    &encoded,
+                )
+                .await?
+            }
+            None => {
+                self.git_input_in(
+                    "git commit-tree",
+                    &["commit-tree", tree.as_str(), "-F", "-"],
+                    None,
+                    objects,
+                    &encoded,
+                )
+                .await?
+            }
+        };
         Self::snapshot_id("git commit-tree", &output)
     }
 
@@ -839,7 +898,7 @@ impl GitCheckpoint {
                         message: "version-two snapshot has no project descriptor".to_string(),
                     }
                 })?;
-                self.validate_request_project(project)?;
+                self.validate_stored_project(project)?;
                 project
                     .owned_paths(&manifest.model.clone().into())
                     .map_err(|source| GitCheckpointError::InvalidModel { source })?
@@ -1315,6 +1374,18 @@ impl GitCheckpoint {
         Ok(changes)
     }
 
+    fn owned_paths_for_snapshot(
+        snapshot: &LoadedSnapshot,
+        current_model: &theseus_modeling::Model,
+    ) -> Result<Vec<String>, GitCheckpointError> {
+        match snapshot.manifest.project.as_ref() {
+            Some(project) => project
+                .owned_paths(current_model)
+                .map_err(|source| GitCheckpointError::InvalidModel { source }),
+            None => Ok(SnapshotModelV1::from(current_model).owned_paths()?),
+        }
+    }
+
     async fn git_text(
         &self,
         operation: &'static str,
@@ -1353,6 +1424,23 @@ impl GitCheckpoint {
         objects: Option<&GitObjectEnvironment>,
         maximum: usize,
     ) -> Result<std::process::Output, GitCheckpointError> {
+        let output = self
+            .git_output_status_limited_in(operation, args, index, objects, maximum)
+            .await?;
+        if !output.status.success() {
+            return Err(GitCheckpointError::command_failed(operation, &output));
+        }
+        Ok(output)
+    }
+
+    async fn git_output_status_limited_in(
+        &self,
+        operation: &'static str,
+        args: &[&str],
+        index: Option<&Path>,
+        objects: Option<&GitObjectEnvironment>,
+        maximum: usize,
+    ) -> Result<std::process::Output, GitCheckpointError> {
         let mut command = tokio::process::Command::new("git");
         configure_tokio_git(&mut command);
         command
@@ -1373,11 +1461,7 @@ impl GitCheckpoint {
         let child = command
             .spawn()
             .map_err(|source| GitCheckpointError::Launch { operation, source })?;
-        let output = bounded_git_output(child, operation, None, maximum).await?;
-        if !output.status.success() {
-            return Err(GitCheckpointError::command_failed(operation, &output));
-        }
-        Ok(output)
+        bounded_git_output(child, operation, None, maximum).await
     }
 
     async fn git_input(
@@ -1534,7 +1618,12 @@ impl Checkpoint for GitCheckpoint {
             model: &snapshot_model,
         };
         let snapshot = self
-            .create_snapshot_commit(&tree.object_id, &manifest, Some(&objects.environment))
+            .create_snapshot_commit(
+                &tree.object_id,
+                tree.parent.as_ref(),
+                &manifest,
+                Some(&objects.environment),
+            )
             .await?;
         #[cfg(test)]
         pause_after_snapshot_quarantine(self.project.root());
@@ -1566,7 +1655,8 @@ impl Checkpoint for GitCheckpoint {
         let mut mutation = self.repository_lease(request.expected.clone()).await?;
         let object_lease = self.object_database_lease().await?;
         let snapshot = self.load_snapshot(&request.reference).await?;
-        let changes = self.restore_plan(&snapshot, &request.owned_paths).await?;
+        let restore_owned = Self::owned_paths_for_snapshot(&snapshot, &request.model)?;
+        let changes = self.restore_plan(&snapshot, &restore_owned).await?;
         mutation.apply(&changes).await?;
         #[cfg(test)]
         pause_after_restore_apply(self.project.root());
@@ -1588,10 +1678,11 @@ impl Checkpoint for GitCheckpoint {
         let lease = self.repository_lease(request.expected.clone()).await?;
         let object_lease = self.object_database_lease().await?;
         let snapshot = self.load_snapshot(&request.reference).await?;
+        let diff_owned = Self::owned_paths_for_snapshot(&snapshot, &request.model)?;
         self.cleanup_temporary_indices().await?;
         let objects = self.temporary_object_store().await?;
         let current = self
-            .capture_tree_in(&request.owned_paths, Some(&objects.environment))
+            .capture_tree_in(&diff_owned, Some(&objects.environment))
             .await?;
         #[cfg(test)]
         pause_after_diff_capture(self.project.root());
@@ -1718,7 +1809,7 @@ fn encode_manifest(manifest: &(impl Serialize + ?Sized)) -> Result<Vec<u8>, GitC
     Ok(writer.bytes)
 }
 
-fn configure_tokio_git(command: &mut tokio::process::Command) {
+pub(crate) fn configure_tokio_git(command: &mut tokio::process::Command) {
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("GIT_") {
             command.env_remove(name);

@@ -638,7 +638,7 @@ mod git_checkpoint_tests {
     };
 
     use theseus_model::theseus_model;
-    use theseus_modeling::{ModelRecord, ProjectId, RustWorkspaceLayout};
+    use theseus_modeling::{CrateNode, ModelRecord, ProjectId, RustWorkspaceLayout, Service};
 
     use super::{
         Checkpoint, CheckpointSnapshotRequest, CheckpointStateRequest, FsMutation, GitCheckpoint,
@@ -935,7 +935,7 @@ mod git_checkpoint_tests {
         let manifest = snapshot_manifest(repository.directory.path(), &snapshot);
         assert_eq!(manifest["version"], 2);
         assert_eq!(manifest["project"]["project_id"], "theseus");
-        assert_eq!(manifest["project"]["version"], 1);
+        assert_eq!(manifest["project"]["version"], 2);
         assert!(
             git_stdout(
                 repository.directory.path(),
@@ -1052,6 +1052,95 @@ mod git_checkpoint_tests {
     }
 
     #[tokio::test]
+    async fn version_one_project_descriptors_remain_restorable_after_layout_migration() {
+        let repository = TestRepository::new();
+        let mut stale_request = snapshot_request(repository.directory.path(), "stale request");
+        let mut stale_descriptor =
+            serde_json::to_value(&stale_request.project).expect("the descriptor serializes");
+        stale_descriptor["version"] = serde_json::json!(1);
+        stale_request.project =
+            serde_json::from_value(stale_descriptor).expect("the V1 descriptor parses");
+        let error = repository
+            .checkpoint
+            .snapshot(&stale_request)
+            .await
+            .expect_err("new snapshot requests must use the current layout");
+        assert!(matches!(
+            error.downcast_ref::<GitCheckpointError>(),
+            Some(GitCheckpointError::ProjectMismatch { .. })
+        ));
+
+        fs::write(repository.path("tracked.txt"), "version one project\n")
+            .expect("the snapshot state is written");
+        let current = repository
+            .checkpoint
+            .snapshot(&snapshot_request(repository.directory.path(), "source"))
+            .await
+            .expect("the source snapshot succeeds")
+            .reference;
+        let root = repository.directory.path();
+        let tree = git_stdout(root, &["rev-parse", &format!("{current}^{{tree}}")]);
+        let parent = git_stdout(root, &["rev-parse", "HEAD"]);
+        let mut manifest = snapshot_manifest(root, &current);
+        manifest["project"]["version"] = serde_json::json!(1);
+        manifest["label"] = serde_json::json!("layout-v1");
+        manifest["nonce"] = serde_json::json!("layout-v1-fixture");
+        manifest["owned_paths"]
+            .as_array_mut()
+            .expect("owned paths are an array")
+            .retain(|path| path != "Cargo.toml" && path != "theseus.json");
+        let sequence = manifest["sequence"]
+            .as_u64()
+            .expect("the sequence is numeric");
+        let encoded = serde_json::to_vec(&manifest).expect("the V1 project manifest serializes");
+        let legacy = git_input_stdout(
+            root,
+            &["commit-tree", &tree, "-p", &parent, "-F", "-"],
+            &encoded,
+        );
+        let snapshot_ref = format!("{PROJECT_SNAPSHOT_REF_PREFIX}/{legacy}");
+        let order_ref =
+            format!("refs/theseus/projects/theseus/snapshot-order/{sequence:020}-{legacy}");
+        git(root, &["update-ref", &snapshot_ref, &legacy]);
+        git(root, &["update-ref", &order_ref, &legacy]);
+
+        fs::write(repository.path("tracked.txt"), "after snapshot\n")
+            .expect("the post-snapshot state is written");
+        fs::write(repository.path("Cargo.toml"), "preserve root manifest\n")
+            .expect("the current root manifest is written");
+        fs::write(
+            repository.path("theseus.json"),
+            "preserve project manifest\n",
+        )
+        .expect("the current project manifest is written");
+        let diff = repository
+            .checkpoint
+            .diff(&state_request(root, &legacy))
+            .await
+            .expect("the V1 project snapshot can be diffed under layout V2");
+        assert!(!diff.contains("Cargo.toml"), "{diff}");
+        assert!(!diff.contains("theseus.json"), "{diff}");
+        repository
+            .checkpoint
+            .restore(&state_request(root, &legacy))
+            .await
+            .expect("the V1 project descriptor restores under layout V2");
+
+        assert_eq!(
+            fs::read_to_string(repository.path("tracked.txt")).unwrap(),
+            "version one project\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.path("Cargo.toml")).unwrap(),
+            "preserve root manifest\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.path("theseus.json")).unwrap(),
+            "preserve project manifest\n"
+        );
+    }
+
+    #[tokio::test]
     async fn legacy_version_one_theseus_snapshots_remain_restorable_and_releasable() {
         let repository = TestRepository::new();
         fs::write(repository.path("tracked.txt"), "legacy snapshot\n")
@@ -1073,6 +1162,10 @@ mod git_checkpoint_tests {
             .remove("project");
         manifest["label"] = serde_json::json!("legacy");
         manifest["nonce"] = serde_json::json!("legacy-fixture");
+        manifest["owned_paths"]
+            .as_array_mut()
+            .expect("owned paths are an array")
+            .retain(|path| path != "Cargo.toml" && path != "theseus.json");
         let sequence = manifest["sequence"]
             .as_u64()
             .expect("the sequence is numeric");
@@ -1089,9 +1182,49 @@ mod git_checkpoint_tests {
 
         fs::write(repository.path("tracked.txt"), "after legacy\n")
             .expect("the post-snapshot state is written");
+        fs::write(repository.path("Cargo.toml"), "preserve root manifest\n")
+            .expect("the current root manifest is written");
+        fs::write(
+            repository.path("theseus.json"),
+            "preserve project manifest\n",
+        )
+        .expect("the current project manifest is written");
+        let mut current_model = theseus_model();
+        current_model.crates.push(CrateNode {
+            name: "legacy-extra".to_string(),
+            dir: "legacy-extra".to_string(),
+            layer: 0,
+            depends_on: Vec::new(),
+        });
+        current_model.services.push(Service {
+            name: "LegacyExtra".to_string(),
+            crate_name: "legacy-extra".to_string(),
+            operations: Vec::new(),
+            outbound: Vec::new(),
+        });
+        let current_project = ProjectContext::new(
+            root,
+            current_model,
+            theseus_model::project_layout().expect("the Theseus layout is valid"),
+        )
+        .expect("the current project context is valid");
+        let request = state_request_for(&current_project, &legacy);
+        let extra_path = repository.path("rust/legacy-extra/src/service.rs");
+        fs::create_dir_all(extra_path.parent().expect("the extra file has a parent"))
+            .expect("the extra crate directory is created");
+        fs::write(&extra_path, "modeled after snapshot\n")
+            .expect("the post-snapshot modeled file is written");
+        let diff = repository
+            .checkpoint
+            .diff(&request)
+            .await
+            .expect("the schema-V1 snapshot can be diffed under layout V2");
+        assert!(!diff.contains("Cargo.toml"), "{diff}");
+        assert!(!diff.contains("theseus.json"), "{diff}");
+        assert!(diff.contains("rust/legacy-extra/src/service.rs"), "{diff}");
         let restored = repository
             .checkpoint
-            .restore(&state_request(root, &legacy))
+            .restore(&request)
             .await
             .expect("the version-one snapshot restores");
         assert_eq!(restored.model, theseus_model());
@@ -1099,6 +1232,15 @@ mod git_checkpoint_tests {
             fs::read_to_string(repository.path("tracked.txt")).unwrap(),
             "legacy snapshot\n"
         );
+        assert_eq!(
+            fs::read_to_string(repository.path("Cargo.toml")).unwrap(),
+            "preserve root manifest\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.path("theseus.json")).unwrap(),
+            "preserve project manifest\n"
+        );
+        assert!(!extra_path.exists());
 
         repository
             .checkpoint

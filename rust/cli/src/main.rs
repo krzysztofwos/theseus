@@ -16,21 +16,50 @@
 
 mod generated;
 
+use std::path::PathBuf;
+
+use anyhow::Context as _;
 use clap::{Arg, Command};
 use generated::Invocation;
 use theseus::{
     CargoToolchain, Ctx, FsWorkspace, GitCheckpoint, ProjectContext, TheseusService,
-    theseus_project,
+    initialize_project, theseus_project, workspace_root,
 };
 use theseus_calculator::CalculatorService;
 use theseus_calculator_grpc_client::GrpcCalculatorClient;
 use theseus_http_client::HttpTheseusClient;
+use theseus_modeling::ProjectId;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     // `arg_required_else_help(true)` in the generated surface means a bare
     // invocation prints help and exits, so there is always a subcommand to parse.
     let matches = command().get_matches();
+    if let Some(("init", init)) = matches.subcommand() {
+        anyhow::ensure!(
+            matches.get_one::<String>("calculator").is_none(),
+            "--calculator configures a running service and cannot be combined with init"
+        );
+        let root = matches
+            .get_one::<String>("project")
+            .context("init requires --project ROOT")?;
+        let project_id = ProjectId::new(
+            init.get_one::<String>("id")
+                .context("init requires --id PROJECT_ID")?
+                .clone(),
+        )?;
+        let modeling_path = init
+            .get_one::<String>("modeling-path")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace_root().join("rust/modeling"));
+        let project = initialize_project(root, project_id, modeling_path).await?;
+        println!(
+            "initialized project {} at {}",
+            project.layout().project_id(),
+            project.root().display()
+        );
+        return Ok(());
+    }
     let invocation = Invocation::from_matches(&matches)?;
 
     // A remote composition: the generated HTTP client stands where the local
@@ -81,6 +110,23 @@ async fn main() -> anyhow::Result<()> {
 
 fn command() -> Command {
     generated::command()
+        .subcommand(
+            Command::new("init")
+                .about("Initialize an empty top-level Git repository as a modeled Rust project.")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .required(true)
+                        .value_name("PROJECT_ID")
+                        .help("Stable lowercase project identifier."),
+                )
+                .arg(
+                    Arg::new("modeling-path")
+                        .long("modeling-path")
+                        .value_name("PATH")
+                        .help("Local path to the theseus-modeling crate."),
+                ),
+        )
         .arg(
             Arg::new("remote")
                 .long("remote")
@@ -94,7 +140,7 @@ fn command() -> Command {
                 .global(true)
                 .value_name("ROOT")
                 .conflicts_with("remote")
-                .help("Drive a modeled project rooted at this path."),
+                .help("Open or initialize a modeled project rooted at this path."),
         )
         .arg(
             Arg::new("calculator")
@@ -217,6 +263,36 @@ mod tests {
             ])
             .expect_err("the project root may be passed once");
         assert_eq!(duplicate.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn init_carries_project_identity_and_engine_path() {
+        let matches = command()
+            .try_get_matches_from([
+                "theseus",
+                "--project",
+                "/tmp/new-project",
+                "init",
+                "--id",
+                "new-project",
+                "--modeling-path",
+                "/tmp/theseus-modeling",
+            ])
+            .expect("the initialization command parses");
+        let (_, init) = matches.subcommand().expect("init is selected");
+
+        assert_eq!(
+            matches.get_one::<String>("project").map(String::as_str),
+            Some("/tmp/new-project")
+        );
+        assert_eq!(
+            init.get_one::<String>("id").map(String::as_str),
+            Some("new-project")
+        );
+        assert_eq!(
+            init.get_one::<String>("modeling-path").map(String::as_str),
+            Some("/tmp/theseus-modeling")
+        );
     }
 
     #[test]

@@ -107,6 +107,45 @@ pub fn command() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("edit_rust_item")
+                .about(
+                    "Insert or replace one authorized top-level Rust item and compile-check it.",
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help(
+                            "Workspace-relative authored Rust file returned by `read`.",
+                        ),
+                )
+                .arg(
+                    Arg::new("revision")
+                        .long("revision")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("Complete-file revision returned by `read`."),
+                )
+                .arg(
+                    Arg::new("item")
+                        .long("item")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help(
+                            "One complete named top-level Rust item to insert or replace.",
+                        ),
+                )
+                .arg(
+                    Arg::new("replace")
+                        .long("replace")
+                        .action(ArgAction::SetTrue)
+                        .help(
+                            "Replace the same kind and name when true; require it to be absent when false.",
+                        ),
+                ),
+        )
+        .subcommand(
             Command::new("show")
                 .about("Show an operation's current handler source.")
                 .arg(
@@ -323,6 +362,18 @@ fn parse_implement_request(
     })
 }
 
+fn parse_rust_item_request(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::RustItemRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::RustItemRequest {
+        path: arg("path").unwrap_or_default(),
+        revision: arg("revision").unwrap_or_default(),
+        item: arg("item").unwrap_or_default(),
+        replace: matches.get_flag("replace"),
+    })
+}
+
 fn parse_show_request(matches: &ArgMatches) -> anyhow::Result<theseus::ShowRequest> {
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::ShowRequest {
@@ -395,6 +446,7 @@ pub enum Invocation {
     Patch(theseus::PatchRequest),
     Coverage,
     Implement(theseus::ImplementRequest),
+    EditRustItem(theseus::RustItemRequest),
     Show(theseus::ShowRequest),
     Check,
     Calc(theseus::CalcRequest),
@@ -424,6 +476,9 @@ impl Invocation {
             Some(("coverage", _)) => Ok(Invocation::Coverage),
             Some(("implement", sub)) => {
                 Ok(Invocation::Implement(parse_implement_request(sub)?))
+            }
+            Some(("edit_rust_item", sub)) => {
+                Ok(Invocation::EditRustItem(parse_rust_item_request(sub)?))
             }
             Some(("show", sub)) => Ok(Invocation::Show(parse_show_request(sub)?)),
             Some(("check", _)) => Ok(Invocation::Check),
@@ -481,6 +536,12 @@ pub async fn dispatch(
                 ?
             )
         }
+        Invocation::EditRustItem(request) => {
+            println!(
+                "{}", serde_json::to_string_pretty(& service.edit_rust_item(request).
+                await ?) ?
+            )
+        }
         Invocation::Show(request) => println!("{}", service.show(request). await ?),
         Invocation::Check => {
             println!("{}", serde_json::to_string_pretty(& service.check(). await ?) ?)
@@ -504,7 +565,11 @@ pub async fn dispatch(
         Invocation::Restart => {
             println!("{}", serde_json::to_string_pretty(& service.restart(). await ?) ?)
         }
-        Invocation::Read(request) => println!("{}", service.read(request). await ?),
+        Invocation::Read(request) => {
+            println!(
+                "{}", serde_json::to_string_pretty(& service.read(request). await ?) ?
+            )
+        }
         Invocation::Search(request) => println!("{}", service.search(request). await ?),
         Invocation::List(request) => println!("{}", service.list(request). await ?),
         Invocation::Lint => {

@@ -16,7 +16,7 @@ use crate::{
     GatedCheckpoint, GatedWorkspace, ProjectContext,
     generated::{Checkpoint, Ctx, Toolchain, Workspace, dispatch_tool},
     service::{
-        apply_patch, checkpoint_snapshot_request, checkpoint_state_request,
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, edit_rust_item_model,
         ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
     },
 };
@@ -149,6 +149,20 @@ impl<'a> Session<'a> {
             let request = crate::generated::parse_implement_request_input(input)?;
             let workspace = self.gate();
             let result = implement_model(
+                &self.project,
+                &self.state.working,
+                &self.state.persisted,
+                request,
+                &workspace,
+                self.toolchain,
+            )
+            .await?;
+            return Ok(serde_json::to_string(&result)?);
+        }
+        if name == "edit_rust_item" {
+            let request = crate::generated::parse_rust_item_request_input(input)?;
+            let workspace = self.gate();
+            let result = edit_rust_item_model(
                 &self.project,
                 &self.state.working,
                 &self.state.persisted,

@@ -116,6 +116,24 @@ impl theseus::TheseusService for GrpcTheseusClient {
         parsed("implement", &reply.into_inner().json)
     }
 
+    async fn edit_rust_item(
+        &self,
+        request: theseus::RustItemRequest,
+    ) -> anyhow::Result<theseus::RustItemResult> {
+        let reply = self
+            .stub
+            .clone()
+            .edit_rust_item(proto::RustItemRequest {
+                path: Some(request.path),
+                revision: Some(request.revision),
+                item: Some(request.item),
+                replace: request.replace,
+            })
+            .await
+            .map_err(|status| failed("edit_rust_item", status))?;
+        parsed("edit_rust_item", &reply.into_inner().json)
+    }
+
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {
         let reply = self
             .stub
@@ -251,7 +269,10 @@ impl theseus::TheseusService for GrpcTheseusClient {
         Ok(())
     }
 
-    async fn read(&self, request: theseus::ReadRequest) -> anyhow::Result<String> {
+    async fn read(
+        &self,
+        request: theseus::ReadRequest,
+    ) -> anyhow::Result<theseus::SourceDocument> {
         let reply = self
             .stub
             .clone()
@@ -260,7 +281,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             })
             .await
             .map_err(|status| failed("read", status))?;
-        Ok(reply.into_inner().value)
+        parsed("read", &reply.into_inner().json)
     }
 
     async fn search(&self, request: theseus::SearchRequest) -> anyhow::Result<String> {

@@ -111,6 +111,23 @@ impl theseus::TheseusService for HttpTheseusClient {
         parsed("implement", &body)
     }
 
+    async fn edit_rust_item(
+        &self,
+        request: theseus::RustItemRequest,
+    ) -> anyhow::Result<theseus::RustItemResult> {
+        let (status, body) = self
+            .post(
+                "edit_rust_item",
+                serde_json::json!(
+                    { "path" : request.path, "revision" : request.revision, "item" :
+                    request.item, "replace" : request.replace }
+                ),
+            )
+            .await?;
+        checked("edit_rust_item", status, &body)?;
+        parsed("edit_rust_item", &body)
+    }
+
     async fn show(&self, request: theseus::ShowRequest) -> anyhow::Result<String> {
         let (status, body) = self
             .post(
@@ -208,12 +225,15 @@ impl theseus::TheseusService for HttpTheseusClient {
         Ok(())
     }
 
-    async fn read(&self, request: theseus::ReadRequest) -> anyhow::Result<String> {
+    async fn read(
+        &self,
+        request: theseus::ReadRequest,
+    ) -> anyhow::Result<theseus::SourceDocument> {
         let (status, body) = self
             .post("read", serde_json::json!({ "path" : request.path }))
             .await?;
         checked("read", status, &body)?;
-        Ok(body)
+        parsed("read", &body)
     }
 
     async fn search(&self, request: theseus::SearchRequest) -> anyhow::Result<String> {

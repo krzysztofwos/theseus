@@ -314,6 +314,19 @@ pub struct ImplementRequest {
     pub adapter: Option<String>,
 }
 
+/// The `RustItemRequest` request.
+#[derive(Debug, Clone)]
+pub struct RustItemRequest {
+    /// Workspace-relative authored Rust file returned by `read`.
+    pub path: String,
+    /// Complete-file revision returned by `read`.
+    pub revision: String,
+    /// One complete named top-level Rust item to insert or replace.
+    pub item: String,
+    /// Replace the same kind and name when true; require it to be absent when false.
+    pub replace: bool,
+}
+
 /// The `ShowRequest` request.
 #[derive(Debug, Clone)]
 pub struct ShowRequest {
@@ -454,6 +467,14 @@ pub trait TheseusService: Send + Sync {
         Err(Unimplemented("implement").into())
     }
 
+    /// Insert or replace one authorized top-level Rust item and compile-check it.
+    async fn edit_rust_item(
+        &self,
+        _request: RustItemRequest,
+    ) -> anyhow::Result<theseus::RustItemResult> {
+        Err(Unimplemented("edit_rust_item").into())
+    }
+
     /// Show an operation's current handler source.
     async fn show(&self, _request: ShowRequest) -> anyhow::Result<String> {
         Err(Unimplemented("show").into())
@@ -510,7 +531,10 @@ pub trait TheseusService: Send + Sync {
     }
 
     /// Read a workspace file, capped for a tool result.
-    async fn read(&self, _request: ReadRequest) -> anyhow::Result<String> {
+    async fn read(
+        &self,
+        _request: ReadRequest,
+    ) -> anyhow::Result<theseus::SourceDocument> {
         Err(Unimplemented("read").into())
     }
 
@@ -626,6 +650,13 @@ for Standalone<
         self.ctx().implement(request).await
     }
 
+    async fn edit_rust_item(
+        &self,
+        request: RustItemRequest,
+    ) -> anyhow::Result<theseus::RustItemResult> {
+        self.ctx().edit_rust_item(request).await
+    }
+
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
         self.ctx().show(request).await
     }
@@ -670,7 +701,10 @@ for Standalone<
         self.ctx().restart().await
     }
 
-    async fn read(&self, request: ReadRequest) -> anyhow::Result<String> {
+    async fn read(
+        &self,
+        request: ReadRequest,
+    ) -> anyhow::Result<theseus::SourceDocument> {
         self.ctx().read(request).await
     }
 
@@ -726,7 +760,12 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
         "string" }, "body" : { "type" : "string" }, "port" : { "type" : "string" },
         "adapter" : { "type" : "string" } }, "required" : ["method", "body"] } }),
-        serde_json::json!({ "name" : "show", "description" :
+        serde_json::json!({ "name" : "edit_rust_item", "description" :
+        "Edit one complete named top-level Rust item in an existing project-owned authored file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
+        "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
+        "string" }, "revision" : { "type" : "string" }, "item" : { "type" : "string" },
+        "replace" : { "type" : "boolean" } }, "required" : ["path", "revision", "item"] }
+        }), serde_json::json!({ "name" : "show", "description" :
         "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). With `port`, `method` names one of that port's methods and the adapter method shows instead — `adapter` picks the implementing type when the file holds more than one. For a method with no authored source yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
         "string" }, "port" : { "type" : "string" }, "adapter" : { "type" : "string" } },
@@ -764,7 +803,7 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "read", "description" :
-        "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
+        "Read a file from the workspace with a complete-file revision and capped contents. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Prefer `show` for a modeled handler or adapter method and use `search` first to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
         "string" } }, "required" : ["path"] } }), serde_json::json!({ "name" : "search",
         "description" :
@@ -838,6 +877,31 @@ pub(crate) fn parse_implement_request_input(
                 input.get("adapter").cloned().unwrap_or(serde_json::Value::Null),
             )
             .map_err(|error| anyhow::anyhow!("the `adapter` field is invalid: {error}"))?,
+    })
+}
+pub(crate) fn parse_rust_item_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<RustItemRequest> {
+    Ok(RustItemRequest {
+        path: input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+        revision: input
+            .get("revision")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `revision`"))?,
+        item: input
+            .get("item")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `item`"))?,
+        replace: input
+            .get("replace")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default(),
     })
 }
 pub(crate) fn parse_show_request_input(
@@ -963,6 +1027,13 @@ pub async fn dispatch_tool(
                 )?,
             )
         }
+        "edit_rust_item" => {
+            Ok(
+                serde_json::to_string(
+                    &service.edit_rust_item(parse_rust_item_request_input(input)?).await?,
+                )?,
+            )
+        }
         "show" => Ok(service.show(parse_show_request_input(input)?).await?),
         "check" => Ok(serde_json::to_string(&service.check().await?)?),
         "scaffold" => Ok(serde_json::to_string(&service.scaffold().await?)?),
@@ -973,13 +1044,19 @@ pub async fn dispatch_tool(
         "prune" => Ok(service.prune(parse_snapshot_retention_input(input)?).await?),
         "diff" => Ok(service.diff(parse_snapshot_ref_input(input)?).await?),
         "restart" => Ok(serde_json::to_string(&service.restart().await?)?),
-        "read" => Ok(service.read(parse_read_request_input(input)?).await?),
+        "read" => {
+            Ok(
+                serde_json::to_string(
+                    &service.read(parse_read_request_input(input)?).await?,
+                )?,
+            )
+        }
         "search" => Ok(service.search(parse_search_request_input(input)?).await?),
         "list" => Ok(service.list(parse_list_request_input(input)?).await?),
         "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint"
             )
         }
     }

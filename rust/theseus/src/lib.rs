@@ -19,8 +19,10 @@ mod checkpoint_model;
 mod generated;
 mod implement_result;
 mod project;
+mod rust_item_result;
 mod service;
 mod session;
+mod source_document;
 mod stateful;
 
 pub use check_report::CheckReport;
@@ -31,7 +33,9 @@ pub use project::{
     ProjectBindingError, ProjectContext, ProjectContextError, ProjectPathError, ProjectRootError,
     theseus_project,
 };
+pub use rust_item_result::RustItemResult;
 pub use session::{Session, SessionState};
+pub use source_document::SourceDocument;
 pub use stateful::StatefulSession;
 pub use theseus_workspace::{
     ExpectedFile, ExpectedFileSet, FsMutation, MutationError, MutationFile, MutationTarget,
@@ -440,11 +444,11 @@ impl Toolchain for CargoToolchain {
         self.project.validate_root()?;
         run_cargo(
             self.project.root(),
-            &["check", "--workspace", "--quiet"],
-            "cargo check --workspace",
-            "the workspace compiles",
-            "the workspace compiles, with warnings",
-            "check failed",
+            &["check", "--workspace", "--all-targets", "--quiet"],
+            "cargo check --workspace --all-targets",
+            "every workspace target compiles",
+            "every workspace target compiles, with warnings",
+            "all-target check failed",
         )
         .await
     }

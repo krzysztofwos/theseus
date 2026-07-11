@@ -72,6 +72,32 @@ fn parse_implement_request_http(
     })
 }
 
+fn parse_rust_item_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::RustItemRequest> {
+    Ok(theseus::RustItemRequest {
+        path: input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+        revision: input
+            .get("revision")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `revision`"))?,
+        item: input
+            .get("item")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `item`"))?,
+        replace: input
+            .get("replace")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default(),
+    })
+}
+
 fn parse_show_request_http(
     input: &serde_json::Value,
 ) -> anyhow::Result<theseus::ShowRequest> {
@@ -219,6 +245,12 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
+        "edit_rust_item" => {
+            match parse_rust_item_request_http(input) {
+                Ok(request) => reply_json(service.edit_rust_item(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
         "show" => {
             match parse_show_request_http(input) {
                 Ok(request) => reply_text(service.show(request).await),
@@ -267,7 +299,7 @@ pub async fn handle(
         "restart" => reply_json(service.restart().await),
         "read" => {
             match parse_read_request_http(input) {
-                Ok(request) => reply_text(service.read(request).await),
+                Ok(request) => reply_json(service.read(request).await),
                 Err(error) => error_body(400, &error),
             }
         }

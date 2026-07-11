@@ -66,6 +66,22 @@ message ImplementResult {
   string json = 1;
 }
 
+message RustItemRequest {
+  // Workspace-relative authored Rust file returned by `read`.
+  optional string path = 1;
+  // Complete-file revision returned by `read`.
+  optional string revision = 2;
+  // One complete named top-level Rust item to insert or replace.
+  optional string item = 3;
+  // Replace the same kind and name when true; require it to be absent when false.
+  bool replace = 4;
+}
+
+// The JSON rendering of the `RustItemResult` response.
+message RustItemResult {
+  string json = 1;
+}
+
 message ShowRequest {
   // Name of the operation — or, with `port`, the port method — to show.
   optional string method = 1;
@@ -119,6 +135,11 @@ message SnapshotRetention {
 message ReadRequest {
   // The workspace-relative file to read.
   optional string path = 1;
+}
+
+// The JSON rendering of the `SourceDocument` response.
+message SourceDocument {
+  string json = 1;
 }
 
 message SearchRequest {
@@ -184,6 +205,8 @@ service Theseus {
   rpc Coverage (Empty) returns (CoverageReport);
   // Splice an authored handler or adapter method and compile-check it.
   rpc Implement (ImplementRequest) returns (ImplementResult);
+  // Insert or replace one authorized top-level Rust item and compile-check it.
+  rpc EditRustItem (RustItemRequest) returns (RustItemResult);
   // Show an operation's current handler source.
   rpc Show (ShowRequest) returns (HandlerSource);
   // Compile-check the workspace and report the outcome.
@@ -207,7 +230,7 @@ service Theseus {
   // Compile-check readiness for an inbound-managed process restart.
   rpc Restart (Empty) returns (Empty);
   // Read a workspace file, capped for a tool result.
-  rpc Read (ReadRequest) returns (String);
+  rpc Read (ReadRequest) returns (SourceDocument);
   // Find a pattern's occurrences across the workspace.
   rpc Search (SearchRequest) returns (String);
   // List a workspace directory.

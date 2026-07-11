@@ -6,8 +6,8 @@ use std::{
 };
 
 use theseus::{
-    CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, QueryRequest, ReadRequest, Session,
-    StatefulSession, TheseusService as _,
+    CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, QueryRequest, ReadRequest,
+    RustItemResult, Session, SourceDocument, StatefulSession, TheseusService as _,
 };
 use theseus_modeling::{Model, ModelRecord, ProjectId, RustWorkspaceLayout};
 
@@ -161,6 +161,57 @@ async fn a_session_develops_and_restores_a_foreign_project() {
     .unwrap();
     assert_eq!(implemented["applied"], true, "{implemented:#}");
 
+    let authored: SourceDocument = serde_json::from_str(
+        &session
+            .call(
+                "read",
+                &serde_json::json!({ "path": "rust/journal/src/service.rs" }),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!authored.truncated);
+    let rejected: RustItemResult = serde_json::from_str(
+        &session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": authored.path,
+                    "revision": authored.revision,
+                    "item": "#[cfg(test)]\nmod rejected_governed_test { #[test] fn does_not_compile() { missing_symbol(); } }",
+                    "replace": false
+                }),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!rejected.applied, "{}", rejected.detail);
+    assert!(!rejected.check.ok);
+    assert_eq!(
+        fs::read_to_string(&service_path).unwrap(),
+        authored.contents
+    );
+
+    let accepted: RustItemResult = serde_json::from_str(
+        &session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": authored.path,
+                    "revision": rejected.revision,
+                    "item": "#[cfg(test)]\nmod governed_test { #[test] fn journal_count_contract_is_executable() { assert_eq!(2 + 2, 4); } }",
+                    "replace": false
+                }),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(accepted.applied, "{}", accepted.detail);
+    assert_eq!(accepted.item, "mod:governed_test");
+
     for operation in ["check", "test"] {
         let report: serde_json::Value = serde_json::from_str(
             &session
@@ -218,7 +269,7 @@ async fn a_session_develops_and_restores_a_foreign_project() {
         })
         .await
         .unwrap();
-    assert!(model_record.contains("Journal"));
+    assert!(model_record.contents.contains("Journal"));
     let operations = stateful
         .query(QueryRequest {
             find: Some("count".to_string()),

@@ -14,9 +14,10 @@ use tokio::sync::Mutex;
 use crate::{
     CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedWorkspace, GitCheckpoint,
     ImplementRequest, ListRequest, PatchRequest, ProjectContext, ProjectContextError, QueryRequest,
-    ReadRequest, ShowRequest, SnapshotRef, SnapshotRequest, TheseusService, Toolchain, Workspace,
+    ReadRequest, RustItemRequest, ShowRequest, SnapshotRef, SnapshotRequest, SourceDocument,
+    TheseusService, Toolchain, Workspace,
     service::{
-        apply_patch, checkpoint_snapshot_request, checkpoint_state_request,
+        apply_patch, checkpoint_snapshot_request, checkpoint_state_request, edit_rust_item_model,
         ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
     },
 };
@@ -173,6 +174,22 @@ where
         .await
     }
 
+    async fn edit_rust_item(
+        &self,
+        request: RustItemRequest,
+    ) -> anyhow::Result<crate::RustItemResult> {
+        let state = self.state.lock().await;
+        edit_rust_item_model(
+            &self.project,
+            &state.working,
+            &state.persisted,
+            request,
+            &self.workspace,
+            &self.toolchain,
+        )
+        .await
+    }
+
     async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         self.ctx(&state.working).show(request).await
@@ -252,7 +269,7 @@ where
         self.ctx(&state.working).restart().await
     }
 
-    async fn read(&self, request: ReadRequest) -> anyhow::Result<String> {
+    async fn read(&self, request: ReadRequest) -> anyhow::Result<SourceDocument> {
         let state = self.state.lock().await;
         self.ctx(&state.working).read(request).await
     }

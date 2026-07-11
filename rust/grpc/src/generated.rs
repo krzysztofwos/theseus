@@ -156,6 +156,43 @@ for GrpcTheseus<S> {
         }
     }
 
+    async fn edit_rust_item(
+        &self,
+        request: tonic::Request<proto::RustItemRequest>,
+    ) -> Result<tonic::Response<proto::RustItemResult>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .edit_rust_item(theseus::RustItemRequest {
+                path: request
+                    .path
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `path` is required",
+                    ))?,
+                revision: request
+                    .revision
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `revision` is required",
+                    ))?,
+                item: request
+                    .item
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `item` is required",
+                    ))?,
+                replace: request.replace,
+            })
+            .await;
+        match outcome {
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::RustItemResult { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
+            Err(error) => Err(status(&error)),
+        }
+    }
+
     async fn show(
         &self,
         request: tonic::Request<proto::ShowRequest>,
@@ -377,7 +414,7 @@ for GrpcTheseus<S> {
     async fn read(
         &self,
         request: tonic::Request<proto::ReadRequest>,
-    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::SourceDocument>, tonic::Status> {
         let request = request.into_inner();
         let outcome = self
             .0
@@ -390,7 +427,12 @@ for GrpcTheseus<S> {
             })
             .await;
         match outcome {
-            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Ok(value) => {
+                match serde_json::to_string(&value) {
+                    Ok(json) => Ok(tonic::Response::new(proto::SourceDocument { json })),
+                    Err(error) => Err(tonic::Status::internal(error.to_string())),
+                }
+            }
             Err(error) => Err(status(&error)),
         }
     }

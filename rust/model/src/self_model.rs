@@ -203,6 +203,28 @@ pub fn theseus_model() -> Model {
                 ),
             ],
         )
+        .struct_type(
+            "RustItemRequest",
+            &[
+                (
+                    "path",
+                    "String",
+                    "Workspace-relative authored Rust file returned by `read`.",
+                ),
+                ("revision", "String", "Complete-file revision returned by `read`."),
+                (
+                    "item",
+                    "String",
+                    "One complete named top-level Rust item to insert or replace.",
+                ),
+                (
+                    "replace",
+                    "bool",
+                    "Replace the same kind and name when true; require it to be absent when false.",
+                ),
+            ],
+        )
+        .foreign_type("RustItemResult", "theseus::RustItemResult")
         .foreign_type("HandlerSource", "String")
         .struct_type(
             "ShowRequest",
@@ -250,6 +272,7 @@ pub fn theseus_model() -> Model {
             "SnapshotRetention",
             &[("keep", "u32", "Number of newest snapshots to retain.")],
         )
+        .foreign_type("SourceDocument", "theseus::SourceDocument")
         .struct_type(
             "ReadRequest",
             &[("path", "String", "The workspace-relative file to read.")],
@@ -368,6 +391,16 @@ pub fn theseus_model() -> Model {
                     "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
                 )
                 .operation(
+                    "edit_rust_item",
+                    "Insert or replace one authorized top-level Rust item and compile-check it.",
+                    "RustItemRequest",
+                    "RustItemResult",
+                )
+                .uses(&["project", "workspace", "toolchain"])
+                .tool(
+                    "Edit one complete named top-level Rust item in an existing project-owned authored file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
+                )
+                .operation(
                     "show",
                     "Show an operation's current handler source.",
                     "ShowRequest",
@@ -478,11 +511,11 @@ pub fn theseus_model() -> Model {
                     "read",
                     "Read a workspace file, capped for a tool result.",
                     "ReadRequest",
-                    "String",
+                    "SourceDocument",
                 )
                 .uses(&["project"])
                 .tool(
-                    "Read a file from the workspace. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. The result is capped, so `search` first to find the right spot. Prefer `show` for an operation's handler or an adapter method — `read` reaches everything else: authored composition roots, generated files, manifests, docs. Example: { \"path\": \"README.md\" }.",
+                    "Read a file from the workspace with a complete-file revision and capped contents. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Prefer `show` for a modeled handler or adapter method and use `search` first to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
                 )
                 .operation(
                     "search",

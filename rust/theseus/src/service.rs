@@ -9,16 +9,17 @@
 
 use anyhow::Context;
 use theseus_modeling::{
-    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport, apply_edits,
-    coverage, describe, handler_source, query, scaffold_files, verify,
+    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, RustItemEdit, RustItemMode,
+    VerifyReport, apply_edits, coverage, describe, edit_rust_item as splice_rust_item,
+    handler_source, query, rust_source_revision, scaffold_files, verify,
 };
 
 use crate::{
     CheckReport, CheckpointSnapshotRequest, CheckpointStateRequest, ExpectedFile, ExpectedFileSet,
-    ImplementResult, MutationFile, PendingMutation, ProjectContext,
+    ImplementResult, MutationFile, PendingMutation, ProjectContext, RustItemResult, SourceDocument,
     generated::{
-        CalcRequest, Checkpoint, Ctx, ImplementRequest, PatchRequest, QueryRequest, ShowRequest,
-        TheseusService, Toolchain, Workspace,
+        CalcRequest, Checkpoint, Ctx, ImplementRequest, PatchRequest, QueryRequest,
+        RustItemRequest, ShowRequest, TheseusService, Toolchain, Workspace,
     },
 };
 
@@ -56,13 +57,13 @@ impl TheseusService for Ctx<'_> {
         self.toolchain.lint().await
     }
 
-    async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<String> {
+    async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<SourceDocument> {
         let project = self.project.context().await?;
         let path = project.resolve_existing(&request.path)?;
         let text = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("reading {}", request.path))?;
-        Ok(crate::head(&text))
+        Ok(SourceDocument::new(request.path, &text))
     }
 
     async fn search(&self, request: crate::generated::SearchRequest) -> anyhow::Result<String> {
@@ -104,6 +105,19 @@ impl TheseusService for Ctx<'_> {
         }
         entries.sort();
         Ok(entries.join("\n"))
+    }
+
+    async fn edit_rust_item(&self, request: RustItemRequest) -> anyhow::Result<RustItemResult> {
+        let project = self.project.context().await?;
+        edit_rust_item_model(
+            &project,
+            self.model,
+            self.model,
+            request,
+            self.workspace,
+            self.toolchain,
+        )
+        .await
     }
 
     async fn restart(&self) -> anyhow::Result<()> {
@@ -596,6 +610,61 @@ pub(crate) async fn implement_model(
             applied: false,
             path: path.clone(),
             detail: format!("did not write {wrote} into {path}; the compile gate rolled it back"),
+            check,
+        }),
+    }
+}
+
+pub(crate) async fn edit_rust_item_model(
+    project: &ProjectContext,
+    model: &Model,
+    expected: &Model,
+    request: RustItemRequest,
+    workspace: &dyn Workspace,
+    toolchain: &dyn Toolchain,
+) -> anyhow::Result<RustItemResult> {
+    ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
+    project
+        .layout()
+        .authorize_authored_rust_path(model, &request.path)?;
+    let mut mutation = begin_mutation(project, expected, model, workspace).await?;
+    let source = mutation.read_to_string(&request.path).await?;
+    let previous_revision = rust_source_revision(&source);
+    let edited = splice_rust_item(
+        &source,
+        &request.revision,
+        &RustItemEdit {
+            mode: if request.replace {
+                RustItemMode::Replace
+            } else {
+                RustItemMode::Insert
+            },
+            item: request.item,
+        },
+    )?;
+    let item = edited.identity;
+    let new_revision = edited.new_revision;
+    let mut changes = vec![MutationFile::text(request.path.clone(), edited.source)];
+    protect_cargo_lock(mutation.as_ref(), &mut changes).await?;
+    mutation.apply(&changes).await?;
+    match finish_mutation(mutation, toolchain).await? {
+        TransactionCheck::Committed(check) => Ok(RustItemResult {
+            applied: true,
+            path: request.path.clone(),
+            item: item.clone(),
+            revision: new_revision,
+            detail: format!("wrote `{item}` into {}", request.path),
+            check,
+        }),
+        TransactionCheck::RolledBack(check) => Ok(RustItemResult {
+            applied: false,
+            path: request.path.clone(),
+            item: item.clone(),
+            revision: previous_revision,
+            detail: format!(
+                "did not write `{item}` into {}; the all-target compile gate rolled it back",
+                request.path
+            ),
             check,
         }),
     }
@@ -1499,7 +1568,15 @@ mod tests {
         .call("read", &serde_json::json!({ "path": "Cargo.toml" }))
         .await
         .expect("the read tool runs");
-        assert!(result.contains("[workspace]"), "{result}");
+        let document: crate::SourceDocument =
+            serde_json::from_str(&result).expect("read returns a structured source document");
+        assert_eq!(document.path, "Cargo.toml");
+        assert!(document.contents.contains("[workspace]"));
+        assert!(!document.truncated);
+        assert_eq!(
+            document.revision,
+            theseus_modeling::rust_source_revision(&document.contents)
+        );
     }
 
     #[tokio::test]
@@ -1519,6 +1596,148 @@ mod tests {
             error.downcast_ref::<crate::ProjectPathError>().is_some(),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn the_rust_item_tool_commits_one_authorized_item() {
+        let path = "rust/theseus/src/service.rs";
+        let source = std::fs::read_to_string(crate::workspace_root().join(path)).unwrap();
+        let recording = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&recording));
+        let mut session = Session::new(
+            project(),
+            &workspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        );
+
+        let response = session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": path,
+                    "revision": theseus_modeling::rust_source_revision(&source),
+                    "item": "#[cfg(test)]\nfn governed_item_probe() {}",
+                    "replace": false
+                }),
+            )
+            .await
+            .expect("the authorized Rust item is edited");
+        let result: crate::RustItemResult = serde_json::from_str(&response).unwrap();
+        assert!(result.applied, "{}", result.detail);
+        assert_eq!(result.item, "fn:governed_item_probe");
+
+        let recording = recording.lock().unwrap();
+        let edited = recording
+            .applied
+            .iter()
+            .find(|file| file.path == path)
+            .and_then(crate::MutationFile::text_contents)
+            .expect("the authorized file is in the atomic write set");
+        assert!(edited.starts_with(&source));
+        assert!(edited.contains("fn governed_item_probe() {}"));
+        assert_eq!(
+            result.revision,
+            theseus_modeling::rust_source_revision(edited)
+        );
+        assert_eq!(recording.commits, 1);
+        assert_eq!(recording.rollbacks, 0);
+    }
+
+    #[tokio::test]
+    async fn the_rust_item_tool_rejects_stale_and_generated_sources() {
+        let path = "rust/theseus/src/service.rs";
+        let recording = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&recording));
+        let mut session = Session::new(
+            project(),
+            &workspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        );
+
+        let stale = session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": path,
+                    "revision": "0000000000000000",
+                    "item": "fn never_written() {}",
+                    "replace": false
+                }),
+            )
+            .await
+            .expect_err("a stale source observation is refused");
+        assert!(matches!(
+            stale.downcast_ref::<theseus_modeling::RustItemEditError>(),
+            Some(theseus_modeling::RustItemEditError::StaleRevision { .. })
+        ));
+
+        let generated = session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": "rust/theseus/src/generated.rs",
+                    "revision": "irrelevant",
+                    "item": "fn never_written() {}",
+                    "replace": false
+                }),
+            )
+            .await
+            .expect_err("a generated projection is never authored");
+        assert!(matches!(
+            generated.downcast_ref::<theseus_modeling::ProjectLayoutError>(),
+            Some(theseus_modeling::ProjectLayoutError::AuthoredRustPathNotAuthorized { .. })
+        ));
+
+        let recording = recording.lock().unwrap();
+        assert!(recording.applied.is_empty());
+        assert_eq!(recording.commits, 0);
+        assert_eq!(recording.rollbacks, 0);
+    }
+
+    #[tokio::test]
+    async fn the_rust_item_tool_rolls_back_a_failed_all_target_check() {
+        let path = "rust/theseus/src/service.rs";
+        let source = std::fs::read_to_string(crate::workspace_root().join(path)).unwrap();
+        let recording = Arc::new(Mutex::new(MutationRecording::default()));
+        let workspace = RecordingWorkspace(Arc::clone(&recording));
+        let mut session = Session::new(
+            project(),
+            &workspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &FailingToolchain,
+            true,
+        );
+
+        let response = session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": path,
+                    "revision": theseus_modeling::rust_source_revision(&source),
+                    "item": "fn rejected_item_probe() {}",
+                    "replace": false
+                }),
+            )
+            .await
+            .expect("compile failure is a structured edit outcome");
+        let result: crate::RustItemResult = serde_json::from_str(&response).unwrap();
+        assert!(!result.applied);
+        assert_eq!(
+            result.revision,
+            theseus_modeling::rust_source_revision(&source)
+        );
+        assert!(!result.check.ok);
+
+        let recording = recording.lock().unwrap();
+        assert_eq!(recording.commits, 0);
+        assert_eq!(recording.rollbacks, 1);
     }
 
     #[tokio::test]

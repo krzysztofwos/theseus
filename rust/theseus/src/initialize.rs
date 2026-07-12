@@ -626,7 +626,8 @@ fn initial_changes(
         match file.path.as_str() {
             "rust/app/Cargo.toml" => {
                 file.contents
-                    .push_str("serde_json = { workspace = true }\n");
+                    .push_str("serde_json = { workspace = true }\n\n[dev-dependencies]\n");
+                file.contents.push_str("tokio = { workspace = true }\n");
             }
             "rust/app/src/lib.rs" => file.contents.push_str(initial_app_authored_source()),
             "rust/app-cli/src/main.rs" => {

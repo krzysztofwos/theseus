@@ -133,6 +133,50 @@ async fn an_empty_project_becomes_a_working_and_recoverable_service() {
     .unwrap();
     assert_eq!(implemented["applied"], true, "{implemented:#}");
 
+    let service: SourceDocument = serde_json::from_str(
+        &session
+            .call(
+                "read",
+                &serde_json::json!({ "path": "rust/app/src/service.rs" }),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let tested_handler: RustItemResult = serde_json::from_str(
+        &session
+            .call(
+                "edit_rust_item",
+                &serde_json::json!({
+                    "path": service.path,
+                    "revision": service.revision,
+                    "replace": false,
+                    "item": r#"#[cfg(test)]
+mod tests {
+    use crate::{AppService, MemoryStore, Standalone};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hello_returns_the_initialized_greeting() {
+        let app = Standalone {
+            model: crate::load_model().expect("the initialized model loads"),
+            store: MemoryStore,
+        };
+
+        assert_eq!(
+            app.hello().await.expect("the hello operation succeeds"),
+            "hello from initialized project"
+        );
+    }
+}"#
+                }),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(tested_handler.applied, "{}", tested_handler.detail);
+    assert_eq!(tested_handler.item, "mod:tests");
+
     let main: SourceDocument = serde_json::from_str(
         &session
             .call(

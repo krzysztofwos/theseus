@@ -209,6 +209,24 @@ pub(super) fn render_standalone(
     let doc_a = doc("An immutable, owned composition root for one-shot calls.");
     let doc_b = doc("It borrows its adapters through a fresh `Ctx` per call, but does not");
     let doc_c = doc("carry model mutations between calls; mutable inbounds need a stateful root.");
+    let ctx_impl = if services
+        .iter()
+        .any(|service| !service.operations.is_empty())
+    {
+        quote! {
+            impl<#(#bounds),*> Standalone<#(#params),*> {
+                #[doc = " The borrowed composition root one call runs over."]
+                fn ctx(&self) -> Ctx<'_> {
+                    Ctx {
+                        model: &self.model,
+                        #(#ctx_fields),*
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     Ok(quote! {
         #doc_a
         #doc_b
@@ -218,15 +236,7 @@ pub(super) fn render_standalone(
             #(#fields,)*
         }
 
-        impl<#(#bounds),*> Standalone<#(#params),*> {
-            #[doc = " The borrowed composition root one call runs over."]
-            fn ctx(&self) -> Ctx<'_> {
-                Ctx {
-                    model: &self.model,
-                    #(#ctx_fields),*
-                }
-            }
-        }
+        #ctx_impl
 
         #(#impls)*
     })

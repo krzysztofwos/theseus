@@ -7,7 +7,7 @@ use std::{
 
 use theseus::{
     CargoToolchain, FsWorkspace, GitCheckpoint, ProjectContext, RustItemResult, Session,
-    SourceDocument, initialize_project,
+    SourceDocument, Toolchain, initialize_project,
 };
 use theseus_modeling::ProjectId;
 
@@ -54,6 +54,13 @@ async fn an_empty_project_becomes_a_working_and_recoverable_service() {
         &repository.root,
         &["rev-parse", "--verify", "HEAD"]
     ));
+    let seed_check = CargoToolchain::for_project(&project).check().await.unwrap();
+    assert!(seed_check.ok, "{}", seed_check.detail);
+    assert!(
+        !seed_check.detail.contains("with warnings"),
+        "the initialized seed must be warning-free: {}",
+        seed_check.detail
+    );
 
     let restored_paths = project.owned_paths(project.initial_model()).unwrap();
     let before: Vec<_> = restored_paths

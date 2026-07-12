@@ -198,15 +198,27 @@ pub(super) fn render_inbound_module(
             quote! { #pattern => #render, }
         })
         .collect();
-    let dispatch = quote! {
-        #[doc = " Dispatch a parsed invocation to the service and render its result:"]
-        #[doc = " text for a string, otherwise pretty JSON. The authored entry point"]
-        #[doc = " overrides the operations that need bespoke output and delegates here."]
-        pub async fn dispatch(service: &impl #trait_path, invocation: Invocation) -> anyhow::Result<()> {
-            match invocation {
-                #(#dispatch_arms)*
+    let dispatch = if service.operations.is_empty() {
+        quote! {
+            #[doc = " Dispatch a parsed invocation to the service."]
+            pub async fn dispatch(
+                _service: &impl #trait_path,
+                invocation: Invocation,
+            ) -> anyhow::Result<()> {
+                match invocation {}
             }
-            Ok(())
+        }
+    } else {
+        quote! {
+            #[doc = " Dispatch a parsed invocation to the service and render its result:"]
+            #[doc = " text for a string, otherwise pretty JSON. The authored entry point"]
+            #[doc = " overrides the operations that need bespoke output and delegates here."]
+            pub async fn dispatch(service: &impl #trait_path, invocation: Invocation) -> anyhow::Result<()> {
+                match invocation {
+                    #(#dispatch_arms)*
+                }
+                Ok(())
+            }
         }
     };
 
@@ -309,6 +321,23 @@ mod tests {
             rendered.contains("use clap::{ArgMatches, Command}"),
             "{rendered}"
         );
+        assert!(!rendered.contains("ArgAction"), "{rendered}");
+    }
+
+    #[test]
+    fn an_empty_service_has_no_dead_dispatch_scaffolding() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .service(Service::new("App").crate_name("app"))
+            .inbound("app", Transport::Cli, "App", "app");
+        let rendered = render_cli_module(&model).expect("empty CLI renders");
+
+        assert!(!rendered.contains("fn ctx"), "{rendered}");
+        assert!(
+            rendered.contains("_service: &impl AppService"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("match invocation {}"), "{rendered}");
         assert!(!rendered.contains("ArgAction"), "{rendered}");
     }
 }

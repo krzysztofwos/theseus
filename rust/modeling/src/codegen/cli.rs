@@ -289,5 +289,26 @@ mod tests {
         assert!(rendered.contains("value_parser"));
         assert!(rendered.contains("get_one::<f64>"));
         assert!(rendered.contains("fn parse_operands"));
+        assert!(rendered.contains("use clap::{Arg, ArgAction, ArgMatches, Command}"));
+    }
+
+    #[test]
+    fn an_argument_free_inbound_imports_only_what_it_uses() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .service(Service::new("App").crate_name("app").operation(
+                "health",
+                "Report health.",
+                "Empty",
+                "String",
+            ))
+            .inbound("app", Transport::Cli, "App", "app");
+        let rendered = render_cli_module(&model).expect("argument-free CLI renders");
+
+        assert!(
+            rendered.contains("use clap::{ArgMatches, Command}"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("ArgAction"), "{rendered}");
     }
 }

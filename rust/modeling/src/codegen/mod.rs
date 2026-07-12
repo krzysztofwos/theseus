@@ -795,6 +795,13 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> Result<String
             .any(|inbound| inbound.crate_name == crate_name && inbound.transport == transport)
     };
     let has_cli = hosts(Transport::Cli);
+    let has_cli_arguments = model
+        .inbounds
+        .iter()
+        .filter(|inbound| inbound.crate_name == crate_name && inbound.transport == Transport::Cli)
+        .filter_map(|inbound| model.service_named(&inbound.service))
+        .flat_map(|service| &service.operations)
+        .any(|operation| !request_fields(operation, model).is_empty());
     let has_http = hosts(Transport::Http);
     let has_grpc = hosts(Transport::Grpc);
     let serves = |transport: Transport| {
@@ -808,8 +815,10 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> Result<String
 
     // The command surface and its parsers carry the only command-line dependency.
     // A crate without a CLI inbound adapter imports none of it.
-    let command_import = if has_cli {
+    let command_import = if has_cli_arguments {
         quote! { use clap::{Arg, ArgAction, ArgMatches, Command}; }
+    } else if has_cli {
+        quote! { use clap::{ArgMatches, Command}; }
     } else {
         quote! {}
     };

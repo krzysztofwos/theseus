@@ -132,6 +132,13 @@ async fn an_empty_project_becomes_a_working_and_recoverable_service() {
     )
     .unwrap();
     assert_eq!(implemented["applied"], true, "{implemented:#}");
+    assert_eq!(implemented["check"]["ok"], true, "{implemented:#}");
+    assert!(
+        !implemented["check"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("with warnings")),
+        "the argument-free generated CLI must be warning-free: {implemented:#}"
+    );
 
     let service: SourceDocument = serde_json::from_str(
         &session

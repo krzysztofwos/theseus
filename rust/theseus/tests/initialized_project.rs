@@ -143,6 +143,13 @@ async fn an_empty_project_becomes_a_working_and_recoverable_service() {
             .unwrap(),
     )
     .unwrap();
+    assert!(
+        service
+            .contents
+            .contains("\n        Ok(\"hello from initialized project\".to_string())\n"),
+        "the governed handler body is not indented:\n{}",
+        service.contents
+    );
     let tested_handler: RustItemResult = serde_json::from_str(
         &session
             .call(

@@ -94,13 +94,9 @@ pub fn implement_adapter(
     let trait_name = pascal_case(&port.name);
     let signature = adapter_signature(method, model, request_path);
     let target = choose_adapter(impl_source, &trait_name, method_name, adapter)?;
+    let method = format_method(&signature, body)?;
     match target.method {
         Some(range) => {
-            let method = format!(
-                "{signature} {{
-{body}
-    }}"
-            );
             let mut out = String::with_capacity(impl_source.len() + method.len());
             out.push_str(&impl_source[..range.start]);
             out.push_str(&method);
@@ -108,13 +104,7 @@ pub fn implement_adapter(
             Ok(out)
         }
         None => {
-            let method = format!(
-                "
-    {signature} {{
-{body}
-    }}
-"
-            );
+            let method = format!("\n    {method}\n");
             let mut out = String::with_capacity(impl_source.len() + method.len());
             out.push_str(&impl_source[..target.body_start]);
             out.push_str(&method);
@@ -248,10 +238,10 @@ pub fn implement(
     let (service, operation) = locate(model, op_name)?;
     let trait_name = service_trait_name(service);
     let signature = handler_signature(operation, model, request_path);
+    let method = format_method(&signature, body)?;
 
     match method_range(impl_source, &trait_name, op_name)? {
         Some(range) => {
-            let method = format!("{signature} {{\n{body}\n    }}");
             let mut out = String::with_capacity(impl_source.len() + method.len());
             out.push_str(&impl_source[..range.start]);
             out.push_str(&method);
@@ -259,10 +249,37 @@ pub fn implement(
             Ok(out)
         }
         None => {
-            let method = format!("    {signature} {{\n{body}\n    }}\n");
+            let method = format!("    {method}\n");
             splice_after_header(impl_source, &trait_name, &method)
         }
     }
+}
+
+/// Format one authored method in a synthetic impl, then return only the method.
+/// Parsing before a workspace write gives malformed bodies a direct diagnostic;
+/// prettyplease normalizes indentation without touching surrounding authored
+/// bytes or changing the tokens inside literals.
+fn format_method(signature: &str, body: &str) -> Result<String, ImplementError> {
+    let wrapper = format!("impl __TheseusFormat {{\n{signature} {{\n{body}\n}}\n}}\n");
+    let file =
+        syn::parse_file(&wrapper).map_err(|error| ImplementError::Parse(error.to_string()))?;
+    let formatted = prettyplease::unparse(&file);
+    let formatted_file =
+        syn::parse_file(&formatted).map_err(|error| ImplementError::Parse(error.to_string()))?;
+    let method = formatted_file.items.first().and_then(|item| match item {
+        syn::Item::Impl(block) => block.items.first(),
+        _ => None,
+    });
+    let Some(syn::ImplItem::Fn(method)) = method else {
+        return Err(ImplementError::Parse(
+            "formatted method wrapper did not contain a method".to_string(),
+        ));
+    };
+    let range = method.span().byte_range();
+    formatted
+        .get(range)
+        .map(str::to_string)
+        .ok_or_else(|| ImplementError::Parse("formatted method span was invalid".to_string()))
 }
 
 /// The service and operation an operation name resolves to.
@@ -384,6 +401,7 @@ mod tests {
         .unwrap();
         assert!(parses(&out));
         assert!(out.contains("fn status(&self) -> anyhow::Result<()>"));
+        assert!(out.contains("{\n        Ok(())\n    }"), "{out}");
         // The existing handler is preserved, the new one lands inside the block.
         assert!(out.contains("fn greet"));
         assert!(out.find("fn status").unwrap() < out.find("fn greet").unwrap());
@@ -394,6 +412,10 @@ mod tests {
         let out = implement(&sample_model(), IMPL, "greet", "todo!(\"new body\")", "").unwrap();
         assert!(parses(&out), "replacement must stay valid Rust:\n{out}");
         assert!(out.contains("todo!(\"new body\")"));
+        assert!(
+            out.contains("{\n        todo!(\"new body\")\n    }"),
+            "{out}"
+        );
         // The old body is gone and no second `greet` appeared.
         assert!(!out.contains("Ok(())"));
         assert_eq!(out.matches("fn greet").count(), 1);

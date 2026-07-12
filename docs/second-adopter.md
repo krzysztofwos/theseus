@@ -50,4 +50,4 @@ cargo run -p theseus-agent -- \
   "add a count operation, test it, and leave the project conformant"
 ```
 
-That command is the pending live goal, not a recorded green result. Use a disposable copy or snapshot first.
+That goal has run green on a disposable sibling copy (`adopters/.journal-live`, gitignored): a `count` operation landed through the durable-record path — model, handler, and a real test module through `edit_rust_item`'s revision-checked compile-gated splice — leaving the project conformant with 8/8 tests and a live `count: 2`. It took three turn budgets carried across `agent --resume`, most of them cold-terrain reconnaissance; the caveats are recorded with the corpus in `evals/README.md`.

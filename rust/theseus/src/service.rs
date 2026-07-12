@@ -23,6 +23,14 @@ use crate::{
     },
 };
 
+#[derive(Debug, thiserror::Error)]
+enum BrowsePathError {
+    #[error("path {path:?} is a directory; call `list` with {repair}")]
+    ReadDirectory { path: String, repair: String },
+    #[error("path {path:?} is a file; call `read` with {repair}")]
+    ListFile { path: String, repair: String },
+}
+
 pub(crate) async fn ensure_workspace_toolchain_project(
     project: &ProjectContext,
     workspace: &dyn Workspace,
@@ -60,6 +68,17 @@ impl TheseusService for Ctx<'_> {
     async fn read(&self, request: crate::generated::ReadRequest) -> anyhow::Result<SourceDocument> {
         let project = self.project.context().await?;
         let path = project.resolve_existing(&request.path)?;
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .with_context(|| format!("inspecting {}", request.path))?;
+        if metadata.is_dir() {
+            let repair = serde_json::json!({ "path": &request.path }).to_string();
+            return Err(BrowsePathError::ReadDirectory {
+                path: request.path,
+                repair,
+            }
+            .into());
+        }
         let text = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("reading {}", request.path))?;
@@ -93,7 +112,19 @@ impl TheseusService for Ctx<'_> {
 
     async fn list(&self, request: crate::generated::ListRequest) -> anyhow::Result<String> {
         let project = self.project.context().await?;
-        let dir = project.resolve_existing(request.path.as_deref().unwrap_or(""))?;
+        let requested = request.path.unwrap_or_default();
+        let dir = project.resolve_existing(&requested)?;
+        let metadata = tokio::fs::metadata(&dir)
+            .await
+            .with_context(|| format!("inspecting {requested}"))?;
+        if metadata.is_file() {
+            let repair = serde_json::json!({ "path": &requested }).to_string();
+            return Err(BrowsePathError::ListFile {
+                path: requested,
+                repair,
+            }
+            .into());
+        }
         let mut entries = Vec::new();
         let mut reader = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = reader.next_entry().await? {
@@ -1595,6 +1626,36 @@ mod tests {
         assert!(
             error.downcast_ref::<crate::ProjectPathError>().is_some(),
             "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn browse_tools_repair_wrong_path_kinds() {
+        let mut session = Session::new(
+            project(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        );
+
+        let read_error = session
+            .call("read", &serde_json::json!({ "path": "rust" }))
+            .await
+            .expect_err("read refuses a directory");
+        assert_eq!(
+            read_error.to_string(),
+            r#"path "rust" is a directory; call `list` with {"path":"rust"}"#
+        );
+
+        let list_error = session
+            .call("list", &serde_json::json!({ "path": "Cargo.toml" }))
+            .await
+            .expect_err("list refuses a file");
+        assert_eq!(
+            list_error.to_string(),
+            r#"path "Cargo.toml" is a file; call `read` with {"path":"Cargo.toml"}"#
         );
     }
 

@@ -108,13 +108,15 @@ cargo run -p theseus-agent -- \
 
 Run those commands on a disposable branch or repository. The write gate authorizes mutation; it does not replace a recovery point, so snapshot before an exploratory change.
 
-## North star
+## Cold-project milestone
 
-The next milestone should fail loudly:
+This milestone ran strict green on 2026-07-12:
 
 > A live agent, rooted in a freshly initialized project and given only a goal, ships a small capability using the catalog, leaves the project conformant, and can restore its starting snapshot without manual source edits; an explicit acceptance step then runs the produced CLI.
 
-After that is green, let observed failures choose between broader typed authored edits, an agent-visible bootstrap capability, and process-managed foreign rebuilds. More transports and deeper modeling machinery do not currently unlock the core workflow.
+The unassisted run used 16 of 32 turns. It retained its pre-write snapshot, authored a real Tokio test, left the project warning-free and conformant, and passed the literal external CLI acceptance. The trace and acceptance hashes are recorded in `evals/goal-7-2026-07-12.md`.
+
+The next work should follow the remaining observed boundaries: a typed dependency/manifest edit for capabilities that need new crates, machine-enforced snapshot and proof discipline rather than prompt-only sequencing, and an explicit process-manager contract for foreign rebuilds. Agent-visible initialization is useful after those boundaries, but adding more transports does not unlock them.
 
 ## Related docs
 

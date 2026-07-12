@@ -114,7 +114,7 @@ pub fn theseus_model() -> Model {
                         (
                             "attrs",
                             "Option<BTreeMap<String, String>>",
-                            "Scalar attributes, e.g. `shape`, `ty`, or `summary`.",
+                            "Scalar attributes. Operations use `request` and `response` (not `input` or `output`); both default to `Empty`. Other keys include `summary`, `uses`, and `tool`.",
                         ),
                     ],
                 ),
@@ -136,7 +136,7 @@ pub fn theseus_model() -> Model {
                         (
                             "attrs",
                             "BTreeMap<String, String>",
-                            "Scalar attributes to set.",
+                            "Scalar attributes to set. Operations use `request` and `response`, not `input` or `output`.",
                         ),
                     ],
                 ),
@@ -370,7 +370,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project", "workspace", "toolchain"])
                 .tool(
-                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects under a repository transaction and compile gate; a failed check restores the prior files.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. For operations, attrs are `summary`, `request`, `response`, `uses`, and `tool`; use `request`/`response`, not `input`/`output`, and omitted request or response defaults to `Empty`. Example: `{ \"edit\": [{ \"verb\": \"add\", \"parent\": \"service:my-app:App\", \"kind\": \"operation\", \"name\": \"health\", \"attrs\": { \"summary\": \"Report health.\", \"request\": \"Empty\", \"response\": \"String\" } }], \"write\": true }`. An operation's `tool` attribute exposes it to agents after rebuild; `uses` declares comma-separated ports and `verify` checks the handler reaches exactly those ports. `write` true reprojects under a repository transaction and compile gate; failure restores the prior files.",
                 )
                 .operation(
                     "coverage",
@@ -398,7 +398,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project", "workspace", "toolchain"])
                 .tool(
-                    "Edit one complete named top-level Rust item in an existing project-owned authored file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
+                    "Edit one complete named top-level Rust item in an existing project-owned authored `.rs` file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. This tool cannot create files, edit manifests such as Cargo.toml, or add dependencies. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
                 )
                 .operation(
                     "show",
@@ -418,7 +418,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project", "toolchain"])
                 .tool(
-                    "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
+                    "Compile-check every workspace target and report the outcome. Successful `patch` writes, `implement`, `edit_rust_item`, `generate`, and `scaffold` already pass a compile gate; a later successful `test` also proves compilation. Call `check` when the current tree has no fresh gated result, especially before a rebuild.",
                 )
                 .operation(
                     "calc",
@@ -505,7 +505,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project", "toolchain"])
                 .tool(
-                    "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+                    "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply and compile-gate the edits, test behavioral changes, and verify conformance, then call this alone with no other tool in the turn.",
                 )
                 .operation(
                     "read",
@@ -515,7 +515,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project"])
                 .tool(
-                    "Read a file from the workspace with a complete-file revision and capped contents. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Prefer `show` for a modeled handler or adapter method and use `search` first to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
+                    "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
                 )
                 .operation(
                     "search",
@@ -535,7 +535,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project"])
                 .tool(
-                    "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
+                    "List a workspace directory's entries, directories marked with a trailing `/`. Files are refused with a repair to use `read`. `path` is workspace-relative; omit it for the workspace root. Use `{}` as the first discovery call in an unfamiliar project. Example: { \"path\": \"rust\" }.",
                 )
                 .operation(
                     "lint",

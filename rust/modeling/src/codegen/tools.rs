@@ -139,7 +139,7 @@ pub(super) fn render_object_schema(fields: &[Field], model: &Model) -> TokenStre
 /// Render one field as a `"name": <schema>` property.
 pub(super) fn render_schema_property(field: &Field, model: &Model) -> TokenStream {
     let key = field.name.as_str();
-    let schema = render_type_schema(&field.ty, model);
+    let schema = render_type_schema_with_description(&field.ty, model, Some(&field.doc));
     quote! { #key: #schema }
 }
 
@@ -148,22 +148,42 @@ pub(super) fn render_schema_property(field: &Field, model: &Model) -> TokenStrea
 /// `oneOf` over its variants, and anything else its scalar type. `Option<T>` has
 /// `T`'s schema — optionality is carried by the enclosing `required` list.
 pub(super) fn render_type_schema(label: &str, model: &Model) -> TokenStream {
+    render_type_schema_with_description(label, model, None)
+}
+
+fn render_type_schema_with_description(
+    label: &str,
+    model: &Model,
+    description: Option<&str>,
+) -> TokenStream {
     let label = optional_inner(label).unwrap_or(label);
     if let Some(inner) = vec_inner(label) {
         let items = render_type_schema(inner, model);
-        return quote! { { "type": "array", "items": #items } };
+        let description = schema_description(description);
+        return quote! { { "type": "array" #description, "items": #items } };
     }
     if let Some(value) = map_value(label) {
         let value_schema = render_type_schema(value, model);
-        return quote! { { "type": "object", "additionalProperties": #value_schema } };
+        let description = schema_description(description);
+        return quote! {
+            { "type": "object" #description, "additionalProperties": #value_schema }
+        };
     }
     if let Some(TypeShape::Enum { variants, .. }) = model.type_def(label).map(|def| &def.shape) {
         let branches = variants
             .iter()
             .map(|variant| render_variant_schema(variant, model));
-        return quote! { { "oneOf": [#(#branches),*] } };
+        let description = schema_description(description);
+        return quote! { { "oneOf": [#(#branches),*] #description } };
     }
-    render_scalar_schema(label)
+    render_scalar_schema_with_description(label, description)
+}
+
+fn schema_description(description: Option<&str>) -> TokenStream {
+    match description.filter(|description| !description.is_empty()) {
+        Some(description) => quote! { , "description": #description },
+        None => quote! {},
+    }
 }
 
 /// One `oneOf` branch for an enum variant: the `verb` tag pinned to the variant's
@@ -195,23 +215,39 @@ pub(super) fn render_variant_schema(variant: &Variant, model: &Model) -> TokenSt
 /// The JSON schema for a scalar contract type. Integer schemas carry the
 /// primitive's bounds so the catalog accepts exactly the values the generated
 /// parser can deserialize.
+#[cfg(test)]
 pub(super) fn render_scalar_schema(ty: &str) -> TokenStream {
+    render_scalar_schema_with_description(ty, None)
+}
+
+fn render_scalar_schema_with_description(ty: &str, description: Option<&str>) -> TokenStream {
+    let description = schema_description(description);
     match ty {
-        "u8" => quote! { { "type": "integer", "minimum": 0, "maximum": u8::MAX } },
-        "u16" => quote! { { "type": "integer", "minimum": 0, "maximum": u16::MAX } },
-        "u32" => quote! { { "type": "integer", "minimum": 0, "maximum": u32::MAX } },
-        "u64" => quote! { { "type": "integer", "minimum": 0, "maximum": u64::MAX } },
-        "usize" => quote! { { "type": "integer", "minimum": 0, "maximum": usize::MAX } },
-        "i8" => quote! { { "type": "integer", "minimum": i8::MIN, "maximum": i8::MAX } },
-        "i16" => quote! { { "type": "integer", "minimum": i16::MIN, "maximum": i16::MAX } },
-        "i32" => quote! { { "type": "integer", "minimum": i32::MIN, "maximum": i32::MAX } },
-        "i64" => quote! { { "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX } },
-        "isize" => {
-            quote! { { "type": "integer", "minimum": isize::MIN, "maximum": isize::MAX } }
+        "u8" => quote! { { "type": "integer" #description, "minimum": 0, "maximum": u8::MAX } },
+        "u16" => quote! { { "type": "integer" #description, "minimum": 0, "maximum": u16::MAX } },
+        "u32" => quote! { { "type": "integer" #description, "minimum": 0, "maximum": u32::MAX } },
+        "u64" => quote! { { "type": "integer" #description, "minimum": 0, "maximum": u64::MAX } },
+        "usize" => {
+            quote! { { "type": "integer" #description, "minimum": 0, "maximum": usize::MAX } }
         }
-        "f64" | "f32" => quote! { { "type": "number" } },
-        "bool" => quote! { { "type": "boolean" } },
-        _ => quote! { { "type": "string" } },
+        "i8" => {
+            quote! { { "type": "integer" #description, "minimum": i8::MIN, "maximum": i8::MAX } }
+        }
+        "i16" => {
+            quote! { { "type": "integer" #description, "minimum": i16::MIN, "maximum": i16::MAX } }
+        }
+        "i32" => {
+            quote! { { "type": "integer" #description, "minimum": i32::MIN, "maximum": i32::MAX } }
+        }
+        "i64" => {
+            quote! { { "type": "integer" #description, "minimum": i64::MIN, "maximum": i64::MAX } }
+        }
+        "isize" => {
+            quote! { { "type": "integer" #description, "minimum": isize::MIN, "maximum": isize::MAX } }
+        }
+        "f64" | "f32" => quote! { { "type": "number" #description } },
+        "bool" => quote! { { "type": "boolean" #description } },
+        _ => quote! { { "type": "string" #description } },
     }
 }
 
@@ -309,5 +345,23 @@ mod tests {
         let float = render_scalar_schema("f64").to_string();
         assert!(float.contains("\"number\""), "{float}");
         assert!(!float.contains("\"maximum\""), "{float}");
+    }
+
+    #[test]
+    fn tool_schemas_preserve_field_documentation() {
+        let model = Model::new("App")
+            .crate_node("app", "app", 0, &[])
+            .struct_type("Payload", &[("body", "String", "The exact body to send.")])
+            .service(
+                Service::new("App")
+                    .crate_name("app")
+                    .operation("send", "Send.", "Payload", "Empty")
+                    .tool("Send a payload."),
+            );
+        let operation = model.operation("send").expect("send is modeled");
+        let rendered = render_tool_schema(operation, &model).to_string();
+
+        assert!(rendered.contains("\"description\""), "{rendered}");
+        assert!(rendered.contains("The exact body to send."), "{rendered}");
     }
 }

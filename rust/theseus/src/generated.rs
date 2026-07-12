@@ -736,42 +736,74 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "name" : "query", "description" :
         "List model element handles, optionally filtered by `find` (a substring), `node` (an exact handle), or `kind`.",
         "input_schema" : { "type" : "object", "properties" : { "find" : { "type" :
-        "string" }, "node" : { "type" : "string" }, "kind" : { "type" : "string" } } }
-        }), serde_json::json!({ "name" : "patch", "description" :
-        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. An operation's `tool` attribute is its agent tool description — an operation carrying one joins this tool catalog at the next rebuild. An operation's `uses` attribute declares the ports its handler reaches, comma-separated — `verify` holds the authored handler to exactly these. `write` true reprojects under a repository transaction and compile gate; a failed check restores the prior files.",
+        "string", "description" :
+        "Filter handles by a substring of handle, name, kind, or summary." }, "node" : {
+        "type" : "string", "description" : "Narrow to one element by its exact handle."
+        }, "kind" : { "type" : "string", "description" :
+        "Keep only handles of this element kind (operation, type, or port)." } } } }),
+        serde_json::json!({ "name" : "patch", "description" :
+        "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. For operations, attrs are `summary`, `request`, `response`, `uses`, and `tool`; use `request`/`response`, not `input`/`output`, and omitted request or response defaults to `Empty`. Example: `{ \"edit\": [{ \"verb\": \"add\", \"parent\": \"service:my-app:App\", \"kind\": \"operation\", \"name\": \"health\", \"attrs\": { \"summary\": \"Report health.\", \"request\": \"Empty\", \"response\": \"String\" } }], \"write\": true }`. An operation's `tool` attribute exposes it to agents after rebuild; `uses` declares comma-separated ports and `verify` checks the handler reaches exactly those ports. `write` true reprojects under a repository transaction and compile gate; failure restores the prior files.",
         "input_schema" : { "type" : "object", "properties" : { "edit" : { "type" :
-        "array", "items" : { "oneOf" : [{ "type" : "object", "properties" : { "verb" : {
-        "const" : "add" }, "parent" : { "type" : "string" }, "kind" : { "type" : "string"
-        }, "name" : { "type" : "string" }, "attrs" : { "type" : "object",
+        "array", "description" :
+        "The edits to apply in order, each a verb over a handle from `query`.", "items" :
+        { "oneOf" : [{ "type" : "object", "properties" : { "verb" : { "const" : "add" },
+        "parent" : { "type" : "string", "description" :
+        "Handle the new node attaches to; the model root for a top-level node." }, "kind"
+        : { "type" : "string", "description" :
+        "Node kind: operation, type, port, method, field, or variant." }, "name" : {
+        "type" : "string", "description" : "Name of the new node." }, "attrs" : { "type"
+        : "object", "description" :
+        "Scalar attributes. Operations use `request` and `response` (not `input` or `output`); both default to `Empty`. Other keys include `summary`, `uses`, and `tool`.",
         "additionalProperties" : { "type" : "string" } } }, "required" : ["verb",
         "parent", "kind", "name"] }, { "type" : "object", "properties" : { "verb" : {
-        "const" : "remove" }, "target" : { "type" : "string" } }, "required" : ["verb",
-        "target"] }, { "type" : "object", "properties" : { "verb" : { "const" : "rename"
-        }, "target" : { "type" : "string" }, "to" : { "type" : "string" } }, "required" :
-        ["verb", "target", "to"] }, { "type" : "object", "properties" : { "verb" : {
-        "const" : "set" }, "target" : { "type" : "string" }, "attrs" : { "type" :
-        "object", "additionalProperties" : { "type" : "string" } } }, "required" :
-        ["verb", "target", "attrs"] }] } }, "write" : { "type" : "boolean" } },
-        "required" : ["edit"] } }), serde_json::json!({ "name" : "coverage",
+        "const" : "remove" }, "target" : { "type" : "string", "description" :
+        "Handle of the node to remove." } }, "required" : ["verb", "target"] }, { "type"
+        : "object", "properties" : { "verb" : { "const" : "rename" }, "target" : { "type"
+        : "string", "description" : "Handle of the node to rename." }, "to" : { "type" :
+        "string", "description" : "The new name." } }, "required" : ["verb", "target",
+        "to"] }, { "type" : "object", "properties" : { "verb" : { "const" : "set" },
+        "target" : { "type" : "string", "description" : "Handle of the node to edit." },
+        "attrs" : { "type" : "object", "description" :
+        "Scalar attributes to set. Operations use `request` and `response`, not `input` or `output`.",
+        "additionalProperties" : { "type" : "string" } } }, "required" : ["verb",
+        "target", "attrs"] }] } }, "write" : { "type" : "boolean", "description" :
+        "When true, apply the edit and reproject the model to disk; when false, validate and preview only."
+        } }, "required" : ["edit"] } }), serde_json::json!({ "name" : "coverage",
         "description" : "Report which operations have no authored handler.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "implement", "description" :
         "Write a handler for an operation into the service impl, so a newly-added operation stops being unimplemented. `method` is the operation name. `body` is the Rust handler body — the statements inside the generated `fn <method>(&self, request: <Request>) -> anyhow::Result<<Response>>`, which the splice wraps for you. With `port`, `method` names one of that port's methods instead, and the body lands in the port's adapter impl in the crate's authored adapters file — `adapter` picks the implementing type when the file holds more than one. The write is followed by a compile check, and the result carries its outcome — on a failure, fix the body and implement again, which replaces the method in place. Author it after `patch` adds the operation or method (use `show` to read the signature), then `verify`. Example: `{ \"method\": \"greet\", \"body\": \"Ok(\\\"hello\\\".to_string())\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
-        "string" }, "body" : { "type" : "string" }, "port" : { "type" : "string" },
-        "adapter" : { "type" : "string" } }, "required" : ["method", "body"] } }),
-        serde_json::json!({ "name" : "edit_rust_item", "description" :
-        "Edit one complete named top-level Rust item in an existing project-owned authored file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
+        "string", "description" :
+        "Name of the operation — or, with `port`, the port method — to implement." },
+        "body" : { "type" : "string", "description" :
+        "The handler body to splice into the impl." }, "port" : { "type" : "string",
+        "description" : "Name of the port whose adapter method to implement." },
+        "adapter" : { "type" : "string", "description" :
+        "The adapter type to target when the file holds more than one." } }, "required" :
+        ["method", "body"] } }), serde_json::json!({ "name" : "edit_rust_item",
+        "description" :
+        "Edit one complete named top-level Rust item in an existing project-owned authored `.rs` file. Call `read` first and pass its `revision`. Set `replace` false to insert an absent item or true to replace the same kind and name. This tool cannot create files, edit manifests such as Cargo.toml, or add dependencies. Generated files, the model record, foreign paths, and stale revisions are refused. The file and Cargo.lock are changed under the repository transaction and rolled back unless every Cargo target compiles. Use this for tests, helpers, modules, and composition-root functions that `implement` cannot reach.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
-        "string" }, "revision" : { "type" : "string" }, "item" : { "type" : "string" },
-        "replace" : { "type" : "boolean" } }, "required" : ["path", "revision", "item"] }
-        }), serde_json::json!({ "name" : "show", "description" :
+        "string", "description" :
+        "Workspace-relative authored Rust file returned by `read`." }, "revision" : {
+        "type" : "string", "description" : "Complete-file revision returned by `read`."
+        }, "item" : { "type" : "string", "description" :
+        "One complete named top-level Rust item to insert or replace." }, "replace" : {
+        "type" : "boolean", "description" :
+        "Replace the same kind and name when true; require it to be absent when false." }
+        }, "required" : ["path", "revision", "item"] } }), serde_json::json!({ "name" :
+        "show", "description" :
         "Show the current authored handler source for an operation. `method` is an operation name from `query` (kind `operation`). With `port`, `method` names one of that port's methods and the adapter method shows instead — `adapter` picks the implementing type when the file holds more than one. For a method with no authored source yet, it returns the generated signature, so you can read the request and response types before authoring. Example: `{ \"method\": \"verify\" }`.",
         "input_schema" : { "type" : "object", "properties" : { "method" : { "type" :
-        "string" }, "port" : { "type" : "string" }, "adapter" : { "type" : "string" } },
-        "required" : ["method"] } }), serde_json::json!({ "name" : "check", "description"
-        :
-        "Compile-check the workspace and report the outcome. `implement` runs it after each write on its own. Call it directly after a `patch` that writes, or to prove the tree compiles before a rebuild.",
+        "string", "description" :
+        "Name of the operation — or, with `port`, the port method — to show." },
+        "port" : { "type" : "string", "description" :
+        "Name of the port whose adapter method to show." }, "adapter" : { "type" :
+        "string", "description" :
+        "The adapter type to target when the file holds more than one." } }, "required" :
+        ["method"] } }), serde_json::json!({ "name" : "check", "description" :
+        "Compile-check every workspace target and report the outcome. Successful `patch` writes, `implement`, `edit_rust_item`, `generate`, and `scaffold` already pass a compile gate; a later successful `test` also proves compilation. Call `check` when the current tree has no fresh gated result, especially before a rebuild.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "scaffold", "description" :
         "Scaffold missing library service crates under a repository transaction and compile gate. A failed check restores the prior files and removes only paths the transaction created.",
@@ -782,38 +814,47 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "name" : "snapshot", "description" :
         "Checkpoint tracked files and the exact present or absent state of paths owned by the current persisted model before risky edits. Returns a snapshot id for rollback. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "label" : { "type" :
-        "string" } }, "required" : ["label"] } }), serde_json::json!({ "name" :
-        "rollback", "description" :
+        "string", "description" : "A short label naming the snapshot." } }, "required" :
+        ["label"] } }), serde_json::json!({ "name" : "rollback", "description" :
         "Restore tracked files and the exact present or absent state of model-owned paths from a snapshot, leaving unrelated untracked files untouched. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
-        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
-        "release", "description" :
+        "string", "description" : "The snapshot id, as returned by `snapshot`." } },
+        "required" : ["reference"] } }), serde_json::json!({ "name" : "release",
+        "description" :
         "Release a snapshot by atomically deleting its validated pair of private Git refs. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
-        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
-        "prune", "description" :
+        "string", "description" : "The snapshot id, as returned by `snapshot`." } },
+        "required" : ["reference"] } }), serde_json::json!({ "name" : "prune",
+        "description" :
         "Release older snapshot refs, retaining only the requested number of newest snapshots. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "keep" : { "type" :
-        "integer", "minimum" : 0, "maximum" : u32::MAX } }, "required" : ["keep"] } }),
-        serde_json::json!({ "name" : "diff", "description" :
+        "integer", "description" : "Number of newest snapshots to retain.", "minimum" :
+        0, "maximum" : u32::MAX } }, "required" : ["keep"] } }), serde_json::json!({
+        "name" : "diff", "description" :
         "Show what changed in the working tree since a snapshot. `reference` is the snapshot id returned by `snapshot`. Returns a bounded, escaped Git-style diff with exact mode records, or an empty string when nothing has changed. Requires write permission.",
         "input_schema" : { "type" : "object", "properties" : { "reference" : { "type" :
-        "string" } }, "required" : ["reference"] } }), serde_json::json!({ "name" :
-        "restart", "description" :
-        "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply the edits first — `patch` with write true, `implement` each handler, `check` — then call this alone, with no other tool in the turn.",
+        "string", "description" : "The snapshot id, as returned by `snapshot`." } },
+        "required" : ["reference"] } }), serde_json::json!({ "name" : "restart",
+        "description" :
+        "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply and compile-gate the edits, test behavioral changes, and verify conformance, then call this alone with no other tool in the turn.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "read", "description" :
-        "Read a file from the workspace with a complete-file revision and capped contents. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Prefer `show` for a modeled handler or adapter method and use `search` first to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
+        "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
-        "string" } }, "required" : ["path"] } }), serde_json::json!({ "name" : "search",
-        "description" :
+        "string", "description" : "The workspace-relative file to read." } }, "required"
+        : ["path"] } }), serde_json::json!({ "name" : "search", "description" :
         "Search the workspace for lines containing `pattern`, reported as path:line: text, capped. `path` narrows the search to a subtree, e.g. `rust/agent`. Use it to find house patterns and neighbors before authoring, then `read` the file. Example: { \"pattern\": \"impl Toolchain\", \"path\": \"rust/theseus\" }.",
         "input_schema" : { "type" : "object", "properties" : { "pattern" : { "type" :
-        "string" }, "path" : { "type" : "string" } }, "required" : ["pattern"] } }),
-        serde_json::json!({ "name" : "list", "description" :
-        "List a workspace directory's entries, directories marked with a trailing `/`. `path` is workspace-relative; omit it for the workspace root. Example: { \"path\": \"rust\" }.",
+        "string", "description" : "The text to find." }, "path" : { "type" : "string",
+        "description" :
+        "A workspace-relative subtree to search. The whole workspace when omitted." } },
+        "required" : ["pattern"] } }), serde_json::json!({ "name" : "list", "description"
+        :
+        "List a workspace directory's entries, directories marked with a trailing `/`. Files are refused with a repair to use `read`. `path` is workspace-relative; omit it for the workspace root. Use `{}` as the first discovery call in an unfamiliar project. Example: { \"path\": \"rust\" }.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
-        "string" } } } }), serde_json::json!({ "name" : "lint", "description" :
+        "string", "description" :
+        "The workspace-relative directory to list. The root when omitted." } } } }),
+        serde_json::json!({ "name" : "lint", "description" :
         "Run clippy across the workspace with warnings denied and report the outcome.",
         "input_schema" : { "type" : "object", "properties" : {} } })
     ]

@@ -36,10 +36,11 @@ workspace. Discipline for edits that write: call `snapshot` \
 before the first write and keep the returned id pinned. Never call `release` or \
 `prune`; snapshot retention belongs to the operator. After authoring, and before \
 either restart or your final answer, prove the tree \
-— `check` for compilation, `test` when behavior changed, `verify` for conformance \
-— after the last write. If the tree wedges and you cannot repair it, `rollback` \
-to your snapshot and say so. When you are done, answer the user with a final \
-text message and no tool call.";
+after the last write. A successful writing tool already compile-gates its result, \
+and a later successful `test` proves compilation too; otherwise call `check`. \
+Call `test` when behavior changed and `verify` for conformance. If the tree \
+wedges and you cannot repair it, `rollback` to your snapshot and say so. When \
+you are done, answer the user with a final text message and no tool call.";
 
 /// The loop-level tool: rebuild the binary and resume the session in it.
 pub const RESTART_TOOL: &str = "restart";
@@ -74,8 +75,8 @@ fn restart_tool() -> Value {
         "description": "Rebuild the agent and resume this session in the new \
     binary, whose compiled model, tool catalog, and tool dispatch match the \
     workspace — an operation the applied patch exposed becomes a callable tool. \
-    Apply the edits first — `patch` with write true, `implement` each handler, \
-    `check` — then call this alone, with no other tool in the turn.",
+    Apply and compile-gate the edits, test behavioral changes, and verify \
+    conformance, then call this alone with no other tool in the turn.",
         "input_schema": { "type": "object", "properties": {} }
     })
 }
@@ -650,6 +651,44 @@ mod tests {
                 "{operator_only} must stay outside the active agent catalog",
             );
         }
+    }
+
+    #[test]
+    fn the_catalog_teaches_foreign_project_repairs() {
+        let tools = loop_tools();
+        let find = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("the catalog lacks {name}"))
+        };
+
+        let patch = find("patch");
+        assert!(
+            patch["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("not `input`/`output`")),
+            "{}",
+            patch["description"]
+        );
+        assert!(
+            patch["input_schema"]["properties"]["edit"]["items"]["oneOf"][0]["properties"]["attrs"]
+                ["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("`request` and `response`")),
+            "{}",
+            patch["input_schema"]
+        );
+        assert!(
+            find("edit_rust_item")["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("Cargo.toml"))
+        );
+        assert!(
+            find("read")["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("call `list` with `{}` first"))
+        );
     }
 
     #[tokio::test]

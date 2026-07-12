@@ -433,11 +433,17 @@ impl Toolchain for CargoToolchain {
         self.project.validate_root()?;
         run_cargo_under_lease(
             self.project.root(),
-            &["check", "--workspace", "--quiet", "--locked"],
-            "cargo check --workspace --locked",
-            "the workspace compiles",
-            "the workspace compiles, with warnings",
-            "check failed",
+            &[
+                "check",
+                "--workspace",
+                "--all-targets",
+                "--quiet",
+                "--locked",
+            ],
+            "cargo check --workspace --all-targets --locked",
+            "every workspace target compiles",
+            "every workspace target compiles, with warnings",
+            "all-target check failed",
         )
         .await
     }

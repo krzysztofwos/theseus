@@ -162,7 +162,7 @@ message Edit {
     optional string kind = 2;
     // Name of the new node.
     optional string name = 3;
-    // Scalar attributes, e.g. `shape`, `ty`, or `summary`.
+    // Scalar attributes. Operations use `request` and `response` (not `input` or `output`); both default to `Empty`. Other keys include `summary`, `uses`, and `tool`.
     map<string, string> attrs = 4;
   }
   message Remove {
@@ -178,7 +178,7 @@ message Edit {
   message Set {
     // Handle of the node to edit.
     optional string target = 1;
-    // Scalar attributes to set.
+    // Scalar attributes to set. Operations use `request` and `response`, not `input` or `output`.
     map<string, string> attrs = 2;
   }
 

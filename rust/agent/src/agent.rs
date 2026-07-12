@@ -33,14 +33,24 @@ const SYSTEM: &str = "You are Theseus, a self-modeling tool. Inspect and edit yo
 own model by calling the tools. Prefer `show` for an operation's handler or an \
 adapter method; `read`, `search`, and `list` reach everything else in the \
 workspace. Discipline for edits that write: call `snapshot` \
-before the first write and keep the returned id. After authoring, prove the tree \
+before the first write and keep the returned id pinned. Never call `release` or \
+`prune`; snapshot retention belongs to the operator. After authoring, and before \
+either restart or your final answer, prove the tree \
 — `check` for compilation, `test` when behavior changed, `verify` for conformance \
-— before `restart`. If the tree wedges and you cannot repair it, `rollback` to \
-your snapshot and say so. When you are done, answer the user with a final text \
-message and no tool call.";
+— after the last write. If the tree wedges and you cannot repair it, `rollback` \
+to your snapshot and say so. When you are done, answer the user with a final \
+text message and no tool call.";
 
 /// The loop-level tool: rebuild the binary and resume the session in it.
 pub const RESTART_TOOL: &str = "restart";
+
+const OPERATOR_ONLY_TOOLS: [&str; 2] = ["release", "prune"];
+const OPERATOR_ONLY_RESULT: &str = "error: snapshot retention is operator-owned; \
+this active agent run cannot release or prune checkpoints";
+
+fn operator_only_tool(name: &str) -> bool {
+    OPERATOR_ONLY_TOOLS.contains(&name)
+}
 
 /// The loop's tool list: the session's catalog, with the restart tool appended
 /// when the model does not already expose it. A modeled `restart` operation
@@ -48,6 +58,7 @@ pub const RESTART_TOOL: &str = "restart";
 /// either way — rebuilding the running binary is this inbound's affordance.
 fn loop_tools() -> Vec<Value> {
     let mut tools = theseus::tool_catalog();
+    tools.retain(|tool| !tool["name"].as_str().is_some_and(operator_only_tool));
     if !tools.iter().any(|tool| tool["name"] == RESTART_TOOL) {
         tools.push(restart_tool());
     }
@@ -206,6 +217,8 @@ pub async fn run_agent(
                 "restart must be the only tool call in its turn; finish the \
 other calls, then call it alone"
                     .to_string()
+            } else if operator_only_tool(&tool.name) {
+                OPERATOR_ONLY_RESULT.to_string()
             } else {
                 session
                     .call(&tool.name, &tool.input)
@@ -413,6 +426,8 @@ pub fn resume(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use serde_json::json;
     use theseus::{Session, Toolchain, Workspace};
 
@@ -434,6 +449,39 @@ mod tests {
 
     #[async_trait::async_trait]
     impl theseus::Checkpoint for StubCheckpoint {}
+
+    struct LifecycleCheckpoint {
+        project: theseus::ProjectContext,
+        releases: AtomicUsize,
+        prunes: AtomicUsize,
+    }
+
+    impl LifecycleCheckpoint {
+        fn new(project: theseus::ProjectContext) -> Self {
+            Self {
+                project,
+                releases: AtomicUsize::new(0),
+                prunes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl theseus::Checkpoint for LifecycleCheckpoint {
+        async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+            Ok(self.project.clone())
+        }
+
+        async fn release(&self, _request: &str) -> anyhow::Result<String> {
+            self.releases.fetch_add(1, Ordering::Relaxed);
+            Ok("released".to_string())
+        }
+
+        async fn prune(&self, _request: &theseus::SnapshotRetention) -> anyhow::Result<String> {
+            self.prunes.fetch_add(1, Ordering::Relaxed);
+            Ok("pruned".to_string())
+        }
+    }
 
     /// A toolchain that reports success without running a build, so the loop's
     /// tests stay in-process.
@@ -590,11 +638,51 @@ mod tests {
 
     #[test]
     fn the_loop_carries_exactly_one_restart_tool() {
-        let restarts = loop_tools()
+        let tools = loop_tools();
+        let restarts = tools
             .iter()
             .filter(|tool| tool["name"] == RESTART_TOOL)
             .count();
         assert_eq!(restarts, 1);
+        for operator_only in OPERATOR_ONLY_TOOLS {
+            assert!(
+                tools.iter().all(|tool| tool["name"] != operator_only),
+                "{operator_only} must stay outside the active agent catalog",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_only_checkpoint_calls_are_refused_before_dispatch() {
+        for (name, input) in [
+            ("release", json!({ "reference": "snapshot-id" })),
+            ("prune", json!({ "keep": 0 })),
+        ] {
+            let llm = OfflineLlm::new([
+                calls(vec![call("lifecycle", name, input)]),
+                Reply::answer("the operator owns retention"),
+            ]);
+            let project = project();
+            let checkpoint = LifecycleCheckpoint::new(project.clone());
+            let mut session = Session::new(
+                project,
+                &NoopWorkspace,
+                &checkpoint,
+                &theseus_calculator::Calculator,
+                &StubToolchain,
+                true,
+            );
+
+            let outcome = run_agent(&llm, &mut session, opening("clean up checkpoints"))
+                .await
+                .expect("the loop refuses the lifecycle call and continues");
+
+            assert!(
+                matches!(outcome, Outcome::Answered(answer) if answer == "the operator owns retention")
+            );
+            assert_eq!(checkpoint.releases.load(Ordering::Relaxed), 0);
+            assert_eq!(checkpoint.prunes.load(Ordering::Relaxed), 0);
+        }
     }
 
     #[test]

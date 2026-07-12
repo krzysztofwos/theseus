@@ -320,6 +320,7 @@ fn plan_add(
             free(model.operation(name).is_some(), "operation", name)?;
             allow_keys(attrs, &["summary", "request", "response", "uses", "tool"])?;
             renderable_types(attrs, &["request", "response"])?;
+            validate_tool_description(attrs)?;
         }
         NodeKind::Type => {
             under_root(&parent, kind)?;
@@ -450,7 +451,11 @@ fn plan_set(
                 modeled_crate(model, crate_name)?;
             }
         }
-        Target::Operation(_) | Target::Method { .. } => {
+        Target::Operation(_) => {
+            renderable_types(attrs, &["request", "response"])?;
+            validate_tool_description(attrs)?;
+        }
+        Target::Method { .. } => {
             renderable_types(attrs, &["request", "response"])?;
             if let Some(gated) = attr(attrs, "gated")
                 && !gated.is_empty()
@@ -541,7 +546,9 @@ fn apply_add(
                 request: attr(attrs, "request").unwrap_or("Empty").to_string(),
                 response: attr(attrs, "response").unwrap_or("Empty").to_string(),
                 uses: attr(attrs, "uses").map(parse_uses).unwrap_or_default(),
-                tool: attr(attrs, "tool").map(str::to_string),
+                tool: attr(attrs, "tool")
+                    .filter(|tool| !tool.is_empty())
+                    .map(str::to_string),
             });
         }
         NodeKind::Type => model.types.push(TypeDef {
@@ -1584,6 +1591,23 @@ fn renderable_types(
         }
     }
     Ok(())
+}
+
+/// Tool exposure is an optional description, not a boolean flag. Refuse the
+/// common boolean-shaped mistake so a caller trying to keep a CLI operation
+/// private cannot accidentally expose a tool named by the string `false`.
+fn validate_tool_description(attrs: &BTreeMap<String, String>) -> Result<(), Vec<Diagnostic>> {
+    let Some(tool) = attr(attrs, "tool") else {
+        return Ok(());
+    };
+    if !matches!(tool.trim().to_ascii_lowercase().as_str(), "true" | "false") {
+        return Ok(());
+    }
+    Err(vec![diagnostic(
+        "PATCH021",
+        format!("`tool={tool}` is a string description, not a boolean exposure flag"),
+        "omit `tool` for a CLI-only operation; set a non-empty description only to expose an agent/MCP tool, or set it empty to withdraw exposure",
+    )])
 }
 
 /// A type label the renderer can express: it parses as a Rust type.
@@ -2655,6 +2679,32 @@ mod tests {
             model.operation("ping").unwrap().tool.as_deref(),
             Some("Ping the service | fast."),
         );
+    }
+
+    #[test]
+    fn boolean_shaped_tool_descriptions_are_refused() {
+        for edit in [
+            add("model:sample", "operation", "ping", &[("tool", "false")]),
+            Edit::Set {
+                target: "op:sample:greet".to_string(),
+                attrs: [("tool".to_string(), "true".to_string())].into(),
+            },
+        ] {
+            let (outcome, next) = apply_edit(&sample_model(), &edit);
+            assert!(!outcome.ok);
+            assert_eq!(code(&outcome), "PATCH021");
+            assert!(outcome.diagnostics[0].repair.contains("omit `tool`"));
+            assert!(next.is_none());
+        }
+    }
+
+    #[test]
+    fn an_empty_tool_description_does_not_expose_a_new_operation() {
+        let model = accept(
+            &sample_model(),
+            add("model:sample", "operation", "ping", &[("tool", "")]),
+        );
+        assert_eq!(model.operation("ping").unwrap().tool, None);
     }
 
     #[test]

@@ -672,6 +672,13 @@ mod tests {
             patch["description"]
         );
         assert!(
+            patch["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("`tool` for CLI-only")),
+            "{}",
+            patch["description"]
+        );
+        assert!(
             patch["input_schema"]["properties"]["edit"]["items"]["oneOf"][0]["properties"]["attrs"]
                 ["description"]
                 .as_str()

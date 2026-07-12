@@ -114,7 +114,7 @@ pub fn theseus_model() -> Model {
                         (
                             "attrs",
                             "Option<BTreeMap<String, String>>",
-                            "Scalar attributes. Operations use `request` and `response` (not `input` or `output`); both default to `Empty`. Other keys include `summary`, `uses`, and `tool`.",
+                            "Scalar attributes. Operations use `request` and `response` (not `input` or `output`); both default to `Empty`. `tool` is an optional description string: omit it for CLI-only operations, because the string `false` still requests exposure.",
                         ),
                     ],
                 ),
@@ -136,7 +136,7 @@ pub fn theseus_model() -> Model {
                         (
                             "attrs",
                             "BTreeMap<String, String>",
-                            "Scalar attributes to set. Operations use `request` and `response`, not `input` or `output`.",
+                            "Scalar attributes to set. Operations use `request` and `response`, not `input` or `output`. Omit `tool` to preserve exposure; set a description to expose it or an empty string to withdraw it.",
                         ),
                     ],
                 ),
@@ -370,7 +370,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project", "workspace", "toolchain"])
                 .tool(
-                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. For operations, attrs are `summary`, `request`, `response`, `uses`, and `tool`; use `request`/`response`, not `input`/`output`, and omitted request or response defaults to `Empty`. Example: `{ \"edit\": [{ \"verb\": \"add\", \"parent\": \"service:my-app:App\", \"kind\": \"operation\", \"name\": \"health\", \"attrs\": { \"summary\": \"Report health.\", \"request\": \"Empty\", \"response\": \"String\" } }], \"write\": true }`. An operation's `tool` attribute exposes it to agents after rebuild; `uses` declares comma-separated ports and `verify` checks the handler reaches exactly those ports. `write` true reprojects under a repository transaction and compile gate; failure restores the prior files.",
+                    "Edit the model. Each edit names a handle from `query`; a top-level node attaches to the model root, `model:<model>`. For operations, attrs are `summary`, `request`, `response`, `uses`, and `tool`; use `request`/`response`, not `input`/`output`, and omitted request or response defaults to `Empty`. Example: `{ \"edit\": [{ \"verb\": \"add\", \"parent\": \"service:my-app:App\", \"kind\": \"operation\", \"name\": \"health\", \"attrs\": { \"summary\": \"Report health.\", \"request\": \"Empty\", \"response\": \"String\" } }], \"write\": true }`. Omit `tool` for CLI-only operations; it is an optional description string, so `\"tool\": \"false\"` is refused rather than treated as a boolean. A real `tool` description exposes the operation to agents after rebuild. `uses` declares comma-separated ports and `verify` checks the handler reaches exactly those ports. `write` true reprojects under a repository transaction and compile gate; failure restores the prior files.",
                 )
                 .operation(
                     "coverage",

@@ -1093,16 +1093,23 @@ fn request_type<'a>(op: &Operation, model: &'a Model) -> Option<&'a TypeDef> {
         .filter(|def| matches!(def.shape, TypeShape::Struct(_)))
 }
 
-/// Render one field's extraction from a tool call's JSON input. A `bool` defaults
-/// false and a `String` is required, mirroring the schema's `required` list. A
-/// container defaults empty when absent, and any other type deserializes from the
-/// field's value — an `Option` reads absence as `None`.
+/// Render one field's extraction from a tool call's JSON input. An absent `bool`
+/// defaults false, but a present value must actually be boolean. A `String` is
+/// required, mirroring the schema's `required` list. A container defaults empty
+/// when absent, and any other type deserializes from the field's value — an
+/// `Option` reads absence as `None`.
 fn tool_field_init(field: &Field) -> TokenStream {
     let name = format_ident!("{}", field.name);
     let key = field.name.as_str();
     if field.ty == "bool" {
+        let message = format!("the `{key}` field is invalid: expected a boolean");
         return quote! {
-            #name: input.get(#key).and_then(serde_json::Value::as_bool).unwrap_or_default()
+            #name: match input.get(#key) {
+                None => false,
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| anyhow::anyhow!(#message))?,
+            }
         };
     }
     if field.ty == "String" {
@@ -1466,6 +1473,21 @@ mod tests {
     fn case_helpers() {
         assert_eq!(pascal_case("source-store"), "SourceStore");
         assert_eq!(snake_case("source-store"), "source_store");
+    }
+
+    #[test]
+    fn present_tool_booleans_are_type_checked() {
+        let rendered = tool_field_init(&Field {
+            name: "write".to_string(),
+            ty: "bool".to_string(),
+            doc: "Apply the change.".to_string(),
+        })
+        .to_string();
+
+        assert!(rendered.contains("None => false"), "{rendered}");
+        assert!(rendered.contains("as_bool"), "{rendered}");
+        assert!(rendered.contains("expected a boolean"), "{rendered}");
+        assert!(!rendered.contains("unwrap_or_default"), "{rendered}");
     }
 
     #[test]

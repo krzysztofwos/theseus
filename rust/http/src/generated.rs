@@ -40,10 +40,18 @@ fn parse_patch_request_http(
                     })?
             }
         },
-        write: input
-            .get("write")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or_default(),
+        write: match input.get("write") {
+            None => false,
+            Some(value) => {
+                value
+                    .as_bool()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the `write` field is invalid: expected a boolean"
+                        )
+                    })?
+            }
+        },
     })
 }
 
@@ -91,10 +99,18 @@ fn parse_rust_item_request_http(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `item`"))?,
-        replace: input
-            .get("replace")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or_default(),
+        replace: match input.get("replace") {
+            None => false,
+            Some(value) => {
+                value
+                    .as_bool()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the `replace` field is invalid: expected a boolean"
+                        )
+                    })?
+            }
+        },
     })
 }
 

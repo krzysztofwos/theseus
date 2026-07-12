@@ -1586,6 +1586,29 @@ mod tests {
         assert_eq!(report.detail, "the workspace compiles (stub)");
     }
 
+    #[test]
+    fn present_invalid_tool_booleans_are_rejected() {
+        let patch =
+            crate::generated::parse_patch_request_input(&serde_json::json!({ "write": "true" }))
+                .expect_err("a string must not silently disable a durable patch");
+        assert_eq!(
+            patch.to_string(),
+            "the `write` field is invalid: expected a boolean"
+        );
+
+        let edit = crate::generated::parse_rust_item_request_input(&serde_json::json!({
+            "path": "rust/app/src/lib.rs",
+            "revision": "revision",
+            "item": "fn test() {}",
+            "replace": "false"
+        }))
+        .expect_err("a string must not silently change insertion semantics");
+        assert_eq!(
+            edit.to_string(),
+            "the `replace` field is invalid: expected a boolean"
+        );
+    }
+
     #[tokio::test]
     async fn the_read_tool_reads_a_workspace_file() {
         let result = Session::new(

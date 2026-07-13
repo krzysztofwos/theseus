@@ -173,6 +173,12 @@ pub enum Outcome {
     /// The turn budget ran out. The transcript carries everything the run did,
     /// so the caller can persist and inspect it.
     Exhausted(Vec<Message>),
+    /// The model port failed mid-run. The transcript carries everything up to
+    /// the failure, so a resume replays nothing.
+    Interrupted {
+        transcript: Vec<Message>,
+        error: anyhow::Error,
+    },
     /// The model asked to restart. The transcript ends with the assistant turn
     /// whose sole tool call is `restart`. The caller rebuilds, persists the
     /// transcript, and re-enters the new binary, which answers the pending call
@@ -212,9 +218,18 @@ pub async fn run_agent(
     let trace = std::env::var("AGENT_TRACE").is_ok();
     for turn_number in 1..=TURN_BUDGET {
         let turn = turn_number;
-        let reply = llm
+        let reply = match llm
             .complete(&crate::agent::turn(messages.clone(), tools.clone()))
-            .await?;
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) => {
+                return Ok(Outcome::Interrupted {
+                    transcript: messages,
+                    error,
+                });
+            }
+        };
         if trace && !reply.text.is_empty() {
             eprintln!("[turn {turn}] say: {}", reply.text);
         }
@@ -536,6 +551,38 @@ mod tests {
             text: String::new(),
             tool_uses: tools,
         }
+    }
+
+    #[tokio::test]
+    async fn a_model_failure_keeps_the_transcript() {
+        // The script runs dry after one turn, so the second request fails the
+        // way a network or billing failure would.
+        let llm = OfflineLlm::new([calls(vec![call(
+            "1",
+            "query",
+            json!({ "kind": "operation" }),
+        )])]);
+        let project = theseus::theseus_project().expect("the harness project opens");
+        let workspace = theseus::FsWorkspace::for_project(&project);
+        let checkpoint = theseus::GitCheckpoint::for_project(project.clone());
+        let toolchain = theseus::CargoToolchain::for_project(&project);
+        let mut session = theseus::Session::new(
+            project,
+            &workspace,
+            &checkpoint,
+            &theseus_calculator::Calculator,
+            &toolchain,
+            false,
+        );
+        let outcome = run_agent(&llm, &mut session, opening("go"))
+            .await
+            .expect("an interrupted run is an outcome, not an error");
+        let Outcome::Interrupted { transcript, error } = outcome else {
+            panic!("the dry script should interrupt the run");
+        };
+        assert!(error.to_string().contains("out of replies"), "{error}");
+        // The transcript holds the completed turn: goal, call, and result.
+        assert_eq!(transcript.len(), 3);
     }
 
     #[tokio::test]

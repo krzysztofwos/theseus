@@ -225,6 +225,15 @@ with `agent{} --resume` (the transcript is saved at {})",
                     session_path(project).display()
                 );
             }
+            Outcome::Interrupted { transcript, error } => {
+                save_transcript(&session_path(project), &transcript)?;
+                return Err(error.context(format!(
+                    "the model port failed mid-run; continue with `agent{} --resume` \
+(the transcript is saved at {})",
+                    project_argument(options),
+                    session_path(project).display()
+                )));
+            }
             Outcome::Restart(transcript) => match rebuild(project).await {
                 Ok(executable) => {
                     save_transcript(&session_path(project), &transcript)?;
@@ -452,8 +461,16 @@ mod bootstrap_tests {
         );
 
         let llm = scripted([
-            calls(vec![call("1", "initialize", serde_json::json!({ "id": "Bad Name" }))]),
-            calls(vec![call("2", "initialize", serde_json::json!({ "id": "seed-app" }))]),
+            calls(vec![call(
+                "1",
+                "initialize",
+                serde_json::json!({ "id": "Bad Name" }),
+            )]),
+            calls(vec![call(
+                "2",
+                "initialize",
+                serde_json::json!({ "id": "seed-app" }),
+            )]),
         ]);
         let mut messages = opening("initialize a seed");
         let answer = initialize_phase(&llm, &dir, &mut messages).await.unwrap();
@@ -499,7 +516,14 @@ mod argument_tests {
 
     #[test]
     fn init_rides_with_project_and_start() {
-        let options = parse(&["--project", "/tmp/foreign", "--init", "--allow-writes", "go"]).unwrap();
+        let options = parse(&[
+            "--project",
+            "/tmp/foreign",
+            "--init",
+            "--allow-writes",
+            "go",
+        ])
+        .unwrap();
         assert!(options.init);
         assert_eq!(options.mode, Mode::Start("go".to_string()));
         assert!(parse(&["--init", "--init", "--project", "/tmp/x", "go"]).is_err());

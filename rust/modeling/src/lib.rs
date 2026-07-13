@@ -11,6 +11,7 @@ mod dsl;
 mod flow;
 mod hash;
 mod implement;
+mod invoke;
 mod label;
 mod model;
 mod patch;
@@ -35,6 +36,7 @@ pub use coverage::{CoverageError, CoverageReport, OperationGap, coverage};
 pub use flow::{FlowError, handler_flows};
 pub use hash::model_hash;
 pub use implement::{ImplementError, adapter_source, handler_source, implement, implement_adapter};
+pub use invoke::{CliInvocation, InvokeError, cli_invocation};
 pub use model::{
     Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
     TypeShape, Variant,

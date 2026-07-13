@@ -230,10 +230,10 @@ The result and the gates are identical. The protocol is the editor-free path use
 
 ### Gates
 
-| Gate                        | Property enforced                                                                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                                                      |
-| `coverage`                  | the derived list of operations still on their `unimplemented` default                                                                                                   |
+| Gate                        | Property enforced                                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| reference safety in `patch` | no operation references an undefined type, and no type is removed while referenced                                                                                                         |
+| `coverage`                  | the derived list of operations still on their `unimplemented` default                                                                                                                      |
 | `verify`                    | required dependencies, layering direction, type references, port targets, inbound services, client services, generated drift, implementation coverage, flow conformance, interior coverage |
 
 ### The edit vocabulary

@@ -740,7 +740,7 @@ pub fn theseus_model() -> Model {
         )
         .inbound("theseus", Transport::Cli, "Theseus", "theseus-cli")
         .inbound("agent", Transport::Agent, "Theseus", "theseus-agent")
-        .turns(32)
+        .turns(64)
         .inbound_port(
             Port::new("llm", "Completes one turn of the conversation.")
                 .method(

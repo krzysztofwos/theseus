@@ -20,7 +20,7 @@ impl<T: Llm + ?Sized> Llm for &T {
 }
 
 /// The most turns the loop runs before giving up.
-pub const TURN_BUDGET: usize = 32;
+pub const TURN_BUDGET: usize = 64;
 
 /// The `Turn` request.
 #[derive(Debug, Clone)]

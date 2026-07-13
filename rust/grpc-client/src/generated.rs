@@ -318,6 +318,19 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("lint", status))?;
         parsed("lint", &reply.into_inner().json)
     }
+
+    async fn drive(&self, request: theseus::DriveRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .drive(proto::DriveRequest {
+                operation: Some(request.operation),
+                input: request.input,
+            })
+            .await
+            .map_err(|status| failed("drive", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

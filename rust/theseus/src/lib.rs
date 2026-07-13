@@ -395,6 +395,34 @@ impl Toolchain for CargoToolchain {
         Ok(self.project.clone())
     }
 
+    async fn drive(&self, request: &theseus_modeling::CliInvocation) -> anyhow::Result<String> {
+        self.project.validate_root()?;
+        let root = self.project.root();
+        let lease = FsMutation::begin_async(root.to_path_buf(), Vec::new()).await?;
+        let mut command = tokio::process::Command::new("cargo");
+        command
+            .args(["run", "--quiet", "-p", &request.crate_name])
+            .args(["--bin", &request.binary, "--"])
+            .args(&request.argv)
+            .current_dir(root)
+            .kill_on_drop(true);
+        let output = command
+            .output()
+            .await
+            .with_context(|| format!("driving `{}`", request.binary))?;
+        lease.commit()?;
+        let status = output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "terminated by signal".to_string());
+        Ok(format!(
+            "exit {status}\n--- stdout\n{}\n--- stderr\n{}",
+            head(&String::from_utf8_lossy(&output.stdout)),
+            head(&String::from_utf8_lossy(&output.stderr)),
+        ))
+    }
+
     async fn lint(&self) -> anyhow::Result<CheckReport> {
         self.project.validate_root()?;
         run_cargo_under_lease(
@@ -569,7 +597,7 @@ impl
         GatedWorkspace<FsWorkspace>,
         GatedCheckpoint<GitCheckpoint>,
         theseus_calculator::Calculator,
-        CargoToolchain,
+        GatedToolchain<CargoToolchain>,
     >
 {
     pub fn new(allow_writes: bool) -> Result<Self, ProjectContextError> {
@@ -586,7 +614,10 @@ impl
                 allow_writes,
             },
             calculator: theseus_calculator::Calculator,
-            toolchain: CargoToolchain::for_project(&project),
+            toolchain: GatedToolchain {
+                toolchain: CargoToolchain::for_project(&project),
+                allow_writes,
+            },
         })
     }
 }

@@ -12,10 +12,10 @@ use theseus_modeling::{
 use tokio::sync::Mutex;
 
 use crate::{
-    CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedWorkspace, GitCheckpoint,
-    ImplementRequest, ListRequest, PatchRequest, ProjectContext, ProjectContextError, QueryRequest,
-    ReadRequest, RustItemRequest, ShowRequest, SnapshotRef, SnapshotRequest, SourceDocument,
-    TheseusService, Toolchain, Workspace,
+    CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedToolchain, GatedWorkspace,
+    GitCheckpoint, ImplementRequest, ListRequest, PatchRequest, ProjectContext,
+    ProjectContextError, QueryRequest, ReadRequest, RustItemRequest, ShowRequest, SnapshotRef,
+    SnapshotRequest, SourceDocument, TheseusService, Toolchain, Workspace,
     service::{
         apply_patch, checkpoint_snapshot_request, checkpoint_state_request, edit_rust_item_model,
         ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
@@ -33,7 +33,7 @@ pub struct StatefulSession<W, C, A, T> {
     workspace: GatedWorkspace<W>,
     checkpoint: GatedCheckpoint<C>,
     calculator: A,
-    toolchain: T,
+    toolchain: GatedToolchain<T>,
 }
 
 impl<W, C, A, T> StatefulSession<W, C, A, T> {
@@ -54,12 +54,15 @@ impl<W, C, A, T> StatefulSession<W, C, A, T> {
                 workspace,
                 allow_writes,
             },
+            toolchain: GatedToolchain {
+                toolchain,
+                allow_writes,
+            },
             checkpoint: GatedCheckpoint {
                 checkpoint,
                 allow_writes,
             },
             calculator,
-            toolchain,
         }
     }
 }
@@ -227,6 +230,11 @@ where
     async fn test(&self) -> anyhow::Result<crate::CheckReport> {
         let state = self.state.lock().await;
         self.ctx(&state.working).test().await
+    }
+
+    async fn drive(&self, request: crate::DriveRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).drive(request).await
     }
 
     async fn lint(&self) -> anyhow::Result<crate::CheckReport> {

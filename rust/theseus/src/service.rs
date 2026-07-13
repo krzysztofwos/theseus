@@ -59,6 +59,16 @@ pub(crate) async fn ensure_checkpoint_project(
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn drive(&self, request: crate::generated::DriveRequest) -> anyhow::Result<String> {
+        let input = match request.input.as_deref() {
+            Some(text) => serde_json::from_str(text)
+                .context("parsing `input` as a JSON object of field values")?,
+            None => serde_json::Value::Null,
+        };
+        let invocation = theseus_modeling::cli_invocation(self.model, &request.operation, &input)?;
+        self.toolchain.drive(&invocation).await
+    }
+
     async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
         let project = self.project.context().await?;
         ensure_toolchain_project(&project, self.toolchain).await?;
@@ -1606,6 +1616,44 @@ mod tests {
         assert_eq!(
             edit.to_string(),
             "the `replace` field is invalid: expected a boolean"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drive_is_refused_without_the_gate() {
+        let error = Session::new(
+            project(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            false,
+        )
+        .call("drive", &serde_json::json!({ "operation": "verify" }))
+        .await
+        .expect_err("driving an inbound is an effect the gate refuses");
+        assert!(
+            error.downcast_ref::<Refused>().is_some(),
+            "the refusal should carry the typed gate error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drive_of_an_unknown_operation_names_the_gap() {
+        let error = Session::new(
+            project(),
+            &NoopWorkspace,
+            &StubCheckpoint,
+            &theseus_calculator::Calculator,
+            &StubToolchain,
+            true,
+        )
+        .call("drive", &serde_json::json!({ "operation": "ghost" }))
+        .await
+        .expect_err("an unknown operation cannot be projected");
+        assert!(
+            error.to_string().contains("no operation named `ghost`"),
+            "{error}"
         );
     }
 

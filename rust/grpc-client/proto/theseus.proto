@@ -154,6 +154,13 @@ message ListRequest {
   optional string path = 1;
 }
 
+message DriveRequest {
+  // The operation to drive, by name.
+  optional string operation = 1;
+  // The operation's request as a JSON object of field values. Omit for an `Empty` request.
+  optional string input = 2;
+}
+
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
@@ -237,4 +244,6 @@ service Theseus {
   rpc List (ListRequest) returns (String);
   // Run clippy across the workspace with warnings denied.
   rpc Lint (Empty) returns (CheckReport);
+  // Drive one of the project's operations through its own command-line inbound.
+  rpc Drive (DriveRequest) returns (String);
 }

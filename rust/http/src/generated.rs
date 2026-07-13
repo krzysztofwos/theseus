@@ -228,6 +228,22 @@ fn parse_list_request_http(
     })
 }
 
+fn parse_drive_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::DriveRequest> {
+    Ok(theseus::DriveRequest {
+        operation: input
+            .get("operation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `operation`"))?,
+        input: serde_json::from_value(
+                input.get("input").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `input` field is invalid: {error}"))?,
+    })
+}
+
 /// Handle one operation call: parse the request from the call's JSON body,
 /// run the operation, and render the reply. The status derives from the
 /// outcome's structure: 200 a result, 400 a request that does not parse,
@@ -332,6 +348,12 @@ pub async fn handle(
             }
         }
         "lint" => reply_json(service.lint().await),
+        "drive" => {
+            match parse_drive_request_http(input) {
+                Ok(request) => reply_text(service.drive(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
         other => {
             HttpReply {
                 status: 404,

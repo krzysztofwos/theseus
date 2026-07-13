@@ -247,6 +247,7 @@ pub fn theseus_model() -> Model {
             ],
         )
         .foreign_type("CheckReport", "theseus::CheckReport")
+        .foreign_type("CliInvocation", "theseus_modeling::CliInvocation")
         .struct_type(
             "Operands",
             &[("a", "f64", "Left operand."), ("b", "f64", "Right operand.")],
@@ -285,6 +286,17 @@ pub fn theseus_model() -> Model {
                     "path",
                     "Option<String>",
                     "A workspace-relative subtree to search. The whole workspace when omitted.",
+                ),
+            ],
+        )
+        .struct_type(
+            "DriveRequest",
+            &[
+                ("operation", "String", "The operation to drive, by name."),
+                (
+                    "input",
+                    "Option<String>",
+                    "The operation's request as a JSON object of field values. Omit for an `Empty` request.",
                 ),
             ],
         )
@@ -547,6 +559,16 @@ pub fn theseus_model() -> Model {
                 .tool(
                     "Run clippy across the workspace with warnings denied and report the outcome.",
                 )
+                .operation(
+                    "drive",
+                    "Drive one of the project's operations through its own command-line inbound.",
+                    "DriveRequest",
+                    "String",
+                )
+                .uses(&["toolchain"])
+                .tool(
+                    "Drive one of the project's operations through its own command-line inbound, rebuilding it first. `operation` names any modeled operation whose service a `Cli` inbound drives; `input` is a JSON object of the operation's request fields, validated against the contract. The command line is a projection of the model — only field values are yours. Runs the project's own code, so it requires write permission. Returns the exit status, stdout, and stderr. Prove a grown capability live with it after `restart`. Example: { \"operation\": \"count\" } or { \"operation\": \"add\", \"input\": \"{\\\"text\\\": \\\"hello\\\"}\" }.",
+                )
                 .port(
                     Port::new(
                             "project",
@@ -660,7 +682,14 @@ pub fn theseus_model() -> Model {
                             "Run clippy across the workspace with warnings denied and report the outcome.",
                             "Empty",
                             "CheckReport",
-                        ),
+                        )
+                        .method(
+                            "drive",
+                            "Run one projected inbound invocation and report its outcome.",
+                            "CliInvocation",
+                            "String",
+                        )
+                        .gated(),
                 ),
         )
         .service(

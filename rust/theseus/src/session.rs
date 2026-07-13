@@ -13,7 +13,7 @@
 use theseus_modeling::Model;
 
 use crate::{
-    GatedCheckpoint, GatedWorkspace, ProjectContext,
+    GatedCheckpoint, GatedToolchain, GatedWorkspace, ProjectContext,
     generated::{Checkpoint, Ctx, Toolchain, Workspace, dispatch_tool},
     service::{
         apply_patch, checkpoint_snapshot_request, checkpoint_state_request, edit_rust_item_model,
@@ -199,13 +199,14 @@ impl<'a> Session<'a> {
         }
         let workspace = self.gate();
         let checkpoint = self.checkpoint_gate();
+        let toolchain = self.toolchain_gate();
         let ctx = Ctx {
             model: &self.state.working,
             project: &self.project,
             workspace: &workspace,
             checkpoint: &checkpoint,
             calculator: self.calculator,
-            toolchain: self.toolchain,
+            toolchain: &toolchain,
         };
         dispatch_tool(&ctx, name, input).await
     }
@@ -248,6 +249,15 @@ impl<'a> Session<'a> {
     fn checkpoint_gate(&self) -> GatedCheckpoint<&'a dyn Checkpoint> {
         GatedCheckpoint {
             checkpoint: self.checkpoint,
+            allow_writes: self.allow_writes,
+        }
+    }
+
+    /// The toolchain port carrying the same permission with its own policy:
+    /// proving the tree passes ungated, driving an inbound is an effect.
+    fn toolchain_gate(&self) -> GatedToolchain<&'a dyn Toolchain> {
+        GatedToolchain {
+            toolchain: self.toolchain,
             allow_writes: self.allow_writes,
         }
     }

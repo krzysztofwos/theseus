@@ -491,6 +491,28 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn drive(
+        &self,
+        request: tonic::Request<proto::DriveRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .drive(theseus::DriveRequest {
+                operation: request
+                    .operation
+                    .ok_or_else(|| tonic::Status::invalid_argument(
+                        "field `operation` is required",
+                    ))?,
+                input: request.input,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

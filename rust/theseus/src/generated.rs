@@ -160,6 +160,14 @@ pub trait Toolchain: Send + Sync {
     async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("toolchain.lint").into())
     }
+
+    /// Run one projected inbound invocation and report its outcome.
+    async fn drive(
+        &self,
+        _request: &theseus_modeling::CliInvocation,
+    ) -> anyhow::Result<String> {
+        Err(Unimplemented("toolchain.drive").into())
+    }
 }
 
 /// A borrowed adapter serves the port its target serves, so a wrapper
@@ -184,6 +192,13 @@ impl<T: Toolchain + ?Sized> Toolchain for &T {
 
     async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         (**self).lint().await
+    }
+
+    async fn drive(
+        &self,
+        request: &theseus_modeling::CliInvocation,
+    ) -> anyhow::Result<String> {
+        (**self).drive(request).await
     }
 }
 
@@ -268,6 +283,47 @@ impl<A: Checkpoint> Checkpoint for GatedCheckpoint<A> {
             return Err(Refused.into());
         }
         self.checkpoint.prune(request).await
+    }
+}
+
+/// The `toolchain` port carrying a write permission: a gated method is refused
+/// without it, and an ungated one passes through. It wraps an owned
+/// adapter or a borrowed one, the same gate either way.
+pub struct GatedToolchain<A> {
+    pub toolchain: A,
+    pub allow_writes: bool,
+}
+
+#[async_trait::async_trait]
+impl<A: Toolchain> Toolchain for GatedToolchain<A> {
+    async fn context(&self) -> anyhow::Result<theseus::ProjectContext> {
+        self.toolchain.context().await
+    }
+
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
+        self.toolchain.check().await
+    }
+
+    async fn check_mutation(&self) -> anyhow::Result<theseus::CheckReport> {
+        self.toolchain.check_mutation().await
+    }
+
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
+        self.toolchain.test().await
+    }
+
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
+        self.toolchain.lint().await
+    }
+
+    async fn drive(
+        &self,
+        request: &theseus_modeling::CliInvocation,
+    ) -> anyhow::Result<String> {
+        if !self.allow_writes {
+            return Err(Refused.into());
+        }
+        self.toolchain.drive(request).await
     }
 }
 
@@ -391,6 +447,15 @@ pub struct SearchRequest {
 pub struct ListRequest {
     /// The workspace-relative directory to list. The root when omitted.
     pub path: Option<String>,
+}
+
+/// The `DriveRequest` request.
+#[derive(Debug, Clone)]
+pub struct DriveRequest {
+    /// The operation to drive, by name.
+    pub operation: String,
+    /// The operation's request as a JSON object of field values. Omit for an `Empty` request.
+    pub input: Option<String>,
 }
 
 /// An operation with no authored handler, the trait default's error. A
@@ -551,6 +616,11 @@ pub trait TheseusService: Send + Sync {
     /// Run clippy across the workspace with warnings denied.
     async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         Err(Unimplemented("lint").into())
+    }
+
+    /// Drive one of the project's operations through its own command-line inbound.
+    async fn drive(&self, _request: DriveRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("drive").into())
     }
 }
 
@@ -719,6 +789,10 @@ for Standalone<
     async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
         self.ctx().lint().await
     }
+
+    async fn drive(&self, request: DriveRequest) -> anyhow::Result<String> {
+        self.ctx().drive(request).await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -856,7 +930,14 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "The workspace-relative directory to list. The root when omitted." } } } }),
         serde_json::json!({ "name" : "lint", "description" :
         "Run clippy across the workspace with warnings denied and report the outcome.",
-        "input_schema" : { "type" : "object", "properties" : {} } })
+        "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
+        "name" : "drive", "description" :
+        "Drive one of the project's operations through its own command-line inbound, rebuilding it first. `operation` names any modeled operation whose service a `Cli` inbound drives; `input` is a JSON object of the operation's request fields, validated against the contract. The command line is a projection of the model — only field values are yours. Runs the project's own code, so it requires write permission. Returns the exit status, stdout, and stderr. Prove a grown capability live with it after `restart`. Example: { \"operation\": \"count\" } or { \"operation\": \"add\", \"input\": \"{\\\"text\\\": \\\"hello\\\"}\" }.",
+        "input_schema" : { "type" : "object", "properties" : { "operation" : { "type" :
+        "string", "description" : "The operation to drive, by name." }, "input" : {
+        "type" : "string", "description" :
+        "The operation's request as a JSON object of field values. Omit for an `Empty` request."
+        } }, "required" : ["operation"] } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -1048,6 +1129,21 @@ pub(crate) fn parse_list_request_input(
             .map_err(|error| anyhow::anyhow!("the `path` field is invalid: {error}"))?,
     })
 }
+pub(crate) fn parse_drive_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<DriveRequest> {
+    Ok(DriveRequest {
+        operation: input
+            .get("operation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("the call needs a string `operation`"))?,
+        input: serde_json::from_value(
+                input.get("input").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `input` field is invalid: {error}"))?,
+    })
+}
 
 /// Dispatch one tool call to the service: parse the request from the
 /// call's JSON input, run the operation, and render the result — text
@@ -1111,9 +1207,10 @@ pub async fn dispatch_tool(
         "search" => Ok(service.search(parse_search_request_input(input)?).await?),
         "list" => Ok(service.list(parse_list_request_input(input)?).await?),
         "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
+        "drive" => Ok(service.drive(parse_drive_request_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive"
             )
         }
     }

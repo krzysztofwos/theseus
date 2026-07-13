@@ -260,6 +260,19 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("lint", status, &body)?;
         parsed("lint", &body)
     }
+
+    async fn drive(&self, request: theseus::DriveRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post(
+                "drive",
+                serde_json::json!(
+                    { "operation" : request.operation, "input" : request.input }
+                ),
+            )
+            .await?;
+        checked("drive", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

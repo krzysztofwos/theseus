@@ -324,6 +324,27 @@ pub fn command() -> Command {
             Command::new("lint")
                 .about("Run clippy across the workspace with warnings denied."),
         )
+        .subcommand(
+            Command::new("drive")
+                .about(
+                    "Drive one of the project's operations through its own command-line inbound.",
+                )
+                .arg(
+                    Arg::new("operation")
+                        .long("operation")
+                        .action(ArgAction::Set)
+                        .required(true)
+                        .help("The operation to drive, by name."),
+                )
+                .arg(
+                    Arg::new("input")
+                        .long("input")
+                        .action(ArgAction::Set)
+                        .help(
+                            "The operation's request as a JSON object of field values. Omit for an `Empty` request.",
+                        ),
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -438,6 +459,14 @@ fn parse_list_request(matches: &ArgMatches) -> anyhow::Result<theseus::ListReque
     })
 }
 
+fn parse_drive_request(matches: &ArgMatches) -> anyhow::Result<theseus::DriveRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::DriveRequest {
+        operation: arg("operation").unwrap_or_default(),
+        input: arg("input"),
+    })
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -462,6 +491,7 @@ pub enum Invocation {
     Search(theseus::SearchRequest),
     List(theseus::ListRequest),
     Lint,
+    Drive(theseus::DriveRequest),
 }
 
 impl Invocation {
@@ -497,6 +527,7 @@ impl Invocation {
             Some(("search", sub)) => Ok(Invocation::Search(parse_search_request(sub)?)),
             Some(("list", sub)) => Ok(Invocation::List(parse_list_request(sub)?)),
             Some(("lint", _)) => Ok(Invocation::Lint),
+            Some(("drive", sub)) => Ok(Invocation::Drive(parse_drive_request(sub)?)),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -575,6 +606,7 @@ pub async fn dispatch(
         Invocation::Lint => {
             println!("{}", serde_json::to_string_pretty(& service.lint(). await ?) ?)
         }
+        Invocation::Drive(request) => println!("{}", service.drive(request). await ?),
     }
     Ok(())
 }

@@ -3,7 +3,7 @@
 mod generated;
 mod service;
 
-pub use generated::{JournalService, AddRequest, SearchRequest, Refused, Unimplemented, Ctx, Standalone, Store};
+pub use generated::*;
 
 /// A [`Store`] over one plain-text file: an entry per line. The journal's
 /// shared adapter for its inbound binaries.

@@ -11,7 +11,7 @@
 
 use crate::{
     codegen::{GeneratedFile, pascal_case},
-    model::{CrateNode, Inbound, Model, Service, TypeShape},
+    model::{CrateNode, Inbound, Model, Service},
 };
 
 /// The skeleton files for every library service crate the model describes.
@@ -49,7 +49,7 @@ pub fn scaffold_files(model: &Model) -> Vec<GeneratedFile> {
         });
         files.push(GeneratedFile {
             path: format!("rust/{dir}/src/lib.rs"),
-            contents: lib_rs(&services, model),
+            contents: lib_rs(&services),
         });
         files.push(GeneratedFile {
             path: format!("rust/{dir}/src/service.rs"),
@@ -195,22 +195,10 @@ fn cargo_toml(node: &CrateNode, services: &[&Service], model: &Model) -> String 
 }
 
 /// Render the library root: the module wiring and the public re-exports.
-fn lib_rs(services: &[&Service], model: &Model) -> String {
-    let mut contract: Vec<String> = services.iter().map(|s| trait_name(s)).collect();
-    contract.extend(request_structs(services, model));
-    // The boundary error types cross the crate line with the contract: a wire
-    // adapter downcasts them to map an outcome, so the library exports them.
-    contract.push("Refused".to_string());
-    contract.push("Unimplemented".to_string());
-    // A ported service's composition surface crosses the crate line too: the
-    // borrowed and owned roots, and the port traits an adapter implements.
-    for service in services.iter().filter(|s| !s.outbound.is_empty()) {
-        contract.push("Ctx".to_string());
-        contract.push("Standalone".to_string());
-        for port in service.outbound.iter().filter(|p| p.target.is_none()) {
-            contract.push(pascal_case(&port.name));
-        }
-    }
+fn lib_rs(services: &[&Service]) -> String {
+    // The generated module is the crate's contract, re-exported whole: a
+    // request type the model grows later crosses the crate line on the next
+    // render, with no authored re-export line to keep in step.
     // A portless service authors an adapter struct; a ported one authors its
     // handlers on `Ctx`, so only the portless adapters cross the crate line.
     let adapters: Vec<String> = services
@@ -224,9 +212,8 @@ fn lib_rs(services: &[&Service], model: &Model) -> String {
         format!("{}\n", use_list("service", &adapters))
     };
     format!(
-        "//! {}\n\nmod generated;\nmod service;\n\n{}\n{adapter_uses}",
+        "//! {}\n\nmod generated;\nmod service;\n\npub use generated::*;\n{adapter_uses}",
         description(services),
-        use_list("generated", &contract),
     )
 }
 
@@ -290,24 +277,6 @@ fn description(services: &[&Service]) -> String {
     format!("The {} service", names.join(" and "))
 }
 
-/// The distinct struct request types the services' operations take. These are the
-/// types the crate's generated module emits and the library re-exports.
-fn request_structs(services: &[&Service], model: &Model) -> Vec<String> {
-    let mut seen: Vec<String> = Vec::new();
-    for service in services {
-        for op in &service.operations {
-            if op.request != "Empty"
-                && let Some(def) = model.type_def(&op.request)
-                && matches!(def.shape, TypeShape::Struct(_))
-                && !seen.contains(&def.name)
-            {
-                seen.push(def.name.clone());
-            }
-        }
-    }
-    seen
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,11 +310,7 @@ mod tests {
 
         let lib = file(&files, "app/src/lib.rs");
         assert!(lib.contains("mod generated;"));
-        assert!(
-            lib.contains(
-                "pub use generated::{CalculatorService, Operands, Refused, Unimplemented};"
-            )
-        );
+        assert!(lib.contains("pub use generated::*;"));
         assert!(lib.contains("pub use service::Calculator;"));
 
         let service = file(&files, "app/src/service.rs");

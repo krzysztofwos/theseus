@@ -3,8 +3,5 @@
 mod generated;
 mod service;
 
-pub use generated::{
-    CapitalizeRequest, Refused, SlugifyRequest, TextUtilsService, TruncateRequest, Unimplemented,
-    WordCountRequest,
-};
+pub use generated::*;
 pub use service::TextUtils;

@@ -117,6 +117,47 @@ pub struct Message {
     pub blocks: Vec<Block>,
 }
 
+/// One turn's request: the framing, the conversation, and the tools offered.
+pub fn turn(messages: Vec<Message>, tools: Vec<Value>) -> Turn {
+    Turn {
+        system: SYSTEM.to_string(),
+        messages,
+        tools,
+    }
+}
+
+/// Record the assistant's turn — any text, then the tool calls it made.
+pub fn push_assistant(messages: &mut Vec<Message>, reply: Reply) {
+    let mut blocks = Vec::new();
+    if !reply.text.is_empty() {
+        blocks.push(Block::Text(reply.text));
+    }
+    blocks.extend(reply.tool_uses.into_iter().map(Block::ToolUse));
+    messages.push(Message {
+        role: Role::Assistant,
+        blocks,
+    });
+}
+
+/// Record one result per tool call, so the next request is complete.
+pub fn push_results(messages: &mut Vec<Message>, results: Vec<(String, String)>) {
+    messages.push(Message {
+        role: Role::User,
+        blocks: results
+            .into_iter()
+            .map(|(tool_use_id, content)| Block::ToolResult {
+                tool_use_id,
+                content,
+            })
+            .collect(),
+    });
+}
+
+/// The most turns the bootstrap phase runs before giving up, the loop's budget.
+pub fn phase_budget() -> usize {
+    TURN_BUDGET
+}
+
 /// The opening transcript: one user message carrying the goal.
 pub fn opening(message: &str) -> Vec<Message> {
     vec![Message {
@@ -169,13 +210,11 @@ pub async fn run_agent(
     // `AGENT_TRACE` set in the environment streams each turn's tool calls and
     // results to stderr, so a run can be watched without touching the answer.
     let trace = std::env::var("AGENT_TRACE").is_ok();
-    for turn in 1..=TURN_BUDGET {
-        let request = Turn {
-            system: SYSTEM.to_string(),
-            messages: messages.clone(),
-            tools: tools.clone(),
-        };
-        let reply = llm.complete(&request).await?;
+    for turn_number in 1..=TURN_BUDGET {
+        let turn = turn_number;
+        let reply = llm
+            .complete(&crate::agent::turn(messages.clone(), tools.clone()))
+            .await?;
         if trace && !reply.text.is_empty() {
             eprintln!("[turn {turn}] say: {}", reply.text);
         }
@@ -184,17 +223,8 @@ pub async fn run_agent(
         }
         let solo_restart =
             matches!(reply.tool_uses.as_slice(), [tool] if tool.name == RESTART_TOOL);
-
-        // Record the assistant's turn — any text, then the tool calls it made.
-        let mut blocks = Vec::new();
-        if !reply.text.is_empty() {
-            blocks.push(Block::Text(reply.text));
-        }
-        blocks.extend(reply.tool_uses.iter().cloned().map(Block::ToolUse));
-        messages.push(Message {
-            role: Role::Assistant,
-            blocks,
-        });
+        let calls = reply.tool_uses.clone();
+        push_assistant(&mut messages, reply);
 
         // A solo restart ends this hull's run. The pending call is answered by
         // the resumed binary, so the transcript stays one result short here.
@@ -210,7 +240,7 @@ pub async fn run_agent(
         // restart beside other calls is refused the same way, so every call in
         // the turn carries a result before the next request.
         let mut results = Vec::new();
-        for tool in &reply.tool_uses {
+        for tool in &calls {
             if trace {
                 eprintln!("[turn {turn}] call {}({})", tool.name, tool.input);
             }
@@ -229,15 +259,9 @@ other calls, then call it alone"
             if trace {
                 eprintln!("[turn {turn}]   -> {content}");
             }
-            results.push(Block::ToolResult {
-                tool_use_id: tool.id.clone(),
-                content,
-            });
+            results.push((tool.id.clone(), content));
         }
-        messages.push(Message {
-            role: Role::User,
-            blocks: results,
-        });
+        push_results(&mut messages, results);
     }
     Ok(Outcome::Exhausted(messages))
 }

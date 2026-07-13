@@ -120,7 +120,7 @@ fn binary_cargo_toml(
     format!(
         "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"A standalone command-line interface to the {} service\"\n\n\
          [[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n\n\
-         [dependencies]\nanyhow = {{ workspace = true }}\nclap = {{ workspace = true }}\ntokio = {{ workspace = true }}\n\n{path_block}",
+         [dependencies]\nanyhow = {{ workspace = true }}\nclap = {{ workspace = true }}\nserde_json = {{ workspace = true }}\ntokio = {{ workspace = true }}\n\n{path_block}",
         node.name, service.name, inbound.name,
     )
 }

@@ -6,16 +6,13 @@
 //! holds the lock across each operation, so reads and writes observe one ordered
 //! revision history.
 
-use theseus_modeling::{
-    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, VerifyReport,
-};
+use theseus_modeling::{GeneratedFile, Model, PatchOutcome};
 use tokio::sync::Mutex;
 
 use crate::{
     CargoToolchain, Checkpoint, Ctx, FsWorkspace, GatedCheckpoint, GatedToolchain, GatedWorkspace,
-    GitCheckpoint, ImplementRequest, ListRequest, PatchRequest, ProjectContext,
-    ProjectContextError, QueryRequest, ReadRequest, RustItemRequest, ShowRequest, SnapshotRef,
-    SnapshotRequest, SourceDocument, TheseusService, Toolchain, Workspace,
+    GitCheckpoint, ImplementRequest, PatchRequest, ProjectContext, ProjectContextError,
+    RustItemRequest, SnapshotRef, SnapshotRequest, Toolchain, Workspace,
     service::{
         apply_patch, checkpoint_snapshot_request, checkpoint_state_request, edit_rust_item_model,
         ensure_checkpoint_project, generate_model, implement_model, persist_model, scaffold_model,
@@ -29,7 +26,7 @@ use crate::{
 /// read-only default as [`crate::Session`].
 pub struct StatefulSession<W, C, A, T> {
     project: ProjectContext,
-    state: Mutex<crate::SessionState>,
+    pub(crate) state: Mutex<crate::SessionState>,
     workspace: GatedWorkspace<W>,
     checkpoint: GatedCheckpoint<C>,
     calculator: A,
@@ -94,7 +91,7 @@ where
     A: theseus_calculator::CalculatorService,
     T: Toolchain,
 {
-    fn ctx<'a>(&'a self, model: &'a Model) -> Ctx<'a> {
+    pub(crate) fn ctx<'a>(&'a self, model: &'a Model) -> Ctx<'a> {
         Ctx {
             model,
             project: &self.project,
@@ -106,25 +103,19 @@ where
     }
 }
 
-#[async_trait::async_trait]
-impl<W, C, A, T> TheseusService for StatefulSession<W, C, A, T>
+/// The stateful behavior authored beside the generated contract: the operations
+/// whose declared flow reaches a session-managed port, so the working and
+/// persisted models must be reconciled under the lock. The generated
+/// `TheseusService` impl forwards each to its `_locked` hook here; every pure
+/// operation it forwards to a borrowed `Ctx` directly.
+impl<W, C, A, T> StatefulSession<W, C, A, T>
 where
     W: Workspace,
     C: Checkpoint,
     A: theseus_calculator::CalculatorService,
     T: Toolchain,
 {
-    async fn model(&self) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).model().await
-    }
-
-    async fn verify(&self) -> anyhow::Result<VerifyReport> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).verify().await
-    }
-
-    async fn generate(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+    pub(crate) async fn generate_locked(&self) -> anyhow::Result<Vec<GeneratedFile>> {
         let mut state = self.state.lock().await;
         let files = generate_model(
             &self.project,
@@ -138,12 +129,7 @@ where
         Ok(files)
     }
 
-    async fn query(&self, request: QueryRequest) -> anyhow::Result<QueryOutcome> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).query(request).await
-    }
-
-    async fn patch(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
+    pub(crate) async fn patch_locked(&self, request: PatchRequest) -> anyhow::Result<PatchOutcome> {
         let mut state = self.state.lock().await;
         let write = request.write;
         let (outcome, proposed) = apply_patch(&state.working, &request)?;
@@ -164,12 +150,10 @@ where
         Ok(outcome)
     }
 
-    async fn coverage(&self) -> anyhow::Result<CoverageReport> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).coverage().await
-    }
-
-    async fn implement(&self, request: ImplementRequest) -> anyhow::Result<crate::ImplementResult> {
+    pub(crate) async fn implement_locked(
+        &self,
+        request: ImplementRequest,
+    ) -> anyhow::Result<crate::ImplementResult> {
         let state = self.state.lock().await;
         implement_model(
             &self.project,
@@ -182,7 +166,7 @@ where
         .await
     }
 
-    async fn edit_rust_item(
+    pub(crate) async fn edit_rust_item_locked(
         &self,
         request: RustItemRequest,
     ) -> anyhow::Result<crate::RustItemResult> {
@@ -198,22 +182,7 @@ where
         .await
     }
 
-    async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).show(request).await
-    }
-
-    async fn check(&self) -> anyhow::Result<crate::CheckReport> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).check().await
-    }
-
-    async fn calc(&self, request: crate::CalcRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).calc(request).await
-    }
-
-    async fn scaffold(&self) -> anyhow::Result<Vec<GeneratedFile>> {
+    pub(crate) async fn scaffold_locked(&self) -> anyhow::Result<Vec<GeneratedFile>> {
         let mut state = self.state.lock().await;
         let files = scaffold_model(
             &self.project,
@@ -227,34 +196,14 @@ where
         Ok(files)
     }
 
-    async fn test(&self) -> anyhow::Result<crate::CheckReport> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).test().await
-    }
-
-    async fn skills(&self, request: crate::SkillsRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).skills(request).await
-    }
-
-    async fn drive(&self, request: crate::DriveRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).drive(request).await
-    }
-
-    async fn lint(&self) -> anyhow::Result<crate::CheckReport> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).lint().await
-    }
-
-    async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
+    pub(crate) async fn snapshot_locked(&self, request: SnapshotRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         let plan = checkpoint_snapshot_request(&self.project, &state.persisted, request.label)?;
         Ok(self.checkpoint.snapshot(&plan).await?.reference)
     }
 
-    async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
+    pub(crate) async fn rollback_locked(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let mut state = self.state.lock().await;
         ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         let plan = checkpoint_state_request(&self.project, &state.persisted, request.reference)?;
@@ -263,43 +212,26 @@ where
         Ok(restored.detail)
     }
 
-    async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
+    pub(crate) async fn diff_locked(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         let plan = checkpoint_state_request(&self.project, &state.persisted, request.reference)?;
         self.checkpoint.diff(&plan).await
     }
 
-    async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
+    pub(crate) async fn release_locked(&self, request: SnapshotRef) -> anyhow::Result<String> {
         let _state = self.state.lock().await;
         ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         self.checkpoint.release(&request.reference).await
     }
 
-    async fn prune(&self, request: crate::SnapshotRetention) -> anyhow::Result<String> {
+    pub(crate) async fn prune_locked(
+        &self,
+        request: crate::SnapshotRetention,
+    ) -> anyhow::Result<String> {
         let _state = self.state.lock().await;
         ensure_checkpoint_project(&self.project, &self.checkpoint).await?;
         self.checkpoint.prune(&request).await
-    }
-
-    async fn restart(&self) -> anyhow::Result<()> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).restart().await
-    }
-
-    async fn read(&self, request: ReadRequest) -> anyhow::Result<SourceDocument> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).read(request).await
-    }
-
-    async fn search(&self, request: crate::SearchRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).search(request).await
-    }
-
-    async fn list(&self, request: ListRequest) -> anyhow::Result<String> {
-        let state = self.state.lock().await;
-        self.ctx(&state.working).list(request).await
     }
 }
 
@@ -311,6 +243,7 @@ mod tests {
     use theseus_modeling::Edit;
 
     use super::*;
+    use crate::{QueryRequest, TheseusService};
 
     fn project() -> ProjectContext {
         crate::theseus_project().expect("Theseus project context is valid")
@@ -495,23 +428,30 @@ mod tests {
     }
 
     #[test]
-    fn every_modeled_operation_has_a_serialized_delegation() {
+    fn every_behavior_operation_has_a_locked_hook() {
+        // The generated `TheseusService` impl forwards pure operations to a
+        // borrowed `Ctx` and behavior operations to a `_locked` hook here; the
+        // whole impl regenerates with the contract, so a forgotten pure
+        // delegation is now structurally impossible. This holds the other half:
+        // every operation the model marks as behavior-bearing (its flow reaches
+        // the workspace or checkpoint port) has its authored hook in this file.
         let mut model = theseus_model();
         model.services.retain(|service| service.name == "Theseus");
-        let report = theseus_modeling::coverage(&model, |_| {
-            Ok::<_, std::convert::Infallible>(include_str!("stateful.rs").to_string())
-        })
-        .expect("the stateful service source parses");
-
-        let missing: Vec<&str> = report
-            .unimplemented
-            .iter()
-            .map(|operation| operation.name.as_str())
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "StatefulSession must serialize every Theseus operation; missing: {}",
-            missing.join(", ")
-        );
+        let source = include_str!("stateful.rs");
+        let managed = ["workspace", "checkpoint"];
+        for service in &model.services {
+            for op in &service.operations {
+                let behavior = op.uses.iter().any(|port| managed.contains(&port.as_str()));
+                if behavior {
+                    let hook = format!("async fn {}_locked", op.name);
+                    assert!(
+                        source.contains(&hook),
+                        "behavior operation `{}` needs an authored `{}` hook",
+                        op.name,
+                        hook
+                    );
+                }
+            }
+        }
     }
 }

@@ -689,6 +689,16 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> Result<String
     } else {
         contract::render_standalone(&services, &ports, model, crate_name)?
     };
+    // A crate hosting a service with both a workspace and a checkpoint port
+    // carries a serialized session for its long-lived inbounds. Its contract
+    // renders here; the struct and its authored hooks stay hand-written.
+    let has_session_ports =
+        ports.iter().any(|p| p.name == "workspace") && ports.iter().any(|p| p.name == "checkpoint");
+    let stateful_session = if has_session_ports {
+        contract::render_stateful_session(&services, &ports, model, crate_name)?
+    } else {
+        quote! {}
+    };
 
     let service_traits: Vec<TokenStream> = services
         .iter()
@@ -835,6 +845,7 @@ pub fn render_module_for_crate(model: &Model, crate_name: &str) -> Result<String
         #refused
         #(#service_traits)*
         #standalone
+        #stateful_session
         #tool_catalog
         #(#inbound_modules)*
         #(#client_modules)*

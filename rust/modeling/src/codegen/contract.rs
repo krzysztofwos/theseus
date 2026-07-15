@@ -242,6 +242,114 @@ pub(super) fn render_standalone(
     })
 }
 
+/// The ports whose operations a stateful session must intercept to keep its
+/// working and persisted models coherent: writes that reproject to disk and
+/// checkpoints that snapshot the tree. An operation reaching either is authored
+/// against the session state; every other operation forwards to a per-call
+/// borrowed root.
+const SESSION_MANAGED_PORTS: &[&str] = &["workspace", "checkpoint"];
+
+/// Whether an operation carries stateful behavior: its declared flow reaches a
+/// session-managed port, so its body lives in an authored `_locked` hook rather
+/// than a pure forward.
+fn is_stateful_behavior(op: &Operation) -> bool {
+    op.uses
+        .iter()
+        .any(|port| SESSION_MANAGED_PORTS.contains(&port.as_str()))
+}
+
+/// Render the serialized composition root's contract: `StatefulSession`'s
+/// `TheseusService` impl. A pure operation locks the working model and forwards
+/// to a fresh borrowed `Ctx`; an operation that reaches a session-managed port
+/// forwards to an authored `<op>_locked` inherent method, where the working and
+/// persisted models are reconciled. The struct, its constructors, `ctx`, and
+/// the `_locked` hooks stay authored; this impl regenerates with the contract,
+/// so a new pure operation reaches the serialized root with no authored edit.
+pub(super) fn render_stateful_session(
+    services: &[&Service],
+    ports: &[&Port],
+    model: &Model,
+    current_crate: &str,
+) -> Result<TokenStream, RenderError> {
+    // The serialized session stores its project context concretely and carries
+    // one generic adapter per remaining port, in declaration order.
+    let adapter_ports: Vec<&&Port> = ports.iter().filter(|p| p.name != "project").collect();
+    let params: Vec<proc_macro2::Ident> = adapter_ports
+        .iter()
+        .map(|port| format_ident!("{}Adapter", pascal_case(&port.name)))
+        .collect();
+    let bounds: Vec<TokenStream> = adapter_ports
+        .iter()
+        .zip(&params)
+        .map(|(port, param)| -> Result<TokenStream, RenderError> {
+            let bound = port_trait_path(port, model, current_crate)?;
+            Ok(quote! { #param: #bound })
+        })
+        .collect::<Result<_, _>>()?;
+
+    let impls: Vec<TokenStream> = services
+        .iter()
+        .map(|service| -> Result<TokenStream, RenderError> {
+            let trait_name = format_ident!("{}Service", pascal_case(&service.name));
+            let methods: Vec<TokenStream> = service
+                .operations
+                .iter()
+                .map(|op| -> Result<TokenStream, RenderError> {
+                    let method = format_ident!("{}", op.name);
+                    let response = response_type(&op.response, model)?;
+                    let behavior = is_stateful_behavior(op);
+                    let locked = format_ident!("{}_locked", op.name);
+                    Ok(match request_type(op, model) {
+                        Some(def) => {
+                            let request = format_ident!("{}", def.name);
+                            if behavior {
+                                quote! {
+                                    async fn #method(&self, request: #request) -> anyhow::Result<#response> {
+                                        self.#locked(request).await
+                                    }
+                                }
+                            } else {
+                                quote! {
+                                    async fn #method(&self, request: #request) -> anyhow::Result<#response> {
+                                        let state = self.state.lock().await;
+                                        self.ctx(&state.working).#method(request).await
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            if behavior {
+                                quote! {
+                                    async fn #method(&self) -> anyhow::Result<#response> {
+                                        self.#locked().await
+                                    }
+                                }
+                            } else {
+                                quote! {
+                                    async fn #method(&self) -> anyhow::Result<#response> {
+                                        let state = self.state.lock().await;
+                                        self.ctx(&state.working).#method().await
+                                    }
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(quote! {
+                #[async_trait::async_trait]
+                impl<#(#bounds),*> #trait_name for crate::StatefulSession<#(#params),*> {
+                    #(#methods)*
+                }
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(quote! {
+        #(#impls)*
+    })
+}
+
 /// Render the composition root: the model plus one field per wired port.
 pub(super) fn render_composition_root(
     ports: &[&Port],

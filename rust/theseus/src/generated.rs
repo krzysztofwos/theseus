@@ -810,6 +810,150 @@ for Standalone<
     }
 }
 
+#[async_trait::async_trait]
+impl<
+    WorkspaceAdapter: Workspace,
+    CheckpointAdapter: Checkpoint,
+    CalculatorAdapter: theseus_calculator::CalculatorService,
+    ToolchainAdapter: Toolchain,
+> TheseusService
+for crate::StatefulSession<
+    WorkspaceAdapter,
+    CheckpointAdapter,
+    CalculatorAdapter,
+    ToolchainAdapter,
+> {
+    async fn model(&self) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).model().await
+    }
+
+    async fn verify(&self) -> anyhow::Result<theseus_modeling::VerifyReport> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).verify().await
+    }
+
+    async fn generate(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+        self.generate_locked().await
+    }
+
+    async fn query(
+        &self,
+        request: QueryRequest,
+    ) -> anyhow::Result<theseus_modeling::QueryOutcome> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).query(request).await
+    }
+
+    async fn patch(
+        &self,
+        request: PatchRequest,
+    ) -> anyhow::Result<theseus_modeling::PatchOutcome> {
+        self.patch_locked(request).await
+    }
+
+    async fn coverage(&self) -> anyhow::Result<theseus_modeling::CoverageReport> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).coverage().await
+    }
+
+    async fn implement(
+        &self,
+        request: ImplementRequest,
+    ) -> anyhow::Result<theseus::ImplementResult> {
+        self.implement_locked(request).await
+    }
+
+    async fn edit_rust_item(
+        &self,
+        request: RustItemRequest,
+    ) -> anyhow::Result<theseus::RustItemResult> {
+        self.edit_rust_item_locked(request).await
+    }
+
+    async fn show(&self, request: ShowRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).show(request).await
+    }
+
+    async fn check(&self) -> anyhow::Result<theseus::CheckReport> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).check().await
+    }
+
+    async fn calc(&self, request: CalcRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).calc(request).await
+    }
+
+    async fn scaffold(&self) -> anyhow::Result<Vec<theseus_modeling::GeneratedFile>> {
+        self.scaffold_locked().await
+    }
+
+    async fn test(&self) -> anyhow::Result<theseus::CheckReport> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).test().await
+    }
+
+    async fn snapshot(&self, request: SnapshotRequest) -> anyhow::Result<String> {
+        self.snapshot_locked(request).await
+    }
+
+    async fn rollback(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        self.rollback_locked(request).await
+    }
+
+    async fn release(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        self.release_locked(request).await
+    }
+
+    async fn prune(&self, request: SnapshotRetention) -> anyhow::Result<String> {
+        self.prune_locked(request).await
+    }
+
+    async fn diff(&self, request: SnapshotRef) -> anyhow::Result<String> {
+        self.diff_locked(request).await
+    }
+
+    async fn restart(&self) -> anyhow::Result<()> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).restart().await
+    }
+
+    async fn read(
+        &self,
+        request: ReadRequest,
+    ) -> anyhow::Result<theseus::SourceDocument> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).read(request).await
+    }
+
+    async fn search(&self, request: SearchRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).search(request).await
+    }
+
+    async fn list(&self, request: ListRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).list(request).await
+    }
+
+    async fn lint(&self) -> anyhow::Result<theseus::CheckReport> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).lint().await
+    }
+
+    async fn drive(&self, request: DriveRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).drive(request).await
+    }
+
+    async fn skills(&self, request: SkillsRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).skills(request).await
+    }
+}
+
 /// Theseus's agent tool catalog, one tool-use definition per exposed
 /// operation. Served by the agent loop and the MCP server alike.
 pub fn tool_catalog() -> Vec<serde_json::Value> {

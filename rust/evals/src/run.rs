@@ -50,6 +50,32 @@ enum Verdict {
     LiveOnly,
 }
 
+/// Check every goal's deterministic acceptance, printing a line per goal, and
+/// fail if any goal regressed. The corpus's CI entrypoint: no API key, and it
+/// proves both the runner and that each recorded goal's artifact survives.
+pub fn check_all() -> anyhow::Result<ExitCode> {
+    let root = workspace_root()?;
+    let mut failures = 0;
+    for goal in crate::registry::goals() {
+        let line = match check_acceptance(&goal, &root)? {
+            Verdict::Pass(detail) => format!("PASS       goal {}: {detail}", goal.id),
+            Verdict::LiveOnly => format!("live-only  goal {}: {}", goal.id, goal.title),
+            Verdict::Fail(detail) => {
+                failures += 1;
+                format!("FAIL       goal {}: {detail}", goal.id)
+            }
+        };
+        println!("{line}");
+    }
+    if failures == 0 {
+        println!("\nthe corpus holds: every deterministic acceptance passed");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!("\n{failures} goal(s) regressed");
+        Ok(ExitCode::FAILURE)
+    }
+}
+
 /// Check a goal's deterministic acceptance against the workspace at `root`.
 fn check_acceptance(goal: &Goal, root: &Path) -> anyhow::Result<Verdict> {
     match &goal.acceptance {
@@ -168,7 +194,11 @@ fn drive_live(goal: &Goal, root: &Path, allow_writes: bool) -> anyhow::Result<Pa
 fn seed_foreign_project(root: &Path, goal: &Goal, stamp: u64) -> anyhow::Result<PathBuf> {
     let project = root.join(format!("evals/runs/project-{}-{stamp}", goal.id));
     std::fs::create_dir_all(&project).context("creating the foreign project root")?;
-    run_ok(Command::new("git").args(["init", "-q"]).current_dir(&project))?;
+    run_ok(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project),
+    )?;
     run_ok(
         Command::new("cargo")
             .args(["run", "-q", "-p", "theseus-cli", "--"])

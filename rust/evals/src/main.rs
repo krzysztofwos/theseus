@@ -44,12 +44,14 @@ fn dispatch() -> anyhow::Result<ExitCode> {
             let allow_writes = args.iter().any(|a| a == "--allow-writes");
             run::run(id, live, allow_writes)
         }
+        Some("check") => run::check_all(),
         _ => {
             eprintln!(
                 "usage:\n  \
                  evals list\n  \
                  evals show <id>\n  \
-                 evals run <id> [--live] [--allow-writes]"
+                 evals run <id> [--live] [--allow-writes]\n  \
+                 evals check"
             );
             Ok(ExitCode::FAILURE)
         }

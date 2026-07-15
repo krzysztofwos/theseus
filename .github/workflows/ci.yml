@@ -1,0 +1,38 @@
+# Continuous integration: correctness and the corpus's deterministic acceptance.
+#
+# One job builds the workspace once, then runs the tests, the lint, and the goal
+# corpus's deterministic acceptance through `evals check`. The acceptance step
+# needs no API key, so the corpus holds in CI while live model runs stay
+# operator-driven. Trunk handles formatting and the security scanners on
+# pre-push (see .trunk/trunk.yaml).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: test, lint, and corpus acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the workspace
+        run: cargo test --workspace --locked
+      - name: Lint
+        run: cargo clippy --workspace --locked -- -D warnings
+      - name: Corpus deterministic acceptance
+        run: cargo run -q -p theseus-evals -- check

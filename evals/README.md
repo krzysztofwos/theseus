@@ -16,6 +16,22 @@ AGENT_TRACE=1 cargo run -p theseus-agent -- \
   "add a health operation, test it, and leave the project conformant"
 ```
 
+## The runner
+
+The corpus is also a command. [`rust/evals`](../rust/evals) (binary `evals`) is the runnable projection of this table:
+
+```sh
+cargo run -p theseus-evals -- list     # the goals, their kind and acceptance
+cargo run -p theseus-evals -- show 7   # goal 7's full prompt
+cargo run -p theseus-evals -- run 7    # goal 7's deterministic acceptance, no API key
+cargo run -p theseus-evals -- run 7 --live --allow-writes   # drive goal 7 with a real model
+cargo run -p theseus-evals -- check    # every goal's deterministic acceptance
+```
+
+Deterministic acceptance proves each goal's artifact survives — an agent-grown operation still in the model, a foreign integration test still green — with no model in the loop. A live run stays operator-driven (a real model, budgeted turns), seeds an isolated root for a foreign goal, and records its trace and a result row under `evals/runs/`.
+
+`evals check` runs on every push and pull request through [CI](../.github/workflows/ci.yml), so a change that drops a grown capability or breaks a foreign integration test fails the build. Live model runs are never in CI.
+
 | #   | Goal                                                                                 | Proves                                    | Last run                                   | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | --- | ------------------------------------------------------------------------------------ | ----------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | Add an operation with a handler; leave the workspace conformant                      | The model loop                            | 2026-07-06 (diff)                          | green — designed and shipped `diff`, ~27 turns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -37,3 +53,7 @@ These tests make the environment for goal 7 reproducible and remain its required
 - Launcher/parser tests prove CLI, agent, MCP, HTTP, and gRPC accept one explicit `--project ROOT`; stateful transport tests prove repeated HTTP/gRPC calls share one locked session.
 
 A deterministic session proves policy and mechanics. The linked traced run is the separate evidence that the descriptions, diagnostics, and tool granularity were sufficient for autonomous use.
+
+## Next: automation and agent-surface polish
+
+Live goal runs stay operator-driven (`AGENT_TRACE=1 cargo run -p theseus-agent -- …`); the [runner](#the-runner) scripts the setup and recording, and CI holds the deterministic half. Version-matched skills, harness diagnostic codes, and the eval runner have since landed; the remaining planned improvements—optimistic model-hash CAS, token-efficient inspection, and command contracts—are specified in **`docs/agent-surface-plan.md`**. Living priority order: **`docs/what-next.md`**.

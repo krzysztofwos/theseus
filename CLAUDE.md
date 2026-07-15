@@ -10,6 +10,8 @@ The whole system is a fixed point: `rust/model/src/self_model.rs` is a value tha
 
 `adopters/journal/` is a separate workspace — the second adopter, proving the engine from outside (see `docs/second-adopter.md`). It is invisible to the Theseus self-model; its own `cargo test` runs its conformance.
 
+Status and ordered next work: `docs/what-next.md`. Implementation plan for agent-surface polish (version-matched skills, harness diagnostics, eval automation, command contracts): `docs/agent-surface-plan.md`. Live eval corpus: `evals/README.md`.
+
 ## Commands
 
 Toolchain is pinned to nightly (`rust-toolchain.toml`), edition 2024.

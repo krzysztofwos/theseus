@@ -2,7 +2,7 @@
 
 **Status:** planned  
 **Date:** 2026-07-16  
-**Inputs:** live evals 1–9 (green), foreign project workflow, review of peer project Zerolang (graph-first agent language) for *patterns only*  
+**Inputs:** live evals 1–9 (green), foreign project workflow, review of peer project Zerolang (graph-first agent language) for _patterns only_  
 **Non-goals:** adopt Zerolang as a language, build a program-graph IR for Rust, or broaden free-form file writes
 
 This plan improves how agents **learn, fail, re-plan, and prove** work against Theseus. The structural core (model, verify, transactions, project rooting, governed edits) is already in place. The gap is **agent-facing productization** of that core.
@@ -49,13 +49,13 @@ Related status: `docs/what-next.md`. Peer analysis summary lives in the “Peer 
   - Optional agent tool `skills` (read-only, ambient) so MCP/agent loops can fetch the same text.
 - Topics (initial set, keep each small):
 
-  | Topic | Approx size | Content |
-  | ----- | ----------- | ------- |
-  | `workflow` | short | Snapshot → patch → implement/edit → gate trust → test/verify → drive/restart |
-  | `model` | short | Handles, patch verbs, `uses` / `tool` attrs, query filters |
-  | `source` | short | `read` revision, `edit_rust_item` kinds, ownership, when to use `show` |
-  | `diagnostics` | short | How to read refuse codes, check reports, gate rollbacks |
-  | `project` | short | `--project`, init/open, layout ownership, drive vs restart |
+  | Topic         | Approx size | Content                                                                      |
+  | ------------- | ----------- | ---------------------------------------------------------------------------- |
+  | `workflow`    | short       | Snapshot → patch → implement/edit → gate trust → test/verify → drive/restart |
+  | `model`       | short       | Handles, patch verbs, `uses` / `tool` attrs, query filters                   |
+  | `source`      | short       | `read` revision, `edit_rust_item` kinds, ownership, when to use `show`       |
+  | `diagnostics` | short       | How to read refuse codes, check reports, gate rollbacks                      |
+  | `project`     | short       | `--project`, init/open, layout ownership, drive vs restart                   |
 
 - Content lives as static markdown (or strings) **embedded in the crate that ships with the binary**, keyed by topic name. Optionally stamp model hash / crate version in the skill header.
 - Agent system framing: “fetch `workflow` once per session; fetch other topics only when needed; do not refetch unchanged topics.”
@@ -97,14 +97,14 @@ safety: format-only | behavior-preserving | architecture-changing | requires-hum
 
 Surfaces:
 
-| Failure class | Example codes | Repair hint |
-| ------------- | ------------- | ----------- |
-| Stale source revision | `SRC001` | Re-`read`, pass new `revision` |
-| Path escape / not owned | `SRC002` | Use layout-owned path; `list` root |
-| Write gate refused | `GATE001` | Rerun with `--allow-writes` |
-| Compile gate rollback | `GATE002` | Read `detail`; fix body; retry implement/edit |
-| Verify flow/coverage/drift | `VFY00x` | Use check name + named gap from report |
-| Unknown snapshot | `CKP001` | Snapshot in this session first |
+| Failure class              | Example codes | Repair hint                                   |
+| -------------------------- | ------------- | --------------------------------------------- |
+| Stale source revision      | `SRC001`      | Re-`read`, pass new `revision`                |
+| Path escape / not owned    | `SRC002`      | Use layout-owned path; `list` root            |
+| Write gate refused         | `GATE001`     | Rerun with `--allow-writes`                   |
+| Compile gate rollback      | `GATE002`     | Read `detail`; fix body; retry implement/edit |
+| Verify flow/coverage/drift | `VFY00x`      | Use check name + named gap from report        |
+| Unknown snapshot           | `CKP001`      | Snapshot in this session first                |
 
 Add:
 
@@ -172,12 +172,12 @@ Optional later: `fix_plan` that returns candidate steps only (no auto-apply), wi
 
 Extend existing tools rather than adding many new ones:
 
-| Enhancement | Behavior |
-| ----------- | -------- |
-| `show` | Already method-scoped; ensure tool text prefers it over `read` for handlers |
-| `read` | Optional `max_bytes` / keep cap; optional `outline` mode for `.rs` (item signatures only via syn) |
-| `search` | Already capped; add clearer “use before read” guidance |
-| `query` | Already filters; add skill examples for narrow queries |
+| Enhancement | Behavior                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| `show`      | Already method-scoped; ensure tool text prefers it over `read` for handlers                       |
+| `read`      | Optional `max_bytes` / keep cap; optional `outline` mode for `.rs` (item signatures only via syn) |
+| `search`    | Already capped; add clearer “use before read” guidance                                            |
+| `query`     | Already filters; add skill examples for narrow queries                                            |
 
 Optional: `outline` as a dedicated op if `read` mode flags get messy.
 
@@ -224,10 +224,10 @@ cargo run -p theseus-evals -- --goal 7 --live       # real model, isolated workt
 
 Each live run records:
 
-- goal id, date, model id, harness git commit / model hash  
-- turn count, tool call counts  
-- final deterministic checks (verify, named tests, CLI stdout)  
-- path to `AGENT_TRACE` log  
+- goal id, date, model id, harness git commit / model hash
+- turn count, tool call counts
+- final deterministic checks (verify, named tests, CLI stdout)
+- path to `AGENT_TRACE` log
 
 **Isolation:** each live run uses a fresh worktree or temp project root; never the developer’s dirty main tree.
 
@@ -248,9 +248,9 @@ Each live run records:
 **Design**
 
 - Snapshot or assert:
-  - `tool_catalog()` names ⊆ modeled ops with `tool` set  
-  - each catalog entry has non-empty description and object schema  
-  - `CheckReport` / patch outcome JSON shapes for golden fixtures  
+  - `tool_catalog()` names ⊆ modeled ops with `tool` set
+  - each catalog entry has non-empty description and object schema
+  - `CheckReport` / patch outcome JSON shapes for golden fixtures
 - Optional: clap help freeze for critical subcommands (`verify`, `skills`, `init`).
 
 **Acceptance**
@@ -264,12 +264,12 @@ Each live run records:
 
 Do **not** schedule by default. Pull when a goal fails:
 
-| Expansion | Trigger example |
-| --------- | --------------- |
-| `impl` method edit | Cannot add test helper methods without top-level item workarounds |
-| New authored file creation | Cannot add `tests/foo.rs` without leaving ownership model |
-| Manifest / dependency edit | Need new crate dep to ship a capability |
-| Process manager for long-lived foreign servers | Goal needs HTTP server stay-up, not `drive` one-shot |
+| Expansion                                      | Trigger example                                                   |
+| ---------------------------------------------- | ----------------------------------------------------------------- |
+| `impl` method edit                             | Cannot add test helper methods without top-level item workarounds |
+| New authored file creation                     | Cannot add `tests/foo.rs` without leaving ownership model         |
+| Manifest / dependency edit                     | Need new crate dep to ship a capability                           |
+| Process manager for long-lived foreign servers | Goal needs HTTP server stay-up, not `drive` one-shot              |
 
 Each expansion keeps: ownership checks, revision/CAS, WAL, compile gate, skills/diagnostics updates.
 
@@ -288,17 +288,17 @@ Track under `docs/what-next.md`; do not block Phases 1–7.
 
 ## Suggested sequencing and sizing
 
-| Phase | Depends on | Rough effort | Priority |
-| ----- | ---------- | ------------ | -------- |
-| 1 Skills | — | S–M | P0 |
-| 2 Diagnostics | — (parallel with 1) | M | P0 |
-| 5 Framing trust-gate | 1 | S | P0 |
-| 4 Outline inspection | — | S–M | P1 |
-| 3 Expect-hash | model/request gen | M | P1 |
-| 6 Eval automation | 5 helpful | M | P1 |
-| 7 Command contracts | 1–2 | S | P1 |
-| 8 Typed expansion | failed eval | variable | P2 |
-| 9 Process/FS | — | L | P2 |
+| Phase                | Depends on          | Rough effort | Priority |
+| -------------------- | ------------------- | ------------ | -------- |
+| 1 Skills             | —                   | S–M          | P0       |
+| 2 Diagnostics        | — (parallel with 1) | M            | P0       |
+| 5 Framing trust-gate | 1                   | S            | P0       |
+| 4 Outline inspection | —                   | S–M          | P1       |
+| 3 Expect-hash        | model/request gen   | M            | P1       |
+| 6 Eval automation    | 5 helpful           | M            | P1       |
+| 7 Command contracts  | 1–2                 | S            | P1       |
+| 8 Typed expansion    | failed eval         | variable     | P2       |
+| 9 Process/FS         | —                   | L            | P2       |
 
 **Recommended first merge train:** Phase 1 + Phase 5 (skills + framing), then Phase 2 (diagnostics), then Phase 6 (eval runner skeleton).
 
@@ -318,13 +318,13 @@ The agent-surface polish track is **done enough** when:
 
 ## Explicit non-adoptions (from Zerolang review)
 
-| Peer idea | Decision |
-| --------- | -------- |
+| Peer idea                                             | Decision                                       |
+| ----------------------------------------------------- | ---------------------------------------------- |
 | Program graph as source of truth for application code | Reject for Theseus; model + Rust leaves remain |
-| Binary `.graph` store / import-export of language IR | Reject |
-| Rewrite-by-example expression IR | Defer indefinitely |
-| Auto-apply fix plans | Reject; plans only, human/agent chooses |
-| Production multi-tenant sandbox network | Out of scope |
+| Binary `.graph` store / import-export of language IR  | Reject                                         |
+| Rewrite-by-example expression IR                      | Defer indefinitely                             |
+| Auto-apply fix plans                                  | Reject; plans only, human/agent chooses        |
+| Production multi-tenant sandbox network               | Out of scope                                   |
 
 ---
 

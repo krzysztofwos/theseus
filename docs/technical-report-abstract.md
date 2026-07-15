@@ -8,12 +8,12 @@ Theseus holds a model of its crates, services, operations, and ports. From that 
 
 ## Why it is different
 
-| Usual coding agent | Theseus |
-| ------------------ | ------- |
+| Usual coding agent               | Theseus                                  |
+| -------------------------------- | ---------------------------------------- |
 | Architecture is implicit in chat | Architecture is data + continuous verify |
-| Generic read/write/shell | Tools are projected operations |
-| Partial edits on failure | Transactional rollback |
-| New app = open a folder | Durable project + same catalog |
+| Generic read/write/shell         | Tools are projected operations           |
+| Partial edits on failure         | Transactional rollback                   |
+| New app = open a folder          | Durable project + same catalog           |
 
 ## What it is not
 

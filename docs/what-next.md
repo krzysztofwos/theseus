@@ -22,17 +22,17 @@ Deterministic tests prove policy and mechanics. Live outcomes remain separate in
 
 A review of the peer experiment **Zerolang** (agent-first language: program graph as compiler input, `.0` as human projection) concluded that Theseus should **adopt agent-surface patterns**, not the language or a Rust program-graph IR.
 
-| Peer pattern | Theseus stance |
-| ------------ | -------------- |
-| Version-matched skills from the running tool | **Adopt** — Phase 1 of the agent-surface plan |
-| Diagnostics as repair contracts (`explain`, fix plans, safety labels) | **Adopt** for harness failures beyond `PATCH*` — Phase 2 |
-| Optimistic edit CAS (`expect graphHash`) | **Adopt** selectively (`expect_model_hash` / session stamp) — Phase 3 |
-| Token-efficient views (`outline`, around-symbol) | **Adopt** on `read`/`show` — Phase 4 |
-| Trust validated writes; don’t re-check for ceremony | **Adopt** in framing and skills — Phase 5 |
-| Sandboxed / automated eval runner | **Adopt** — Phase 6 |
-| Command contracts against CLI/tool drift | **Adopt** — Phase 7 |
-| Graph IR / binary store / rewrite-by-example language IR | **Reject** for Theseus |
-| Auto-applied fix plans | **Reject** (plans only) |
+| Peer pattern                                                          | Theseus stance                                                        |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Version-matched skills from the running tool                          | **Adopt** — Phase 1 of the agent-surface plan                         |
+| Diagnostics as repair contracts (`explain`, fix plans, safety labels) | **Adopt** for harness failures beyond `PATCH*` — Phase 2              |
+| Optimistic edit CAS (`expect graphHash`)                              | **Adopt** selectively (`expect_model_hash` / session stamp) — Phase 3 |
+| Token-efficient views (`outline`, around-symbol)                      | **Adopt** on `read`/`show` — Phase 4                                  |
+| Trust validated writes; don’t re-check for ceremony                   | **Adopt** in framing and skills — Phase 5                             |
+| Sandboxed / automated eval runner                                     | **Adopt** — Phase 6                                                   |
+| Command contracts against CLI/tool drift                              | **Adopt** — Phase 7                                                   |
+| Graph IR / binary store / rewrite-by-example language IR              | **Reject** for Theseus                                                |
+| Auto-applied fix plans                                                | **Reject** (plans only)                                               |
 
 Full sequencing, acceptance criteria, and non-goals: **`docs/agent-surface-plan.md`**.
 

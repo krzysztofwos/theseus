@@ -251,16 +251,16 @@ Honesty about boundaries is part of the design documentation, not an afterthough
 
 Goals use a real model (`AGENT_TRACE=1`). Mechanical invariants stay in `cargo test`. Summary as of 2026-07-14:
 
-| #   | Goal                                                         | Outcome                                                                           |
-| --- | ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| 1   | Add operation + handler; stay conformant                     | Green (e.g. agent-designed `diff`)                                                |
-| 2   | Grow port method + adapter, restart, call live               | Green (`test`, checkpoint)                                                        |
-| 3   | Snapshot → break → rollback drill                            | Green (full recovery evidence)                                                    |
-| 4   | Scaffold in-tree service                                     | Green (`text-utils`)                                                              |
-| 5   | Investigate subsystem citing files                           | Green (`restart` end-to-end write-up)                                             |
-| 6   | Author capability from `search`/`read` evidence              | Green (`lint`)                                                                    |
-| 7   | **Foreign cold project:** init seed + agent ships capability | **Strict green** (16/32 turns; `health` + test + verify)                          |
-| 8   | Rebuild and call a grown capability from the agent's session | **Green** (`drive`: agent grew `clear` in the journal and proved add → 1 → clear → 0 live, no restart) |
+| #   | Goal                                                         | Outcome                                                                                                                         |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Add operation + handler; stay conformant                     | Green (e.g. agent-designed `diff`)                                                                                              |
+| 2   | Grow port method + adapter, restart, call live               | Green (`test`, checkpoint)                                                                                                      |
+| 3   | Snapshot → break → rollback drill                            | Green (full recovery evidence)                                                                                                  |
+| 4   | Scaffold in-tree service                                     | Green (`text-utils`)                                                                                                            |
+| 5   | Investigate subsystem citing files                           | Green (`restart` end-to-end write-up)                                                                                           |
+| 6   | Author capability from `search`/`read` evidence              | Green (`lint`)                                                                                                                  |
+| 7   | **Foreign cold project:** init seed + agent ships capability | **Strict green** (16/32 turns; `health` + test + verify)                                                                        |
+| 8   | Rebuild and call a grown capability from the agent's session | **Green** (`drive`: agent grew `clear` in the journal and proved add → 1 → clear → 0 live, no restart)                          |
 | 9   | Initialize a foreign project from a goal string              | **Green** (loop-level `initialize`: agent chose the identity, seeded the root, shipped two operations, proved them via `drive`) |
 
 Goals 7–9 are the product-shaped proof: _same catalog, different root, new software_ — including its bootstrap and its live acceptance. Getting 8 and 9 green surfaced four engine defects only a foreign agent could reach (enumerated scaffold re-exports, a missing JSON-renderer dependency in the scaffolded surface, transcripts lost on model-port failure, a home-sized turn budget), each fixed at the source; the eval loop doubled as the QA loop.
@@ -321,7 +321,7 @@ Theseus is **narrower** than a general IDE agent (typed edits, no free shell in 
 
 **Documented next priorities** (see `docs/what-next.md` and **`docs/agent-surface-plan.md`**):
 
-1. Agent-surface polish inspired by peer review of Zerolang *patterns* (not the language): skills from the running binary, diagnostics-as-repair-contracts, optional model-hash CAS, outline inspection, gate-trust framing, automated eval runner, command contracts.
+1. Agent-surface polish inspired by peer review of Zerolang _patterns_ (not the language): skills from the running binary, diagnostics-as-repair-contracts, optional model-hash CAS, outline inspection, gate-trust framing, automated eval runner, command contracts.
 2. Typed source/manifest expansion only when a recorded eval fails without it.
 3. Process-manager contract for serving inbounds; fd-relative filesystem publication as hardening.
 

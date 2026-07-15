@@ -530,6 +530,23 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn explain(
+        &self,
+        request: tonic::Request<proto::ExplainRequest>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let request = request.into_inner();
+        let outcome = self
+            .0
+            .explain(theseus::ExplainRequest {
+                code: request.code,
+            })
+            .await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

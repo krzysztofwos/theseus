@@ -464,6 +464,13 @@ pub struct SkillsRequest {
     pub topic: Option<String>,
 }
 
+/// The `ExplainRequest` request.
+#[derive(Debug, Clone)]
+pub struct ExplainRequest {
+    /// A diagnostic code to explain. Omit to list every code.
+    pub code: Option<String>,
+}
+
 /// An operation with no authored handler, the trait default's error. A
 /// transport adapter downcasts it to map the outcome in its own vocabulary.
 #[derive(Debug)]
@@ -632,6 +639,11 @@ pub trait TheseusService: Send + Sync {
     /// List skill topics or fetch one topic's guidance text, with a version header.
     async fn skills(&self, _request: SkillsRequest) -> anyhow::Result<String> {
         Err(Unimplemented("skills").into())
+    }
+
+    /// List the harness diagnostic codes or explain one code's rule, help, and safety.
+    async fn explain(&self, _request: ExplainRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("explain").into())
     }
 }
 
@@ -808,6 +820,10 @@ for Standalone<
     async fn skills(&self, request: SkillsRequest) -> anyhow::Result<String> {
         self.ctx().skills(request).await
     }
+
+    async fn explain(&self, request: ExplainRequest) -> anyhow::Result<String> {
+        self.ctx().explain(request).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -951,6 +967,11 @@ for crate::StatefulSession<
     async fn skills(&self, request: SkillsRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         self.ctx(&state.working).skills(request).await
+    }
+
+    async fn explain(&self, request: ExplainRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).explain(request).await
     }
 }
 
@@ -1100,7 +1121,11 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "description" :
         "List available skill topics (call bare) or fetch one topic's guidance text by name (`workflow`, `model`, `source`, `diagnostics`, `project`). Every response carries a version header with the running model hash. Fetch `workflow` once per session to learn gate trust: mutations through gated tools carry a compile verdict — test when behavior changed, verify when the model changed, check only when no fresh gated verdict exists.",
         "input_schema" : { "type" : "object", "properties" : { "topic" : { "type" :
-        "string" } } } })
+        "string" } } } }), serde_json::json!({ "name" : "explain", "description" :
+        "List the harness's diagnostic codes with their messages (call bare) or explain one code by name (e.g. `SRC001`, `GATE002`, `CKP001`). An explained code carries its rule, the next action to take, and a safety label for what a fix implies. Reach for it when a tool result or refusal names a code you do not recognize. Model edit refusals carry their own `PATCH0xx` codes, returned inline by `patch`.",
+        "input_schema" : { "type" : "object", "properties" : { "code" : { "type" :
+        "string", "description" :
+        "A diagnostic code to explain. Omit to list every code." } } } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -1317,6 +1342,16 @@ pub(crate) fn parse_skills_request_input(
             .map_err(|error| anyhow::anyhow!("the `topic` field is invalid: {error}"))?,
     })
 }
+pub(crate) fn parse_explain_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<ExplainRequest> {
+    Ok(ExplainRequest {
+        code: serde_json::from_value(
+                input.get("code").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `code` field is invalid: {error}"))?,
+    })
+}
 
 /// Dispatch one tool call to the service: parse the request from the
 /// call's JSON input, run the operation, and render the result — text
@@ -1382,9 +1417,10 @@ pub async fn dispatch_tool(
         "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
         "drive" => Ok(service.drive(parse_drive_request_input(input)?).await?),
         "skills" => Ok(service.skills(parse_skills_request_input(input)?).await?),
+        "explain" => Ok(service.explain(parse_explain_request_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive, skills"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive, skills, explain"
             )
         }
     }

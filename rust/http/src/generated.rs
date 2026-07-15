@@ -255,6 +255,17 @@ fn parse_skills_request_http(
     })
 }
 
+fn parse_explain_request_http(
+    input: &serde_json::Value,
+) -> anyhow::Result<theseus::ExplainRequest> {
+    Ok(theseus::ExplainRequest {
+        code: serde_json::from_value(
+                input.get("code").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `code` field is invalid: {error}"))?,
+    })
+}
+
 /// Handle one operation call: parse the request from the call's JSON body,
 /// run the operation, and render the reply. The status derives from the
 /// outcome's structure: 200 a result, 400 a request that does not parse,
@@ -368,6 +379,12 @@ pub async fn handle(
         "skills" => {
             match parse_skills_request_http(input) {
                 Ok(request) => reply_text(service.skills(request).await),
+                Err(error) => error_body(400, &error),
+            }
+        }
+        "explain" => {
+            match parse_explain_request_http(input) {
+                Ok(request) => reply_text(service.explain(request).await),
                 Err(error) => error_body(400, &error),
             }
         }

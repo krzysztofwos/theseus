@@ -59,6 +59,37 @@ pub(crate) async fn ensure_checkpoint_project(
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn explain(&self, request: crate::generated::ExplainRequest) -> anyhow::Result<String> {
+        match request.code.as_deref() {
+            None => {
+                let listing = explain_catalog::CODES
+                    .iter()
+                    .map(|entry| format!("  {:8} {}", entry.code, entry.message))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Ok(format!(
+                    "Harness diagnostic codes — call with `code: <name>` for the full entry:\n\n{listing}\n\nModel edit refusals carry their own `PATCH0xx` codes, returned inline by `patch`."
+                ))
+            }
+            Some(name) => match explain_catalog::get(name) {
+                Some(entry) => Ok(format!(
+                    "{}\n\n{}\n\nnext:   {}\nsafety: {}",
+                    entry.code, entry.message, entry.help, entry.safety
+                )),
+                None => {
+                    let known = explain_catalog::CODES
+                        .iter()
+                        .map(|entry| entry.code)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    anyhow::bail!(
+                        "unknown diagnostic code {name:?}; call `explain` bare for the list. Known codes: {known}"
+                    )
+                }
+            },
+        }
+    }
+
     async fn skills(&self, request: crate::generated::SkillsRequest) -> anyhow::Result<String> {
         use theseus_modeling::model_hash;
         let hash = model_hash(self.model);
@@ -2117,6 +2148,69 @@ mod tests {
 /// binary's model. The `model` topic omits a hard-coded operation list;
 /// instead the handler renders it live from `self.model` so it can never
 /// invent operations the binary lacks.
+/// The harness diagnostic vocabulary: stable codes for the failure classes an
+/// agent meets, each with the rule it names, the next action, and a safety
+/// label for what a fix implies. The catalog is a queryable reference; the
+/// tools that raise these conditions carry their own messages. Model edit
+/// refusals carry a separate `PATCH0xx` family, returned inline by `patch`.
+mod explain_catalog {
+    /// One diagnostic code's entry.
+    pub struct Entry {
+        pub code: &'static str,
+        pub message: &'static str,
+        pub help: &'static str,
+        /// What a fix implies: format-only, behavior-preserving,
+        /// architecture-changing, or requires-human-review.
+        pub safety: &'static str,
+    }
+
+    /// Every code, grouped by failure class: SRC (authored source), GATE (write
+    /// and compile gates), VFY (conformance), CKP (checkpoints).
+    pub const CODES: &[Entry] = &[
+        Entry {
+            code: "SRC001",
+            message: "The revision passed to `edit_rust_item` no longer matches the file on disk.",
+            help: "Re-`read` the file for its current revision, then reapply the edit.",
+            safety: "behavior-preserving",
+        },
+        Entry {
+            code: "SRC002",
+            message: "The path is outside the project root or not owned by the active layout.",
+            help: "Target a layout-owned authored file; `list` the root to see what is owned.",
+            safety: "requires-human-review",
+        },
+        Entry {
+            code: "GATE001",
+            message: "A write was attempted without write permission.",
+            help: "Rerun the session with `--allow-writes`; snapshot first if the change is risky.",
+            safety: "requires-human-review",
+        },
+        Entry {
+            code: "GATE002",
+            message: "A gated write compiled with errors and was rolled back; the tree is unchanged.",
+            help: "Read the compile detail in the result, fix the body, and reapply the same tool.",
+            safety: "behavior-preserving",
+        },
+        Entry {
+            code: "VFY001",
+            message: "The workspace diverges from its model on one of `verify`'s checks.",
+            help: "Read the named failing check and gap; `generate` for drift, or author the missing handler.",
+            safety: "architecture-changing",
+        },
+        Entry {
+            code: "CKP001",
+            message: "The snapshot reference is not a checkpoint pinned in this session.",
+            help: "Call `snapshot` in this session first and use the id it returns.",
+            safety: "format-only",
+        },
+    ];
+
+    /// The entry for a code, if the catalog defines it.
+    pub fn get(name: &str) -> Option<&'static Entry> {
+        CODES.iter().find(|entry| entry.code == name)
+    }
+}
+
 mod skills_catalog {
     /// Ordered topic names, used for listing and for unknown-topic errors.
     pub const TOPICS: &[&str] = &["workflow", "model", "source", "diagnostics", "project"];

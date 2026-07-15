@@ -352,6 +352,18 @@ pub fn command() -> Command {
                 )
                 .arg(Arg::new("topic").long("topic").action(ArgAction::Set).help("")),
         )
+        .subcommand(
+            Command::new("explain")
+                .about(
+                    "List the harness diagnostic codes or explain one code's rule, help, and safety.",
+                )
+                .arg(
+                    Arg::new("code")
+                        .long("code")
+                        .action(ArgAction::Set)
+                        .help("A diagnostic code to explain. Omit to list every code."),
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -481,6 +493,15 @@ fn parse_skills_request(matches: &ArgMatches) -> anyhow::Result<theseus::SkillsR
     })
 }
 
+fn parse_explain_request(
+    matches: &ArgMatches,
+) -> anyhow::Result<theseus::ExplainRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::ExplainRequest {
+        code: arg("code"),
+    })
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -507,6 +528,7 @@ pub enum Invocation {
     Lint,
     Drive(theseus::DriveRequest),
     Skills(theseus::SkillsRequest),
+    Explain(theseus::ExplainRequest),
 }
 
 impl Invocation {
@@ -544,6 +566,9 @@ impl Invocation {
             Some(("lint", _)) => Ok(Invocation::Lint),
             Some(("drive", sub)) => Ok(Invocation::Drive(parse_drive_request(sub)?)),
             Some(("skills", sub)) => Ok(Invocation::Skills(parse_skills_request(sub)?)),
+            Some(("explain", sub)) => {
+                Ok(Invocation::Explain(parse_explain_request(sub)?))
+            }
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -624,6 +649,7 @@ pub async fn dispatch(
         }
         Invocation::Drive(request) => println!("{}", service.drive(request). await ?),
         Invocation::Skills(request) => println!("{}", service.skills(request). await ?),
+        Invocation::Explain(request) => println!("{}", service.explain(request). await ?),
     }
     Ok(())
 }

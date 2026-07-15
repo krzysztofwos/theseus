@@ -165,6 +165,11 @@ message SkillsRequest {
   optional string topic = 1;
 }
 
+message ExplainRequest {
+  // A diagnostic code to explain. Omit to list every code.
+  optional string code = 1;
+}
+
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
@@ -252,4 +257,6 @@ service Theseus {
   rpc Drive (DriveRequest) returns (String);
   // List skill topics or fetch one topic's guidance text, with a version header.
   rpc Skills (SkillsRequest) returns (String);
+  // List the harness diagnostic codes or explain one code's rule, help, and safety.
+  rpc Explain (ExplainRequest) returns (String);
 }

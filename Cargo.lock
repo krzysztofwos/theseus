@@ -2060,6 +2060,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "theseus-evals"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "theseus-grpc"
 version = "0.1.0"
 dependencies = [

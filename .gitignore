@@ -3,3 +3,9 @@
 
 # Adopter workspaces build in their own trees
 adopters/*/target/
+
+# Ephemeral foreign-project copies (integration tests, live evals)
+adopters/.journal-*/
+
+# Live eval-run artifacts (traces, result rows, seeded foreign projects)
+evals/runs/

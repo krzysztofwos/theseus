@@ -1,0 +1,14 @@
+[package]
+name = "theseus-evals"
+version = "0.1.0"
+edition = "2024"
+description = "The live goal-corpus runner — lists goals, checks deterministic acceptance, and records live agent runs"
+
+[[bin]]
+name = "evals"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

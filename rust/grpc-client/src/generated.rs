@@ -331,6 +331,18 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("drive", status))?;
         Ok(reply.into_inner().value)
     }
+
+    async fn skills(&self, request: theseus::SkillsRequest) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .skills(proto::SkillsRequest {
+                topic: request.topic,
+            })
+            .await
+            .map_err(|status| failed("skills", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

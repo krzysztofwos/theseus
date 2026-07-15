@@ -458,6 +458,12 @@ pub struct DriveRequest {
     pub input: Option<String>,
 }
 
+/// The `SkillsRequest` request.
+#[derive(Debug, Clone)]
+pub struct SkillsRequest {
+    pub topic: Option<String>,
+}
+
 /// An operation with no authored handler, the trait default's error. A
 /// transport adapter downcasts it to map the outcome in its own vocabulary.
 #[derive(Debug)]
@@ -621,6 +627,11 @@ pub trait TheseusService: Send + Sync {
     /// Drive one of the project's operations through its own command-line inbound.
     async fn drive(&self, _request: DriveRequest) -> anyhow::Result<String> {
         Err(Unimplemented("drive").into())
+    }
+
+    /// List skill topics or fetch one topic's guidance text, with a version header.
+    async fn skills(&self, _request: SkillsRequest) -> anyhow::Result<String> {
+        Err(Unimplemented("skills").into())
     }
 }
 
@@ -793,6 +804,10 @@ for Standalone<
     async fn drive(&self, request: DriveRequest) -> anyhow::Result<String> {
         self.ctx().drive(request).await
     }
+
+    async fn skills(&self, request: SkillsRequest) -> anyhow::Result<String> {
+        self.ctx().skills(request).await
+    }
 }
 
 /// Theseus's agent tool catalog, one tool-use definition per exposed
@@ -937,7 +952,11 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "string", "description" : "The operation to drive, by name." }, "input" : {
         "type" : "string", "description" :
         "The operation's request as a JSON object of field values. Omit for an `Empty` request."
-        } }, "required" : ["operation"] } })
+        } }, "required" : ["operation"] } }), serde_json::json!({ "name" : "skills",
+        "description" :
+        "List available skill topics (call bare) or fetch one topic's guidance text by name (`workflow`, `model`, `source`, `diagnostics`, `project`). Every response carries a version header with the running model hash. Fetch `workflow` once per session to learn gate trust: mutations through gated tools carry a compile verdict — test when behavior changed, verify when the model changed, check only when no fresh gated verdict exists.",
+        "input_schema" : { "type" : "object", "properties" : { "topic" : { "type" :
+        "string" } } } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -1144,6 +1163,16 @@ pub(crate) fn parse_drive_request_input(
             .map_err(|error| anyhow::anyhow!("the `input` field is invalid: {error}"))?,
     })
 }
+pub(crate) fn parse_skills_request_input(
+    input: &serde_json::Value,
+) -> anyhow::Result<SkillsRequest> {
+    Ok(SkillsRequest {
+        topic: serde_json::from_value(
+                input.get("topic").cloned().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| anyhow::anyhow!("the `topic` field is invalid: {error}"))?,
+    })
+}
 
 /// Dispatch one tool call to the service: parse the request from the
 /// call's JSON input, run the operation, and render the result — text
@@ -1208,9 +1237,10 @@ pub async fn dispatch_tool(
         "list" => Ok(service.list(parse_list_request_input(input)?).await?),
         "lint" => Ok(serde_json::to_string(&service.lint().await?)?),
         "drive" => Ok(service.drive(parse_drive_request_input(input)?).await?),
+        "skills" => Ok(service.skills(parse_skills_request_input(input)?).await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive, skills"
             )
         }
     }

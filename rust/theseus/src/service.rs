@@ -59,6 +59,52 @@ pub(crate) async fn ensure_checkpoint_project(
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn skills(&self, request: crate::generated::SkillsRequest) -> anyhow::Result<String> {
+        use theseus_modeling::model_hash;
+        let hash = model_hash(self.model);
+        let version_header = format!("model-hash: {hash}\n\n");
+        match request.topic.as_deref() {
+            None => {
+                let listing = skills_catalog::TOPICS
+                    .iter()
+                    .map(|t| format!("  {t}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Ok(format!(
+                    "{version_header}Available topics — call with `topic: <name>` to fetch one:\n\n{listing}\n\nFetch `workflow` once per session to learn gate trust."
+                ))
+            }
+            Some("model") => {
+                let theseus_service = self.model.service_named("Theseus");
+                let ops_section = if let Some(svc) = theseus_service {
+                    let op_lines = svc
+                        .operations
+                        .iter()
+                        .map(|op| format!("  {:20} — {}", op.name, op.summary))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!(
+                        "## model\n\nWorking with the self-model:\n\n- **query** — list handles (kind: operation, type, port); filter with `find` or `node`.\n- **patch** — edit the model. Verbs: `add`, `remove`, `rename`, `set`.\n  - Operations: attrs `summary`, `request`, `response`, `uses`, `tool`.\n  - Set `tool` to a description string to expose an op to agents; omit to keep CLI-only.\n  - `uses` declares port dependencies; `verify` checks the handler reaches exactly those.\n  - `write: true` reprojects under a compile gate; `write: false` is a dry run.\n- **generate** — refresh generated.rs after a model change.\n- **verify** — check workspace conformance after model changes.\n- **coverage** — list operations with no authored handler.\n\nCurrent Theseus operations ({count}):\n\n{op_lines}\n",
+                        count = svc.operations.len()
+                    )
+                } else {
+                    "## model\n\n(Theseus service not found in model — re-query.)\n".to_string()
+                };
+                Ok(format!("{version_header}{ops_section}"))
+            }
+            Some(name) => {
+                if let Some(body) = skills_catalog::get(name) {
+                    Ok(format!("{version_header}{body}"))
+                } else {
+                    let known = skills_catalog::TOPICS.join(", ");
+                    Err(anyhow::anyhow!(
+                        "unknown topic {name:?}; available topics: {known}"
+                    ))
+                }
+            }
+        }
+    }
+
     async fn drive(&self, request: crate::generated::DriveRequest) -> anyhow::Result<String> {
         let input = match request.input.as_deref() {
             Some(text) => serde_json::from_str(text)
@@ -2062,6 +2108,107 @@ mod tests {
                     "catalog tool `{name}` has no dispatch arm: {error}"
                 );
             }
+        }
+    }
+}
+/// Static skill-guidance catalog embedded in the binary.
+///
+/// Each topic is a short prose block that version-matches with the running
+/// binary's model. The `model` topic omits a hard-coded operation list;
+/// instead the handler renders it live from `self.model` so it can never
+/// invent operations the binary lacks.
+mod skills_catalog {
+    /// Ordered topic names, used for listing and for unknown-topic errors.
+    pub const TOPICS: &[&str] = &["workflow", "model", "source", "diagnostics", "project"];
+
+    pub const WORKFLOW: &str = "\
+## workflow
+
+The standard session loop:
+
+1. **snapshot** — checkpoint before any risky change (`snapshot` returns an id; pin it).
+2. **patch** (write=false) — validate edits against the model dry-run first.
+3. **patch** (write=true) / **implement** / **edit_rust_item** — apply; each is gated.
+4. **Gate trust** — gated tools already carry a compile verdict in their result.
+   - After a successful gated write, do NOT call `check` just to confirm it.
+   - Call `test` when behavior changed (new logic, not just scaffolding).
+   - Call `verify` when the model changed (new operation, port, or type).
+   - Call `check` only when no fresh gated verdict exists (e.g. after a manual edit
+     or before `restart` on an otherwise un-gated tree).
+5. **drive** — prove a new CLI operation live after `restart`.
+6. **restart** — rebuild the binary; the agent loop resumes in the new process.
+
+If the tree wedges and you cannot repair it, `rollback` to your snapshot and say so.
+";
+
+    pub const SOURCE: &str = "\
+## source
+
+Reading and editing workspace source files:
+
+- **read** — returns file contents plus a `revision` token; always call `read` first.
+- **show** — preferred over `read` for a modeled operation handler or adapter method;
+  also returns the generated signature when no authored handler exists yet.
+- **search** — grep across a subtree; returns `path:line: text`.
+- **list** — directory listing; files are refused (use `read`).
+- **edit_rust_item** — replace or insert one complete named top-level Rust item
+  (fn, struct, impl, mod, const, …) in an existing authored `.rs` file.
+  Pass the `revision` from `read`; a stale revision is refused.
+  Cannot create files, edit manifests, or touch generated files.
+- **implement** — splice a handler body into the service impl or a port adapter.
+  Use it after `patch` adds an operation; read the signature with `show` first.
+
+Item kinds accepted by `edit_rust_item`: fn, struct, enum, impl, mod, const, static,
+type, trait, use — any named top-level Rust item.
+";
+
+    pub const DIAGNOSTICS: &str = "\
+## diagnostics
+
+Reading tool results and repair codes:
+
+- **Compile gate rollback** — `implement` and `edit_rust_item` roll back on compile
+  failure. The result carries the compiler output. Fix the body and retry; the tool
+  replaces the method in place.
+- **PATCH0xx** — model patch diagnostics. `PATCH002`: bad handle (re-`query`).
+  `PATCH010`: unknown attribute. `PATCH012`: malformed shape.
+- **Stale revision** — `edit_rust_item` refuses a stale `revision`; call `read` again
+  and pass the fresh token.
+- **Path errors** — `read` on a directory or `list` on a file each carry a repair
+  hint showing the correct call.
+- **verify gaps** — `verify` names each conformance gap. Fix the gap it names, then
+  `verify` again. Do not `check` after a successful gated write just to confirm.
+- **coverage** — lists operations with no authored handler; implement them in order.
+";
+
+    pub const PROJECT: &str = "\
+## project
+
+Workspace layout and project context:
+
+- The repository root holds `rust/` (all crates), `docs/`, and the model record.
+- Theseus enforces a project root policy: paths outside the root are refused.
+- `list` with `{}` (empty path) shows the workspace root entries.
+- **drive** — runs a CLI operation through the projected inbound, rebuilding first.
+  Use it to prove a grown capability live. Requires write permission.
+- **restart** — compile-gates the tree and signals the agent loop to replace the
+  process. Call it alone (no other tool in the same turn). After restart, use
+  `drive` to prove new operations end-to-end.
+- Generated files (`generated.rs`) are read-only; edit the model with `patch` and
+  run `generate` to refresh them.
+- `scaffold` creates the skeleton of a missing library service crate. Call it after
+  a `patch` that adds a new service, then `generate` to populate `generated.rs`.
+";
+
+    /// Return the body for the named topic, or `None` when not found.
+    pub fn get(name: &str) -> Option<&'static str> {
+        match name {
+            "workflow" => Some(WORKFLOW),
+            "source" => Some(SOURCE),
+            "diagnostics" => Some(DIAGNOSTICS),
+            "project" => Some(PROJECT),
+            // "model" is rendered dynamically in the handler.
+            _ => None,
         }
     }
 }

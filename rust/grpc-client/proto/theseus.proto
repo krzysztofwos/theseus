@@ -161,6 +161,10 @@ message DriveRequest {
   optional string input = 2;
 }
 
+message SkillsRequest {
+  optional string topic = 1;
+}
+
 message Edit {
   message Add {
     // Handle the new node attaches to; the model root for a top-level node.
@@ -246,4 +250,6 @@ service Theseus {
   rpc Lint (Empty) returns (CheckReport);
   // Drive one of the project's operations through its own command-line inbound.
   rpc Drive (DriveRequest) returns (String);
+  // List skill topics or fetch one topic's guidance text, with a version header.
+  rpc Skills (SkillsRequest) returns (String);
 }

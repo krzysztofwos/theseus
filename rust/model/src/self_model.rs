@@ -337,6 +337,7 @@ pub fn theseus_model() -> Model {
         .foreign_type("WordCountResponse", "String")
         .foreign_type("TruncateResponse", "String")
         .foreign_type("CapitalizeResponse", "String")
+        .struct_type("SkillsRequest", &[("topic", "Option<String>", "")])
         .service(
             Service::new("Theseus")
                 .crate_name("theseus")
@@ -568,6 +569,15 @@ pub fn theseus_model() -> Model {
                 .uses(&["toolchain"])
                 .tool(
                     "Drive one of the project's operations through its own command-line inbound, rebuilding it first. `operation` names any modeled operation whose service a `Cli` inbound drives; `input` is a JSON object of the operation's request fields, validated against the contract. The command line is a projection of the model — only field values are yours. Runs the project's own code, so it requires write permission. Returns the exit status, stdout, and stderr. Prove a grown capability live with it after `restart`. Example: { \"operation\": \"count\" } or { \"operation\": \"add\", \"input\": \"{\\\"text\\\": \\\"hello\\\"}\" }.",
+                )
+                .operation(
+                    "skills",
+                    "List skill topics or fetch one topic's guidance text, with a version header.",
+                    "SkillsRequest",
+                    "String",
+                )
+                .tool(
+                    "List available skill topics (call bare) or fetch one topic's guidance text by name (`workflow`, `model`, `source`, `diagnostics`, `project`). Every response carries a version header with the running model hash. Fetch `workflow` once per session to learn gate trust: mutations through gated tools carry a compile verdict — test when behavior changed, verify when the model changed, check only when no fresh gated verdict exists.",
                 )
                 .port(
                     Port::new(

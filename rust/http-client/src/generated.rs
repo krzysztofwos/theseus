@@ -273,6 +273,14 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("drive", status, &body)?;
         Ok(body)
     }
+
+    async fn skills(&self, request: theseus::SkillsRequest) -> anyhow::Result<String> {
+        let (status, body) = self
+            .post("skills", serde_json::json!({ "topic" : request.topic }))
+            .await?;
+        checked("skills", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

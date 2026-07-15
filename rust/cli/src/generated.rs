@@ -345,6 +345,13 @@ pub fn command() -> Command {
                         ),
                 ),
         )
+        .subcommand(
+            Command::new("skills")
+                .about(
+                    "List skill topics or fetch one topic's guidance text, with a version header.",
+                )
+                .arg(Arg::new("topic").long("topic").action(ArgAction::Set).help("")),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -467,6 +474,13 @@ fn parse_drive_request(matches: &ArgMatches) -> anyhow::Result<theseus::DriveReq
     })
 }
 
+fn parse_skills_request(matches: &ArgMatches) -> anyhow::Result<theseus::SkillsRequest> {
+    let arg = |name: &str| matches.get_one::<String>(name).cloned();
+    Ok(theseus::SkillsRequest {
+        topic: arg("topic"),
+    })
+}
+
 pub enum Invocation {
     Model,
     Verify,
@@ -492,6 +506,7 @@ pub enum Invocation {
     List(theseus::ListRequest),
     Lint,
     Drive(theseus::DriveRequest),
+    Skills(theseus::SkillsRequest),
 }
 
 impl Invocation {
@@ -528,6 +543,7 @@ impl Invocation {
             Some(("list", sub)) => Ok(Invocation::List(parse_list_request(sub)?)),
             Some(("lint", _)) => Ok(Invocation::Lint),
             Some(("drive", sub)) => Ok(Invocation::Drive(parse_drive_request(sub)?)),
+            Some(("skills", sub)) => Ok(Invocation::Skills(parse_skills_request(sub)?)),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -607,6 +623,7 @@ pub async fn dispatch(
             println!("{}", serde_json::to_string_pretty(& service.lint(). await ?) ?)
         }
         Invocation::Drive(request) => println!("{}", service.drive(request). await ?),
+        Invocation::Skills(request) => println!("{}", service.skills(request). await ?),
     }
     Ok(())
 }

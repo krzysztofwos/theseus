@@ -232,6 +232,11 @@ where
         self.ctx(&state.working).test().await
     }
 
+    async fn skills(&self, request: crate::SkillsRequest) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).skills(request).await
+    }
+
     async fn drive(&self, request: crate::DriveRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         self.ctx(&state.working).drive(request).await

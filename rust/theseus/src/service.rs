@@ -9,9 +9,10 @@
 
 use anyhow::Context;
 use theseus_modeling::{
-    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, RustItemEdit, RustItemMode,
-    VerifyReport, apply_edits, coverage, describe, edit_rust_item as splice_rust_item,
-    handler_source, query, rust_source_revision, scaffold_files, verify,
+    CoverageReport, GeneratedFile, Model, PatchOutcome, QueryOutcome, RustItemEdit,
+    RustItemEditError, RustItemMode, VerifyReport, apply_edits, coverage, describe,
+    edit_rust_item as splice_rust_item, handler_source, query, rust_source_revision,
+    scaffold_files, verify,
 };
 
 use crate::{
@@ -722,12 +723,14 @@ pub(crate) async fn implement_model(
             applied: true,
             path: path.clone(),
             detail: format!("wrote {wrote} into {path}. Rebuild to load it."),
+            code: None,
             check,
         }),
         TransactionCheck::RolledBack(check) => Ok(ImplementResult {
             applied: false,
             path: path.clone(),
             detail: format!("did not write {wrote} into {path}; the compile gate rolled it back"),
+            code: Some("GATE002".to_string()),
             check,
         }),
     }
@@ -744,11 +747,12 @@ pub(crate) async fn edit_rust_item_model(
     ensure_workspace_toolchain_project(project, workspace, toolchain).await?;
     project
         .layout()
-        .authorize_authored_rust_path(model, &request.path)?;
+        .authorize_authored_rust_path(model, &request.path)
+        .map_err(|error| HarnessDiagnostic::with_context("SRC002", error.to_string()))?;
     let mut mutation = begin_mutation(project, expected, model, workspace).await?;
     let source = mutation.read_to_string(&request.path).await?;
     let previous_revision = rust_source_revision(&source);
-    let edited = splice_rust_item(
+    let edited = match splice_rust_item(
         &source,
         &request.revision,
         &RustItemEdit {
@@ -759,7 +763,17 @@ pub(crate) async fn edit_rust_item_model(
             },
             item: request.item,
         },
-    )?;
+    ) {
+        Ok(edited) => edited,
+        Err(RustItemEditError::StaleRevision { expected, actual }) => {
+            return Err(HarnessDiagnostic::with_context(
+                "SRC001",
+                format!("expected {expected}, found {actual}"),
+            )
+            .into());
+        }
+        Err(other) => return Err(other.into()),
+    };
     let item = edited.identity;
     let new_revision = edited.new_revision;
     let mut changes = vec![MutationFile::text(request.path.clone(), edited.source)];
@@ -772,6 +786,7 @@ pub(crate) async fn edit_rust_item_model(
             item: item.clone(),
             revision: new_revision,
             detail: format!("wrote `{item}` into {}", request.path),
+            code: None,
             check,
         }),
         TransactionCheck::RolledBack(check) => Ok(RustItemResult {
@@ -783,6 +798,7 @@ pub(crate) async fn edit_rust_item_model(
                 "did not write `{item}` into {}; the all-target compile gate rolled it back",
                 request.path
             ),
+            code: Some("GATE002".to_string()),
             check,
         }),
     }
@@ -1881,10 +1897,11 @@ mod tests {
             )
             .await
             .expect_err("a stale source observation is refused");
-        assert!(matches!(
-            stale.downcast_ref::<theseus_modeling::RustItemEditError>(),
-            Some(theseus_modeling::RustItemEditError::StaleRevision { .. })
-        ));
+        // The stale revision surfaces its stable code and next action, the same
+        // text `explain SRC001` returns, so an agent can recover without guessing.
+        let message = stale.to_string();
+        assert!(message.contains("SRC001"), "{message}");
+        assert!(message.contains("current revision"), "{message}");
 
         let generated = session
             .call(
@@ -1898,10 +1915,10 @@ mod tests {
             )
             .await
             .expect_err("a generated projection is never authored");
-        assert!(matches!(
-            generated.downcast_ref::<theseus_modeling::ProjectLayoutError>(),
-            Some(theseus_modeling::ProjectLayoutError::AuthoredRustPathNotAuthorized { .. })
-        ));
+        // A path the layout does not own surfaces its stable code and next action.
+        let message = generated.to_string();
+        assert!(message.contains("SRC002"), "{message}");
+        assert!(message.contains("layout-owned"), "{message}");
 
         let recording = recording.lock().unwrap();
         assert!(recording.applied.is_empty());
@@ -2148,6 +2165,43 @@ mod tests {
 /// binary's model. The `model` topic omits a hard-coded operation list;
 /// instead the handler renders it live from `self.model` so it can never
 /// invent operations the binary lacks.
+/// A live failure carrying a stable harness diagnostic code. It formats itself
+/// from the shared [`explain_catalog`], so the text an agent reads on a failure
+/// is the same rule, next action, and safety the `explain` operation returns for
+/// that code. Optional `context` carries the concrete detail of this instance.
+#[derive(Debug)]
+pub(crate) struct HarnessDiagnostic {
+    code: &'static str,
+    context: Option<String>,
+}
+
+impl HarnessDiagnostic {
+    /// A coded diagnostic carrying the concrete detail of this failure.
+    pub(crate) fn with_context(code: &'static str, context: impl Into<String>) -> Self {
+        Self {
+            code,
+            context: Some(context.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for HarnessDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match explain_catalog::get(self.code) {
+            Some(entry) => {
+                write!(f, "{}: {}", entry.code, entry.message)?;
+                if let Some(context) = &self.context {
+                    write!(f, " ({context})")?;
+                }
+                write!(f, "\nnext: {}", entry.help)
+            }
+            None => write!(f, "{}", self.code),
+        }
+    }
+}
+
+impl std::error::Error for HarnessDiagnostic {}
+
 /// The harness diagnostic vocabulary: stable codes for the failure classes an
 /// agent meets, each with the rule it names, the next action, and a safety
 /// label for what a fix implies. The catalog is a queryable reference; the

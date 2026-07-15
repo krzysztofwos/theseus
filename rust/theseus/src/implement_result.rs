@@ -11,6 +11,10 @@ pub struct ImplementResult {
     pub path: String,
     /// Human-readable description of what was written or why it was rolled back.
     pub detail: String,
+    /// The harness diagnostic code when the write did not apply, so a caller
+    /// reads a stable code beside `applied: false`. `None` on a committed write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// The completed compile check that decided commit versus rollback.
     pub check: CheckReport,
 }

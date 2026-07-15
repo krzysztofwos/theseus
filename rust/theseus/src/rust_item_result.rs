@@ -15,6 +15,10 @@ pub struct RustItemResult {
     pub revision: String,
     /// Human-readable description of the edit or rollback.
     pub detail: String,
+    /// The harness diagnostic code when the edit did not apply, so a caller
+    /// reads a stable code beside `applied: false`. `None` on a committed edit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// The completed compile check that decided commit versus rollback.
     pub check: CheckReport,
 }

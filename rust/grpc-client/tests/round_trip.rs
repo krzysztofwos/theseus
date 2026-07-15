@@ -99,6 +99,7 @@ impl TheseusService for FailedCheck {
             applied: false,
             path: "rust/service.rs".to_string(),
             detail: "compile gate rolled the edit back".to_string(),
+            code: Some("GATE002".to_string()),
             check: theseus::CheckReport::failure("implement failure over gRPC"),
         })
     }

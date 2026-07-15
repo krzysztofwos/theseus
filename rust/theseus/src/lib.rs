@@ -16,6 +16,8 @@ use thiserror::Error;
 mod check_report;
 mod checkpoint;
 mod checkpoint_model;
+#[cfg(test)]
+mod contracts;
 mod generated;
 mod implement_result;
 mod initialize;

@@ -177,6 +177,7 @@ dependencies = [
  "clap",
  "journal",
  "journal-model",
+ "serde_json",
  "tokio",
 ]
 

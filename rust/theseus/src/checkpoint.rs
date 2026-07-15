@@ -2745,14 +2745,27 @@ mod tests {
 
         task.abort();
         assert!(task.await.expect_err("the task is canceled").is_cancelled());
-        let alive = std::process::Command::new("kill")
-            .args(["-0", &pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("kill -0 runs")
-            .success();
+        // `kill_on_drop` signals and reaps the child asynchronously, so the PID
+        // leaves the table shortly after the task drops rather than instantly.
+        // Poll until `kill -0` reports the process gone, within a deadline.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let gone = loop {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("kill -0 runs")
+                .success();
+            if !alive {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
         let _ = fs::remove_file(pid_file);
-        assert!(!alive, "the canceled Git child still exists");
+        assert!(gone, "the canceled Git child was not killed and reaped");
     }
 }

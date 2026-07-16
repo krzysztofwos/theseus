@@ -14,6 +14,7 @@ mod implement;
 mod invoke;
 mod label;
 mod model;
+mod outline;
 mod patch;
 mod path;
 mod project;
@@ -41,6 +42,7 @@ pub use model::{
     Client, CrateNode, Field, Inbound, Method, Model, Operation, Port, Service, Transport, TypeDef,
     TypeShape, Variant,
 };
+pub use outline::{OutlineError, outline};
 pub use patch::{Diagnostic, Edit, PatchOutcome, apply_edit, apply_edits};
 pub use project::{
     CheckpointProjectDescriptor, JsonModelRecord, ModelRecord, ProjectId, ProjectIdError,

@@ -372,6 +372,12 @@ pub fn command() -> Command {
                         .help("A diagnostic code to explain. Omit to list every code."),
                 ),
         )
+        .subcommand(
+            Command::new("ports")
+                .about(
+                    "List this service's outbound ports and each port's methods with their request and response types.",
+                ),
+        )
 }
 
 fn parse_query_request(matches: &ArgMatches) -> anyhow::Result<theseus::QueryRequest> {
@@ -538,6 +544,7 @@ pub enum Invocation {
     Drive(theseus::DriveRequest),
     Skills(theseus::SkillsRequest),
     Explain(theseus::ExplainRequest),
+    Ports,
 }
 
 impl Invocation {
@@ -578,6 +585,7 @@ impl Invocation {
             Some(("explain", sub)) => {
                 Ok(Invocation::Explain(parse_explain_request(sub)?))
             }
+            Some(("ports", _)) => Ok(Invocation::Ports),
             _ => unreachable!("subcommand_required guarantees a subcommand"),
         }
     }
@@ -659,6 +667,7 @@ pub async fn dispatch(
         Invocation::Drive(request) => println!("{}", service.drive(request). await ?),
         Invocation::Skills(request) => println!("{}", service.skills(request). await ?),
         Invocation::Explain(request) => println!("{}", service.explain(request). await ?),
+        Invocation::Ports => println!("{}", service.ports(). await ?),
     }
     Ok(())
 }

@@ -400,6 +400,7 @@ pub async fn handle(
                 Err(error) => error_body(400, &error),
             }
         }
+        "ports" => reply_text(service.ports().await),
         other => {
             HttpReply {
                 status: 404,

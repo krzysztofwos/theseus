@@ -647,6 +647,11 @@ pub trait TheseusService: Send + Sync {
     async fn explain(&self, _request: ExplainRequest) -> anyhow::Result<String> {
         Err(Unimplemented("explain").into())
     }
+
+    /// List this service's outbound ports and each port's methods with their request and response types.
+    async fn ports(&self) -> anyhow::Result<String> {
+        Err(Unimplemented("ports").into())
+    }
 }
 
 /// An immutable, owned composition root for one-shot calls.
@@ -826,6 +831,10 @@ for Standalone<
     async fn explain(&self, request: ExplainRequest) -> anyhow::Result<String> {
         self.ctx().explain(request).await
     }
+
+    async fn ports(&self) -> anyhow::Result<String> {
+        self.ctx().ports().await
+    }
 }
 
 #[async_trait::async_trait]
@@ -974,6 +983,11 @@ for crate::StatefulSession<
     async fn explain(&self, request: ExplainRequest) -> anyhow::Result<String> {
         let state = self.state.lock().await;
         self.ctx(&state.working).explain(request).await
+    }
+
+    async fn ports(&self) -> anyhow::Result<String> {
+        let state = self.state.lock().await;
+        self.ctx(&state.working).ports().await
     }
 }
 
@@ -1130,7 +1144,10 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "List the harness's diagnostic codes with their messages (call bare) or explain one code by name (e.g. `SRC001`, `GATE002`, `CKP001`). An explained code carries its rule, the next action to take, and a safety label for what a fix implies. Reach for it when a tool result or refusal names a code you do not recognize. Model edit refusals carry their own `PATCH0xx` codes, returned inline by `patch`.",
         "input_schema" : { "type" : "object", "properties" : { "code" : { "type" :
         "string", "description" :
-        "A diagnostic code to explain. Omit to list every code." } } } })
+        "A diagnostic code to explain. Omit to list every code." } } } }),
+        serde_json::json!({ "name" : "ports", "description" :
+        "List Theseus's outbound ports and each port's methods with their request and response types, rendered from the live model.",
+        "input_schema" : { "type" : "object", "properties" : {} } })
     ]
 }
 pub(crate) fn parse_query_request_input(
@@ -1435,9 +1452,10 @@ pub async fn dispatch_tool(
         "drive" => Ok(service.drive(parse_drive_request_input(input)?).await?),
         "skills" => Ok(service.skills(parse_skills_request_input(input)?).await?),
         "explain" => Ok(service.explain(parse_explain_request_input(input)?).await?),
+        "ports" => Ok(service.ports().await?),
         other => {
             anyhow::bail!(
-                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive, skills, explain"
+                "unknown tool `{other}`; tools are model, verify, generate, query, patch, coverage, implement, edit_rust_item, show, check, scaffold, test, snapshot, rollback, release, prune, diff, restart, read, search, list, lint, drive, skills, explain, ports"
             )
         }
     }

@@ -356,6 +356,16 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .map_err(|status| failed("explain", status))?;
         Ok(reply.into_inner().value)
     }
+
+    async fn ports(&self) -> anyhow::Result<String> {
+        let reply = self
+            .stub
+            .clone()
+            .ports(proto::Empty {})
+            .await
+            .map_err(|status| failed("ports", status))?;
+        Ok(reply.into_inner().value)
+    }
 }
 
 /// Convert the contract's Edit to the wire's, verb by verb.

@@ -261,4 +261,6 @@ service Theseus {
   rpc Skills (SkillsRequest) returns (String);
   // List the harness diagnostic codes or explain one code's rule, help, and safety.
   rpc Explain (ExplainRequest) returns (String);
+  // List this service's outbound ports and each port's methods with their request and response types.
+  rpc Ports (Empty) returns (String);
 }

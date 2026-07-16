@@ -548,6 +548,17 @@ for GrpcTheseus<S> {
             Err(error) => Err(status(&error)),
         }
     }
+
+    async fn ports(
+        &self,
+        _request: tonic::Request<proto::Empty>,
+    ) -> Result<tonic::Response<proto::String>, tonic::Status> {
+        let outcome = self.0.ports().await;
+        match outcome {
+            Ok(value) => Ok(tonic::Response::new(proto::String { value })),
+            Err(error) => Err(status(&error)),
+        }
+    }
 }
 
 /// Convert the wire's Edit to the contract's, verb by verb.

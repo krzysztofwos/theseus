@@ -292,6 +292,12 @@ impl theseus::TheseusService for HttpTheseusClient {
         checked("explain", status, &body)?;
         Ok(body)
     }
+
+    async fn ports(&self) -> anyhow::Result<String> {
+        let (status, body) = self.post("ports", serde_json::json!({})).await?;
+        checked("ports", status, &body)?;
+        Ok(body)
+    }
 }
 
 /// Map a reply's status back onto the contract: 200 passes, 501 is the

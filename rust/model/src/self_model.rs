@@ -605,6 +605,15 @@ pub fn theseus_model() -> Model {
                 .tool(
                     "List the harness's diagnostic codes with their messages (call bare) or explain one code by name (e.g. `SRC001`, `GATE002`, `CKP001`). An explained code carries its rule, the next action to take, and a safety label for what a fix implies. Reach for it when a tool result or refusal names a code you do not recognize. Model edit refusals carry their own `PATCH0xx` codes, returned inline by `patch`.",
                 )
+                .operation(
+                    "ports",
+                    "List this service's outbound ports and each port's methods with their request and response types.",
+                    "Empty",
+                    "String",
+                )
+                .tool(
+                    "List Theseus's outbound ports and each port's methods with their request and response types, rendered from the live model.",
+                )
                 .port(
                     Port::new(
                             "project",

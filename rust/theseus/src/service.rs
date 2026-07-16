@@ -60,6 +60,32 @@ pub(crate) async fn ensure_checkpoint_project(
 
 #[async_trait::async_trait]
 impl TheseusService for Ctx<'_> {
+    async fn ports(&self) -> anyhow::Result<String> {
+        let service = self
+            .model
+            .service_named("Theseus")
+            .ok_or_else(|| anyhow::anyhow!("Theseus service not found in model"))?;
+        let mut out = String::new();
+        for port in &service.outbound {
+            out.push_str(&format!("port: {} — {}\n", port.name, port.summary));
+            if port.methods.is_empty() {
+                out.push_str("  (no methods)\n");
+            } else {
+                for method in &port.methods {
+                    out.push_str(&format!(
+                        "  {}: {} => {}\n    {}\n",
+                        method.name, method.request, method.response, method.summary
+                    ));
+                }
+            }
+            out.push('\n');
+        }
+        if out.is_empty() {
+            out.push_str("(no outbound ports)\n");
+        }
+        Ok(out.trim_end().to_string())
+    }
+
     async fn explain(&self, request: crate::generated::ExplainRequest) -> anyhow::Result<String> {
         match request.code.as_deref() {
             None => {

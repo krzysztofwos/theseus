@@ -287,6 +287,14 @@ pub fn command() -> Command {
                         .action(ArgAction::Set)
                         .required(true)
                         .help("The workspace-relative file to read."),
+                )
+                .arg(
+                    Arg::new("outline")
+                        .long("outline")
+                        .action(ArgAction::SetTrue)
+                        .help(
+                            "When true, and the file is Rust, return its top-level item signatures instead of its contents.",
+                        ),
                 ),
         )
         .subcommand(
@@ -460,6 +468,7 @@ fn parse_read_request(matches: &ArgMatches) -> anyhow::Result<theseus::ReadReque
     let arg = |name: &str| matches.get_one::<String>(name).cloned();
     Ok(theseus::ReadRequest {
         path: arg("path").unwrap_or_default(),
+        outline: matches.get_flag("outline"),
     })
 }
 

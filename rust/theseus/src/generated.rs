@@ -431,6 +431,8 @@ pub struct SnapshotRetention {
 pub struct ReadRequest {
     /// The workspace-relative file to read.
     pub path: String,
+    /// When true, and the file is Rust, return its top-level item signatures instead of its contents.
+    pub outline: bool,
 }
 
 /// The `SearchRequest` request.
@@ -1093,10 +1095,13 @@ pub fn tool_catalog() -> Vec<serde_json::Value> {
         "Compile-check readiness for process replacement. The agent inbound uses success to rebuild and resume this session in the new binary; other inbounds must arrange their own rebuild and replacement. Apply and compile-gate the edits, test behavioral changes, and verify conformance, then call this alone with no other tool in the turn.",
         "input_schema" : { "type" : "object", "properties" : {} } }), serde_json::json!({
         "name" : "read", "description" :
-        "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
+        "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Pass `outline: true` on a Rust file to get its top-level item signatures instead of its contents — a cheap map of a large file before reading a slice of it. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\", \"outline\": true }.",
         "input_schema" : { "type" : "object", "properties" : { "path" : { "type" :
-        "string", "description" : "The workspace-relative file to read." } }, "required"
-        : ["path"] } }), serde_json::json!({ "name" : "search", "description" :
+        "string", "description" : "The workspace-relative file to read." }, "outline" : {
+        "type" : "boolean", "description" :
+        "When true, and the file is Rust, return its top-level item signatures instead of its contents."
+        } }, "required" : ["path"] } }), serde_json::json!({ "name" : "search",
+        "description" :
         "Search the workspace for lines containing `pattern`, reported as path:line: text, capped. `path` narrows the search to a subtree, e.g. `rust/agent`. Use it to find house patterns and neighbors before authoring, then `read` the file. Example: { \"pattern\": \"impl Toolchain\", \"path\": \"rust/theseus\" }.",
         "input_schema" : { "type" : "object", "properties" : { "pattern" : { "type" :
         "string", "description" : "The text to find." }, "path" : { "type" : "string",
@@ -1290,6 +1295,18 @@ pub(crate) fn parse_read_request_input(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+        outline: match input.get("outline") {
+            None => false,
+            Some(value) => {
+                value
+                    .as_bool()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the `outline` field is invalid: expected a boolean"
+                        )
+                    })?
+            }
+        },
     })
 }
 pub(crate) fn parse_search_request_input(

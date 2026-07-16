@@ -230,7 +230,10 @@ impl theseus::TheseusService for HttpTheseusClient {
         request: theseus::ReadRequest,
     ) -> anyhow::Result<theseus::SourceDocument> {
         let (status, body) = self
-            .post("read", serde_json::json!({ "path" : request.path }))
+            .post(
+                "read",
+                serde_json::json!({ "path" : request.path, "outline" : request.outline }),
+            )
             .await?;
         checked("read", status, &body)?;
         parsed("read", &body)

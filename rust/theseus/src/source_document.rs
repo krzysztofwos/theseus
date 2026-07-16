@@ -16,6 +16,19 @@ pub struct SourceDocument {
 }
 
 impl SourceDocument {
+    /// A document whose `contents` is the source's outline — its top-level item
+    /// signatures — while its `revision` still covers the complete file, so a
+    /// follow-up `edit_rust_item` uses the same revision. An outline is never
+    /// truncated.
+    pub(crate) fn outline(path: String, source: &str, outline: String) -> Self {
+        Self {
+            path,
+            revision: theseus_modeling::rust_source_revision(source),
+            contents: outline,
+            truncated: false,
+        }
+    }
+
     pub(crate) fn new(path: String, source: &str) -> Self {
         let revision = theseus_modeling::rust_source_revision(source);
         match source.char_indices().nth(SOURCE_CONTENT_CAP) {

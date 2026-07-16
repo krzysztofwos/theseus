@@ -170,6 +170,11 @@ impl TheseusService for Ctx<'_> {
         let text = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("reading {}", request.path))?;
+        if request.outline {
+            let outline = theseus_modeling::outline(&text)
+                .with_context(|| format!("outlining {}", request.path))?;
+            return Ok(SourceDocument::outline(request.path, &text, outline));
+        }
         Ok(SourceDocument::new(request.path, &text))
     }
 
@@ -2295,6 +2300,8 @@ If the tree wedges and you cannot repair it, `rollback` to your snapshot and say
 Reading and editing workspace source files:
 
 - **read** — returns file contents plus a `revision` token; always call `read` first.
+  Pass `outline: true` on a Rust file for its top-level item signatures only — map a
+  large file, then `search` for the item and `read` a slice before you edit.
 - **show** — preferred over `read` for a modeled operation handler or adapter method;
   also returns the generated signature when no authored handler exists yet.
 - **search** — grep across a subtree; returns `path:line: text`.

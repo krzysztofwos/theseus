@@ -255,6 +255,7 @@ async fn a_session_develops_and_restores_a_foreign_project() {
     let model_record = stateful
         .read(ReadRequest {
             path: "model.json".to_string(),
+            outline: false,
         })
         .await
         .unwrap();

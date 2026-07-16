@@ -424,6 +424,7 @@ for GrpcTheseus<S> {
                     .ok_or_else(|| tonic::Status::invalid_argument(
                         "field `path` is required",
                     ))?,
+                outline: request.outline,
             })
             .await;
         match outcome {

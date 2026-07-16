@@ -198,6 +198,18 @@ fn parse_read_request_http(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("the call needs a string `path`"))?,
+        outline: match input.get("outline") {
+            None => false,
+            Some(value) => {
+                value
+                    .as_bool()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the `outline` field is invalid: expected a boolean"
+                        )
+                    })?
+            }
+        },
     })
 }
 

@@ -278,6 +278,7 @@ impl theseus::TheseusService for GrpcTheseusClient {
             .clone()
             .read(proto::ReadRequest {
                 path: Some(request.path),
+                outline: request.outline,
             })
             .await
             .map_err(|status| failed("read", status))?;

@@ -135,6 +135,8 @@ message SnapshotRetention {
 message ReadRequest {
   // The workspace-relative file to read.
   optional string path = 1;
+  // When true, and the file is Rust, return its top-level item signatures instead of its contents.
+  bool outline = 2;
 }
 
 // The JSON rendering of the `SourceDocument` response.

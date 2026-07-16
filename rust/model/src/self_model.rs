@@ -276,7 +276,14 @@ pub fn theseus_model() -> Model {
         .foreign_type("SourceDocument", "theseus::SourceDocument")
         .struct_type(
             "ReadRequest",
-            &[("path", "String", "The workspace-relative file to read.")],
+            &[
+                ("path", "String", "The workspace-relative file to read."),
+                (
+                    "outline",
+                    "bool",
+                    "When true, and the file is Rust, return its top-level item signatures instead of its contents.",
+                ),
+            ],
         )
         .struct_type(
             "SearchRequest",
@@ -538,7 +545,7 @@ pub fn theseus_model() -> Model {
                 )
                 .uses(&["project"])
                 .tool(
-                    "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\" }.",
+                    "Read a regular UTF-8 file from the workspace with a complete-file revision and capped contents. Directories are refused with a repair to use `list`. Pass the revision to `edit_rust_item` so a stale observation cannot overwrite a newer file. `path` is workspace-relative, e.g. `rust/theseus/src/lib.rs`. Pass `outline: true` on a Rust file to get its top-level item signatures instead of its contents — a cheap map of a large file before reading a slice of it. For an unfamiliar project, call `list` with `{}` first; prefer `show` for a modeled handler or adapter method and use `search` to locate other source. Example: { \"path\": \"rust/theseus/src/lib.rs\", \"outline\": true }.",
                 )
                 .operation(
                     "search",
